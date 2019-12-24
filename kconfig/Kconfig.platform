@@ -1,0 +1,85 @@
+menuconfig PLATFORM_IS_BCM
+    bool "Broadcom"
+    help
+        Support for Broadcom SDK and derivatives
+
+if PLATFORM_IS_BCM
+
+config BCM_SDK_PATH
+    string "Broadcomm SDK path"
+
+config BCM_NVRAM
+    bool "NVRAM support"
+
+config BCMWL_EVENT_SOCK_FORCED_RESIZE
+    bool "Allow forced resize of BCM event socket"
+    default y
+    help
+        Disable this option on platforms that may have problems
+        with force resize of BCM event socket.
+
+config BCM_BOGUS_SURVEY_WORKAROUND
+    bool "Workaround for bogus chanim_stats on very old BCM SDKs"
+    default n
+    help
+        Enable this option on BCM platforms with old BCM SDKs
+        that may have problems with chanim_stats reporting
+        bogus information in some cases.
+
+menuconfig BCM_WPS
+    bool "Enable Wireless Protected Setup (WPS)"
+    default y
+
+if BCM_WPS
+
+config BCM_WPS_PROCESS
+    string "Name WPS monitor process"
+    default "wps_monitor"
+
+config BCM_WPS_PID
+    string "Full path of WPS monitor process id"
+    default "/tmp/wps_monitor.pid"
+
+menuconfig BCM_WPS_INTERFACE_LIST
+    bool "WPS interface list"
+    default y
+    help
+        Use a hardcoded WPS interface list.
+
+if BCM_WPS_INTERFACE_LIST
+    config BCM_WPS_INTERFACE0_LIST
+        bool "VIF[0]"
+        default y
+
+    config BCM_WPS_INTERFACE0_NAME
+        string "if_name[0]"
+        depends on BCM_WPS_INTERFACE0_LIST
+        default "wl0.2"
+
+    config BCM_WPS_INTERFACE1_LIST
+        bool "VIF[1]"
+        default y
+
+    config BCM_WPS_INTERFACE1_NAME
+        string "if_name[1]"
+        depends on BCM_WPS_INTERFACE1_LIST
+        default "wl1.2"
+
+    config BCM_WPS_INTERFACE2_LIST
+        bool "VIF[2]"
+
+    config BCM_WPS_INTERFACE2_NAME
+        string "if_name[2]"
+        depends on BCM_WPS_INTERFACE2_LIST
+
+    config BCM_WPS_INTERFACE3_LIST
+        bool "VIF[3]"
+
+    config BCM_WPS_INTERFACE3_NAME
+        string "if_name[3]"
+        depends on BCM_WPS_INTERFACE3_LIST
+endif
+
+endif
+
+endif
