@@ -30,5 +30,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 bool bcmwl_nas_multipsk_is_supported(void);
 bool bcmwl_nas_init(void);
 void bcmwl_nas_reload(const char *);
+void bcmwl_nas_reload_full(void);
 
 #endif /* BCMWL_NAS_H_INCLUDED */

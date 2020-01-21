@@ -28,6 +28,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define _GNU_SOURCE
 #include <string.h>
 #include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <dirent.h>
 #include <glob.h>
 
@@ -75,23 +77,72 @@ static bool bcmwl_nas_reload_fast(void)
     return strexa("killall", "-USR2", "nas");
 }
 
-static void bcmwl_nas_reload_full(void)
+int bcmwl_system_start_closefd(const char *command)
+{
+    int res = 0;
+    int ret;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        LOGW("Error starting %s (fork)", command);
+        return -1;
+    }
+
+    if (pid > 0) {
+        do {
+            ret = waitpid(pid, &res, 0);
+            // restart call if interrupted by signal
+        } while (ret == -1 && errno == EINTR);
+        if (res != 0)
+            LOGE("Error starting %s (%d)", command, res);
+        return res;
+    }
+
+    // need to close all open fds otherwise the fd can be kept open by the
+    // child process and that can cause hangs in other processes in case
+    // the fd is a pipe or a lock
+    int fd;
+    for (fd = 0; fd < sysconf(_SC_OPEN_MAX); fd++)
+        close(fd);
+
+    // re-open local standard FDs
+    open("/dev/null", O_RDONLY); // 0: stdin
+    open("/dev/null", O_WRONLY); // 1: stdout
+    open("/dev/null", O_WRONLY); // 2: stderr
+
+    res = system(command);
+
+    exit(res);
+}
+
+void bcmwl_nas_reload_full()
 {
     struct dirent *p;
     DIR *d;
 
     LOGN("reloading auth");
 
+    // kill eapd + nas
+    strexa("killall", "-KILL", "eapd", "nas");
+
+    // short delay to allow nas/eapd cleanup
+    // before a new instance is started
+    sleep(1);
+
     /* Can't use strexa() or a naive fork+exec-waitpid
      * because nas/eapd are not properly closing their
      * descriptors so they would hang indefinitely.
      */
-    system("killall -KILL eapd nas; nas </dev/null >/dev/null 2>/dev/null; eapd </dev/null >/dev/null 2>/dev/null");
+
+    // start nas + eapd
+    bcmwl_system_start_closefd("nas");
+    bcmwl_system_start_closefd("eapd");
 
     bcmwl_wps_restart();
 
     if (!(d = opendir("/sys/class/net")))
         return;
+
     while ((p = readdir(d)))
         if (strstr(p->d_name, "wl") == p->d_name)
             if (!bcmwl_vap_is_sta(p->d_name))
@@ -140,7 +191,7 @@ static void bcmwl_nas_supervise_timer(struct ev_loop *loop, ev_timer *s, int rev
     LOGD("supervise: checking");
     err |= bcmwl_nas_supervise("nas");
     err |= bcmwl_nas_supervise("eapd");
-    if (bcmwl_wps_enabled())
+    if (bcmwl_wps_enabled() && bcmwl_wps_configured())
         err |= bcmwl_nas_supervise(bcmwl_wps_process_name());
     if (err) {
         LOGI("supervise: restarting services because something crashed");

@@ -45,6 +45,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "bcmwl_debounce.h"
 #include "bcmutil.h"
 #include "bcmwl_wps.h"
+#include "bcmwl_event.h"
 
 /**
  * Data maps
@@ -64,6 +65,23 @@ static c_item_t g_map_ssid_broadcast[] = {
 /**
  * Private
  */
+
+// some platforms use "wl1.1", some "wl1_1"
+// vif index 0 is just "wl1" not "wl1.0"
+bool bcmwl_parse_vap(const char *ifname, int *ri, int *vi)
+{
+    int ret;
+    ret = sscanf(ifname, "wl%d"CONFIG_BCMWL_VAP_DELIMITER"%d", ri, vi);
+    if (ret == 2) {
+        return true;
+    }
+    if (ret == 1) {
+        *vi = 0;
+        return true;
+    }
+    *ri = *vi = 0;
+    return false;
+}
 
 static char *
 bcmwl_vap_ssid_decode(char *ssid)
@@ -186,9 +204,17 @@ bcmwl_vap_get_status(const char *ifname, struct wl_status *status)
 
     memset(status, 0, sizeof(*status));
 
-    if ((p = WL(ifname, "rssi")) && !strstr(p, "Bad Argument")) {
-        if (strstr(ifname, "."))
-            LOGE("..");
+    /* Earlier drivers would report Bad Argument for APs.
+     * However new drivers report 96 regardless if BSS
+     * is up or down. STA will almost never, in practice,
+     * reach RSSI (SNR really) readout of 96.
+     *
+     * FIXME: Perhaps rely on `iw`, but not
+     * sure if 941789 exhibits the same logic.
+     */
+    if ((p = WL(ifname, "rssi")) &&
+        !strstr(p, "Bad Argument") &&
+        atoi(p) != 96) {
         status->is_sta = 1;
         status->rssi = atoi(p);
     }
@@ -213,7 +239,7 @@ bcmwl_vap_get_status(const char *ifname, struct wl_status *status)
 
         if (status->is_sta && strlen(status->bssid))
             if ((p = WL(ifname, "autho_sta_list")))
-                while ((i = strsep(&p, "\r\n")))
+                while ((i = strsep(&p, " \r\n")))
                     if (!strcasecmp(i, status->bssid))
                         status->is_authorized = true;
 
@@ -424,21 +450,8 @@ bool bcmwl_vap_br_name_get(const char *ifname, char *brname, size_t len)
 
 bool bcmwl_restart_userspace()
 {
-    int rc;
-    char *cmd = "killall eapd nas;"
-                "sleep 2;"
-                "eapd & ;"
-                "nas & ;"
-                ;
-
+    bcmwl_nas_reload_full();
     bcmwl_wps_restart();
-
-    LOGE("restart_userspace: %s\n", cmd);
-    rc = system(cmd);
-
-    if (!WIFEXITED(rc) || WEXITSTATUS(rc) != 0)
-        return false;
-
     return true;
 }
 
@@ -568,6 +581,11 @@ bcmwl_vap_state(const char *ifname,
     char *p, *mac;
     int i, j;
 
+    TRACE("%s", ifname ?: "");
+
+    if (WARN_ON(!ifname || !*ifname))
+        return false;
+
     memset(vstate, 0, sizeof(*vstate));
     schema_Wifi_VIF_State_mark_all_present(vstate);
     vstate->associated_clients_present = false;
@@ -661,10 +679,8 @@ bcmwl_vap_state(const char *ifname,
         SCHEMA_SET_INT(vstate->uapsd_enable, atoi(p));
     if ((p = WL(ifname, "wds_type")))
         SCHEMA_SET_INT(vstate->wds, !!atoi(p));
-    if (sscanf(ifname, "wl%d.%d", &i, &j) == 2)
+    if (bcmwl_parse_vap(ifname, &i, &j))
         SCHEMA_SET_INT(vstate->vif_radio_idx, j);
-    else if (sscanf(ifname, "wl%d", &i) == 1)
-        SCHEMA_SET_INT(vstate->vif_radio_idx, 0);
     if ((p = WL(ifname, "fbt")))
         SCHEMA_SET_INT(vstate->ft_psk, atoi(p));
     if ((p = WL(ifname, "rrm")))
@@ -729,7 +745,7 @@ bool bcmwl_vap_update(const struct schema_Wifi_VIF_Config *vconfig,
 bool bcmwl_vap_is_sta(const char *ifname)
 {
     const char *p = WL(ifname, "rssi");
-    return p && !strstr(p, "Bad Argument");
+    return p && !strstr(p, "Bad Argument") && atoi(p) != 96;
 }
 
 void bcmwl_vap_mac_xfrm(char *addr, int idx, int max)
@@ -767,7 +783,7 @@ void bcmwl_vap_mac_xfrm(char *addr, int idx, int max)
 
 static bool bcmwl_vap_prealloc_one(const char *phy, int idx, void (*mac_xfrm)(char *addr, int idx, int max))
 {
-    const char *vif = strfmta("%s.%d", phy, idx);
+    const char *vif = STRFMTA_VIF(phy, idx);
     char *mac;
     char *perm;
     char addr[6];
@@ -815,6 +831,15 @@ static bool bcmwl_vap_prealloc_one(const char *phy, int idx, void (*mac_xfrm)(ch
         return false;
     if (WARN_ON(!strexa("ip", "link", "set", "dev", vif, "addr", mac)))
         return false;
+
+    /* This is intended to init bss inside the driver
+     * slightly. It seems newer driver, or at least impl55,
+     * errors out on `fbt` iovar readout unless bss was up
+     * at least once. This actually works even if radio is
+     * down and `bss up` itself seems to fail.
+     */
+    WL(vif, "bss", "up");
+    WL(vif, "bss", "down");
 
     return true;
 }
@@ -967,13 +992,13 @@ bool bcmwl_vap_update_security(const struct schema_Wifi_VIF_Config *vconf,
                 atoi(crypto) == 2 ? "psk2" :
                 atoi(crypto) == 3 ? "psk psk2" :
                 "psk2")
-             : 0;
+             : "";
     nv_crypto = !strcmp(akm, "WPA-PSK")
                 ?  atoi(crypto) == 1 ? "tkip+aes" :
                    atoi(crypto) == 2 ? "aes" :
                    atoi(crypto) == 3 ? "tkip+aes" :
                    "aes"
-                : 0;
+                : "";
 
     wl_eap = !strcmp(akm, "WPA-PSK") ? "1" : "0";
     wl_wsec = strfmta("%d", !strcmp(akm, "WPA-PSK")
@@ -1160,6 +1185,13 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
     int i, j;
     char *p;
 
+    TRACE("%s, %s", phy ?: "", vif ?: "");
+
+    if (WARN_ON(!phy || !*phy))
+        return false;
+    if (WARN_ON(!vif || !*vif))
+        return false;
+
     /* FIXME:
      *  - register for netlink events and keep track of
      *    interface up/down states and warn if NM tries to
@@ -1179,7 +1211,7 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
         WARN_ON(!WL(vif, "bss", "down"));
 
         if (!vconf->enabled)
-            return true;
+            goto report;
 
         if (!bcmwl_vap_has_correct_mode(vif, vconf->mode)) {
             LOGI("%s: must down radio set mode", vif);
@@ -1189,7 +1221,7 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
              * re-setting the same "ap" or "apsta" iovar.
              * This makes sure for the iovar to work.
              */
-            WARN_ON(!WL(vif, "ap", "0"));
+            WL(vif, "ap", "0");
             WARN_ON(!WL(vif, !strcmp(vconf->mode, "ap") ? "ap" :
                              !strcmp(vconf->mode, "sta") ? "apsta" :
                              "ap", "1"));
@@ -1211,7 +1243,7 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
          * pre-created. Just make sure it has all expected
          * parameters.
          */
-        if (sscanf(vif, "wl%d.%d", &i, &j) != 2)
+        if (!bcmwl_parse_vap(vif, &i, &j))
             j = 0;
         if (vconf->vif_radio_idx_exists)
             if (WARN_ON(vconf->vif_radio_idx != j))
@@ -1278,7 +1310,9 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
 
     bcmwl_event_setup(EV_DEFAULT);
     bcmwl_roam_later(vconf->if_name);
-    bcmwl_vap_state_report(vconf->if_name);
+
+report:
+    evx_debounce_call(bcmwl_vap_state_report, vconf->if_name);
     evx_debounce_call(bcmwl_radio_state_report, rconf->if_name);
     return true;
 }

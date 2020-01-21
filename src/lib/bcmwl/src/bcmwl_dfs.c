@@ -41,6 +41,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "bcmwl.h"
 #include "bcmwl_nvram.h"
 #include "bcmwl_debounce.h"
+#include "bcmwl_event.h"
 
 #include "bcmutil.h"
 
@@ -79,20 +80,6 @@ static void bcmwl_dfs_timer_cb(EV_P_ struct ev_timer *w, int revent)
     evx_debounce_call(bcmwl_radio_state_report, phyname);
 }
 
-static void bcmwl_radar_detected_enable(void)
-{
-    struct dirent *p;
-    DIR *d;
-
-    for (d = opendir("/sys/class/net"); d && (p = readdir(d)); ) {
-        if (bcmwl_is_phy(p->d_name)) {
-            bcmwl_event_enable(p->d_name, WLC_E_RADAR_DETECTED);
-        }
-    }
-    if (!WARN_ON(!d))
-        closedir(d);
-}
-
 static void bcmwl_dfs_timer_stop(void)
 {
     ev_timer_stop(EV_DEFAULT, &g_dfs_timer);
@@ -112,7 +99,7 @@ static void bcmwl_dfs_timer_rearm(const char *phyname, double timeout)
 /* Public */
 void bcmwl_dfs_init(void)
 {
-    bcmwl_radar_detected_enable();
+    bcmwl_event_enable_all(WLC_E_RADAR_DETECTED);
     ev_timer_init(&g_dfs_timer, bcmwl_dfs_timer_cb, 60.0, 0.0);
 }
 

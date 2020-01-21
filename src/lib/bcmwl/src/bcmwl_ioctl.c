@@ -104,8 +104,10 @@ static bool wl_ioctl_wrapper(const char *ifname,
     if (WARN_ON((wl_ioctl_sock = socket(AF_INET, SOCK_DGRAM, 0)) == -1))
         goto leave;
 
-    if (ioctl(wl_ioctl_sock, SIOCDEVPRIVATE, &ifr) == -1)
+    if (ioctl(wl_ioctl_sock, SIOCDEVPRIVATE, &ifr) == -1) {
+        LOGT("wl ioctl %u failed! :: erno=%d", ioctl_cmd, errno);
         goto leave;
+    }
 
     result = true;
 

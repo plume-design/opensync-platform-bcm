@@ -37,6 +37,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "bcmwl.h"
 #include "bcmwl_lan.h"
 #include "bcmwl_nvram.h"
+#include "bcmwl_event.h"
 
 static log_severity_t g_opt_severity = LOG_SEVERITY_INFO;
 static int g_opt_delay;
@@ -397,6 +398,10 @@ static bool cmd_watch_events(int argc, char *argv[])
     g_time2 = clock_mono_ms();
     print_stats();
 
+    for (i=2; i<argc; i++) {
+        bcmwl_event_unregister(loop, argv[i], cmd_watch_events_callback);
+    }
+
     return true;
 }
 
@@ -569,6 +574,12 @@ int main(int argc, char *argv[])
     else if (strcmp(argv[1], "detect_max_lan_ifnames") == 0)
     {
         success = cmd_detect_max_lan_ifnames(argc, argv);
+    }
+    else if (strcmp(argv[1], "detect_dongle") == 0)
+    {
+        success = bcmwl_radio_adapter_is_operational(argv[2]);
+        printf("Dongle %s: attached: %s", argv[2], success == true ? "yes" : "no");
+        success = true;
     }
     else
     {

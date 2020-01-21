@@ -58,7 +58,7 @@ bool bcmwl_acl_set_mode(
     return strexpect("", "wl", "-i", ifname, "macmode", strfmta("%d", mode));
 }
 
-bool bcmwl_acl_del_devs(const char* ifname)
+bool bcmwl_acl_del_devs(const char *ifname)
 {
     return strexpect("", "wl", "-i", ifname, "mac", "none");
 }

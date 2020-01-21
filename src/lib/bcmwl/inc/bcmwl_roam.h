@@ -27,6 +27,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef BCMWL_ROAM_H_INCLUDED
 #define BCMWL_ROAM_H_INCLUDED
 
+#include "bcmwl_event.h"
+
 enum bcmwl_roam_status {
     BCMWL_ROAM_DISABLED,
     BCMWL_ROAM_BUSY,

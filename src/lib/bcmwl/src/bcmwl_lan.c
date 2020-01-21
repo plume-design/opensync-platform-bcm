@@ -83,8 +83,9 @@ bcmwl_lan_validate(int idx)
     if (!get_ifname_by_wlmac) {
         if (WARN_ON(!(lib1 = dlopen("libnvram.so", RTLD_LAZY | RTLD_GLOBAL))))
             return -1;
-        if (WARN_ON(!(lib2 = dlopen("libwlbcmshared.so", RTLD_LAZY | RTLD_GLOBAL))))
-            return -1;
+        if (!(lib2 = dlopen("libwlbcmshared.so", RTLD_LAZY | RTLD_GLOBAL)))
+            if (WARN_ON(!(lib2 = dlopen("libshared.so", RTLD_LAZY | RTLD_GLOBAL))))
+                return -1;
         if (WARN_ON(!(get_ifname_by_wlmac = dlsym(lib2, "get_ifname_by_wlmac"))))
             return -1;
     }

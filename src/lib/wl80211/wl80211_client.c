@@ -41,6 +41,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "const.h"
 #include "util.h"
 
+#include "bcmwl.h"
 #include "wl80211.h"
 #include "wl80211_client.h"
 
@@ -149,10 +150,24 @@ static bool mcs_wl_to_dpp(
     }
     else
     {
+        /* WAR: BCM does not provide bytes per rate, hence we're forced
+         * to best-effort "estimate" this count from packet per rate counters: */
         double pkts_ratio = (double)wl->pkts / (double)wl->pkts_total;
         double bytes = pkts_ratio * (double)bytes_total;
 
         dpp->bytes = (uint64_t) (bytes + 0.5);
+
+        /* According to comments in BCM wl driver's ioctl interface,
+         * the pkts/counts per rate in rate_histo_report output are
+         * "count of mpdus per rate", so copy this count of "pkts"
+         * to dpp mpdu count here: */
+        dpp->mpdu = wl->pkts;
+
+        /* Unfortunately BCM driver reports no additional data -- it's a
+         * known limitation, mpdu count is all we have, no msdu or ppdu info
+         * available: */
+        dpp->msdu = 0;
+        dpp->ppdu = 0;
     }
 
     if (rssi > 0)
@@ -645,6 +660,43 @@ static int wl80211_client_sta_info_parse(
     return 0;
 }
 
+enum mcs_supported_e
+{
+    MCS_UNKNOWN = 0,
+    MCS_NOT_SUPPORTED,
+    MCS_SUPPORTED
+};
+
+#define MCS_MAX_PHY 4
+
+static bool wl80211_mcs_stats_supported(const char *ifname)
+{
+    static enum mcs_supported_e g_mcs_supported[MCS_MAX_PHY];
+    int ri, vi;
+    if (!bcmwl_parse_vap(ifname, &ri, &vi)) return false;
+    if (ri >= MCS_MAX_PHY) return false;
+    if (g_mcs_supported[ri] == MCS_UNKNOWN) {
+        // using rate_histo_report without mac parameter to get the output:
+        //   wl: Unsupported
+        // otherwise with mac parameter it prints:
+        //   set: error parsing value "00:11:22:33:44:55" as an integer for set of "rate_histo_report"
+        //   var     unrecognized name, type -h for help
+        // first option is more predictable and easier to parse
+        // note, the error is printed on stderr, hence 2>&1
+        char buf[WL80211_CMD_BUFF_SIZE] = {0};
+        wl80211_cmd_exec(buf, sizeof(buf), "wl -i wl%d rate_histo_report 2>&1", ri);
+        if (strstr(buf, "Unsupported")) {
+            g_mcs_supported[ri] = MCS_NOT_SUPPORTED;
+            LOGI("wl%d rate_histo_report: not supported", ri);
+        } else {
+            g_mcs_supported[ri] = MCS_SUPPORTED;
+            LOGI("wl%d rate_histo_report: supported", ri);
+        }
+    }
+    return g_mcs_supported[ri] == MCS_SUPPORTED;
+}
+
+
 static void wl80211_client_mcs_stats_get(
         const char *ifname,
         wl80211_client_record_t *client)
@@ -653,6 +705,9 @@ static void wl80211_client_mcs_stats_get(
     char cmd[WL80211_CMD_BUFF_SIZE];
     FILE *f = 0;
 
+    if (!wl80211_mcs_stats_supported(ifname)) {
+        return;
+    }
 
     /* Compose and run shell cmd: "wl -i <interface> rate_histo_report:" */
     memset(cmd, 0, sizeof(cmd));
@@ -991,8 +1046,6 @@ bool wl80211_client_list_get(
     char                            cmd[WL80211_CMD_BUFF_SIZE];
     char                            buf[WL80211_CMD_BUFF_SIZE] = {0};
     char                            wl_ssid[256];
-    int                             err;
-
     FILE                           *file_desc;
 
     memset(&client_ctx, 0, sizeof(client_ctx));
@@ -1013,16 +1066,19 @@ bool wl80211_client_list_get(
             ifname);
 
     /* get SSID */
+    // get first line only
+    strtok(buf, "\n");
+    // check if empty string
+    if (*buf == 0) {
+        /* Skip interfaces with no network association */
+        return true;
+    }
     if (sizeof(wl_ssid) < strlen(buf)+1)
     {
         LOG(ERROR, "wl reported SSID too long: '%s'", buf);
         return false;
     }
-    err = sscanf(buf, "%s",  wl_ssid);
-    if (err != 1) {
-        /* Skip interfaces with no network association.  */
-        return true;
-    }
+    STRSCPY(wl_ssid, buf);
 
     LOG(TRACE,
         "Parsed %s %s SSID '%s' (len: %zu)",

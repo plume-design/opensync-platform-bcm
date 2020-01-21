@@ -28,6 +28,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <sys/types.h>
 #include <string.h>
+#include <glob.h>
 
 /* internal */
 #include <log.h>
@@ -78,6 +79,45 @@ static const char *bcmwl_wps_iflist[] =
     };
 #endif
 
+
+static int bcmwl_wps_configured_on_ifname(const char *ifname)
+{
+    if (WARN_ON(!ifname))
+        return 0;
+    if (strcmp(NVG(ifname, "wps_mode") ?: "", "enabled"))
+        return 0;
+    if (atoi(NVG(ifname, "wps_proc_status") ?: "-1") < 0)
+        return 0;
+    if ((atoi(NVG(ifname, "radio") ?: "0") |
+         atoi(NVG(ifname, "bss_enabled") ?: "0")) != 1)
+        return 0;
+    if (!strlen(NVG(ifname, "ifname") ?: ""))
+        return 0;
+    if (!strlen(NVG(ifname, "hwaddr") ?: ""))
+        return 0;
+
+    return 1;
+}
+
+bool bcmwl_wps_configured(void)
+{
+    int needed = 0;
+    glob_t g;
+    size_t i;
+
+    if (WARN_ON(glob("/sys/class/net/*", 0, NULL, &g)))
+        return 0;
+
+    for (i = 0; i < g.gl_pathc; i++) {
+        if (bcmwl_wps_configured_on_ifname(basename(g.gl_pathv[i]))) {
+            needed = 1;
+            break;
+        }
+    }
+
+    globfree(&g);
+    return needed;
+}
 
 bool bcmwl_wps_enabled(void)
 {
@@ -179,17 +219,13 @@ bool bcmwl_wps_restart(void)
 {
     if (!bcmwl_wps_enabled())
         return true;
-
-    char shell_cmd[256];
-    snprintf(shell_cmd, sizeof(shell_cmd),
-        "killall -KILL %s ; rm %s ; %s </dev/null >/dev/null 2>/dev/null &",
-        BCMWL_WPS_PROCESS,
-        BCMWL_WPS_PID,
-        BCMWL_WPS_PROCESS);
+    if (!bcmwl_wps_configured())
+        return true;
 
     LOGI("Restarting WPS");
-
-    system (shell_cmd);
+    strexa("killall", "-KILL", BCMWL_WPS_PROCESS);
+    strexa("rm", BCMWL_WPS_PID);
+    bcmwl_system_start_closefd(BCMWL_WPS_PROCESS " &");
 
     return true;
 }

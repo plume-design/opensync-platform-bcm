@@ -44,35 +44,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <bcmwl_wps.h>
 
 /* local */
-static void bcmwl_csa_ind_enable(void)
-{
-    struct dirent *p;
-    DIR *d;
-
-    /* CSA indication isn't guaranteed to be always enabled.
-     * E.g. I've found 2.4GHz has it disabled by default and
-     * enabled on 5GHz radio on one of the extender
-     * platforms.
-     */
-    for (d = opendir("/sys/class/net"); d && (p = readdir(d)); )
-        if (bcmwl_is_phy(p->d_name))
-            bcmwl_event_enable(p->d_name, WLC_E_CSA_COMPLETE_IND);
-    if (!WARN_ON(!d))
-        closedir(d);
-}
-
-static void bcmwl_radio_ind_enable(void)
-{
-    struct dirent *p;
-    DIR *d;
-
-    for (d = opendir("/sys/class/net"); d && (p = readdir(d)); )
-        if (bcmwl_is_phy(p->d_name))
-            bcmwl_event_enable(p->d_name, WLC_E_RADIO);
-    if (!WARN_ON(!d))
-        closedir(d);
-}
-
 static void bcmwl_mpc_disable(void)
 {
     struct dirent *p;
@@ -128,8 +99,29 @@ bool bcmwl_init_wm(void)
     assert(strexa("which", "eapd"));
     assert(strexa("which", "nas"));
     bcmwl_event_discard_probereq();
-    bcmwl_csa_ind_enable();
-    bcmwl_radio_ind_enable();
+    bcmwl_event_enable_all(WLC_E_ACTION_FRAME);
+    bcmwl_event_enable_all(WLC_E_AP_CHAN_CHANGE);
+    bcmwl_event_enable_all(WLC_E_ASSOC);
+    bcmwl_event_enable_all(WLC_E_ASSOC_IND);
+    bcmwl_event_enable_all(WLC_E_AUTH);
+    bcmwl_event_enable_all(WLC_E_AUTHORIZED);
+    bcmwl_event_enable_all(WLC_E_AUTH_IND);
+    bcmwl_event_enable_all(WLC_E_CSA_COMPLETE_IND);
+    bcmwl_event_enable_all(WLC_E_DEAUTH);
+    bcmwl_event_enable_all(WLC_E_DEAUTH_IND);
+    bcmwl_event_enable_all(WLC_E_DISASSOC);
+    bcmwl_event_enable_all(WLC_E_DISASSOC_IND);
+    bcmwl_event_enable_all(WLC_E_EAPOL_MSG);
+    bcmwl_event_enable_all(WLC_E_ESCAN_RESULT);
+    bcmwl_event_enable_all(WLC_E_JOIN);
+    bcmwl_event_enable_all(WLC_E_LINK);
+    bcmwl_event_enable_all(WLC_E_PROBREQ_MSG);
+    bcmwl_event_enable_all(WLC_E_PROBREQ_MSG_RX);
+    bcmwl_event_enable_all(WLC_E_PRUNE);
+    bcmwl_event_enable_all(WLC_E_RADAR_DETECTED);
+    bcmwl_event_enable_all(WLC_E_RADIO);
+    bcmwl_event_enable_all(WLC_E_REASSOC_IND);
+    bcmwl_event_enable_all(WLC_E_SCAN_COMPLETE);
     bcmwl_mpc_disable();
     bcmwl_mask_nonstd_11n_2ghz_rates();
     bcmwl_dfs_init();

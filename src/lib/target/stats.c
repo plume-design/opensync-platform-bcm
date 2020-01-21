@@ -24,8 +24,11 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <string.h>
+#include <sys/types.h>
+#include <dirent.h>
 
 #include "os.h"
 #include "os_nif.h"
@@ -47,44 +50,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *****************************************************************************/
 bool target_is_radio_interface_ready(char *phy_name)
 {
-    bool    exists;
-    char    buf[16];
-
-
-    if (phy_name == NULL) return false;
-
-    if (os_nif_is_interface_ready(phy_name))
-    {
-        return true;  /* SUCCESS */
-    }
-
-    // TARGET_MAX_VIF must be defined in target.h and represents the number of VIF
-    for (int i = 1; i < TARGET_MAX_VIF; i++)
-    {
-        if (snprintf(buf, sizeof(buf), "%s.%d", phy_name, i) >= (int)sizeof(buf))
-        {
-            return false;  // should not happen
-        }
-
-        exists = false;
-        if (!os_nif_exists(buf, &exists))
-        {
-            return false;  // function failed
-        }
-
-        if (!exists)
-        {
-            return false;  // VIF not found
-        }
-
-        if (os_nif_is_interface_ready(buf))
-        {
-            // at least one exists and is ready, return true
-            return true;  /* SUCCESS */
-        }
-    }
-
-    return false;
+    return atoi(WL(phy_name, "isup") ?: "0") == 1;
 }
 
 bool target_is_interface_ready(char *if_name)
@@ -136,39 +102,37 @@ bool target_stats_clients_get(
         ds_dlist_t                 *client_list,
         void                       *client_ctx)
 {
-    char vifname[32];
-    int i;
-    bool rc;
+    struct dirent *d;
+    DIR *dir;
+    int ri;
+    int r;
+    int v;
 
-    if (essid) {
-        // currently only NULL value is supported
-        // that means, scan all vif interfaces
+    if (WARN_ON(essid)) /* per-essid collection not supported now */
         return false;
+    if (WARN_ON(!bcmwl_parse_vap(radio_cfg->phy_name, &r, &v)))
+        return false;
+    if (WARN_ON(!(dir = opendir("/sys/class/net"))))
+        return false;
+    while ((d = readdir(dir))) {
+        if (!bcmwl_parse_vap(d->d_name, &ri, &v))
+            continue;
+        if (ri != r)
+            continue;
+        if (!os_nif_is_interface_ready(d->d_name))
+            continue;
+
+        LOGD("Fetching VIF %s clients", d->d_name);
+        if (!wl80211_client_list_get(radio_cfg, d->d_name, client_list))
+            break; /* leaves non-NULL `d` as error indication */
     }
 
-    for (i=0; i<TARGET_MAX_VIF; i++)
-    {
-        // format: radio_ifname.index eg. wl0.1
-        // except wl0.0 => wl0
-        if (i == 0) {
-            STRSCPY(vifname, radio_cfg->phy_name);
-        } else {
-            snprintf(vifname, sizeof(vifname), "%s.%d", radio_cfg->phy_name, i);
-        }
-        LOGD("Fetching VIF %s clients", vifname);
-        rc =
-            wl80211_client_list_get(
-                    radio_cfg,
-                    vifname,
-                    client_list);
-        if (true != rc) {
-            return false;
-        }
-    }
+    if (d)
+        LOGE("%s: %s: failed to get client list", radio_cfg->phy_name, d->d_name);
 
     (*client_cb)(client_list, client_ctx, true);
-
-    return true;
+    closedir(dir);
+    return d == NULL ? true : false;
 }
 
 bool target_stats_clients_convert(

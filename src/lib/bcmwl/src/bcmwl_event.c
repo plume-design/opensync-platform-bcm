@@ -62,6 +62,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "bcmwl_debounce.h"
 #include "bcmutil.h"
 
+#include "bcmwl_event.h"
+
 struct bcmwl_event_watcher {
     ev_io                   io;
     bcmwl_event_cb_t        *cb;
@@ -104,7 +106,7 @@ static bool bcmwl_event_sockbuf_resize(int fd)
             return false;
         }
 #else
-        LOGW("Forced event socket RCVBUF resize disabled! :: fd=%d buf=%d", fd, rcvbuf);
+        LOGD("Forced event socket RCVBUF resize disabled! :: fd=%d buf=%d", fd, rcvbuf);
 #endif
     }
 
@@ -188,6 +190,15 @@ static void bcmwl_event_overrun_recover(const char *bridge)
 
     while ((ifname = strsep(&ifnames, " ")))
         bcmwl_event_overrun_recover_ifname(ifname);
+}
+
+static void bcmwl_event_unregister_watcher(struct ev_loop *loop, struct bcmwl_event_watcher *e)
+{
+    LOGI("%s: unregistering event handler %p", e->ifname, e->cb);
+    bcmwl_event_socket_close(e->io.fd);
+    ev_io_stop(loop, &e->io);
+    ds_dlist_remove(&g_watcher_list, e);
+    free(e);
 }
 
 static void bcmwl_event_callback_raw(struct ev_loop *loop, ev_io *w, int revents)
@@ -279,9 +290,7 @@ done:
     return;
 
 error:
-    ev_io_stop(loop, &ew->io);
-    ds_dlist_remove(&g_watcher_list, ew);
-    free(w);
+    bcmwl_event_unregister_watcher(loop, ew);
 }
 
 static bool bcmwl_event_mask_from_hex_str(const char *hex_str,
@@ -514,6 +523,8 @@ bool bcmwl_event_register(struct ev_loop *loop,
     int fd;
     struct bcmwl_event_watcher *ew;
 
+    LOGT("%s: registering event handler %p", ifname, callback);
+
     ds_dlist_foreach(&g_watcher_list, ew)
         if (!strcmp(ew->ifname, ifname) && ew->cb == callback)
             break;
@@ -562,10 +573,7 @@ void bcmwl_event_unregister(struct ev_loop *loop,
     if (!e)
         return;
 
-    LOGI("%s: unregistering event handler %p", ifname, e->cb);
-    ev_io_stop(loop, &e->io);
-    ds_dlist_remove(&g_watcher_list, e);
-    free(e);
+    bcmwl_event_unregister_watcher(loop, e);
 }
 
 static void bcmwl_event_handle_ap_sta_assoc(const char *ifname,
@@ -628,7 +636,7 @@ static void bcmwl_event_handle_csa(const char *ifname)
     DIR *d;
 
     LOGI("%s: csa completed (%s)", ifname, WL(ifname, "chanspec") ?: "");
-    if (!(phy = strdupa(ifname)) || !(phy = strsep(&phy, ".")))
+    if (!(phy = strdupa(ifname)) || !(phy = strsep(&phy, CONFIG_BCMWL_VAP_DELIMITER)))
         return;
 
     bcmwl_event_war_csa(ifname);
@@ -892,4 +900,16 @@ out:
         ok = false;
     close(fd);
     return ok;
+}
+
+void bcmwl_event_enable_all(unsigned int bit)
+{
+    struct dirent *p;
+    DIR *d;
+
+    for (d = opendir("/sys/class/net"); d && (p = readdir(d)); )
+        if (bcmwl_is_phy(p->d_name))
+            WARN_ON(!bcmwl_event_enable(p->d_name, bit));
+    if (!WARN_ON(!d))
+        closedir(d);
 }

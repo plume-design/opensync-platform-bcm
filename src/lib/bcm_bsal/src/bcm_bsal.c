@@ -39,11 +39,14 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "proto/bcmevent.h"
 #include "proto/802.11.h"
 
+#include "const.h"
 #include "target.h"
 #include "bcmwl_debounce.h"
 #include "bcmwl_nvram.h"
 #include "bcmwl.h"
-#include "const.h"
+#include "bcmwl_event.h"
+
+#include "bcm_bsal.h"
 
 bool bcm_bsal_finalize(struct ev_loop *loop, const char *ifnames[]);
 
@@ -79,6 +82,12 @@ typedef struct
     time_t time;
     bool ssid_null;
 } probe_t;
+
+typedef enum
+{
+    ACL_ACTION_ADD,
+    ACL_ACTION_REMOVE,
+} acl_action_e;
 
 typedef struct
 {
@@ -321,15 +330,13 @@ static bool iface_prepare_acl(const char *ifname)
 {
     LOGD(LOG_PREFIX"%s: Preparing iface ACLs", ifname);
 
-    if (!bcmwl_acl_set_mode(ifname, BCMWL_ACL_MODE_DENY))
+    if (WARN_ON(!BCMWL_ACL_POLICY_SET(ifname, BCMWL_ACL_BM, BCMWL_ACL_DENY)))
     {
-        LOGE(LOG_PREFIX"%s: Failed to set ACL mode!", ifname);
         return false;
     }
 
-    if (!bcmwl_acl_del_devs(ifname))
+    if (WARN_ON(!BCMWL_ACL_SET(ifname, BCMWL_ACL_BM, "")))
     {
-        LOGE(LOG_PREFIX"%s: Failed to clear ACL!", ifname);
         return false;
     }
 
@@ -372,13 +379,43 @@ static void client_reset(client_t *client)
     client->snr_xing_level = SNR_XING_STATE_NONE;
 }
 
+static bool acl_update(
+        const char *ifname,
+        const os_macaddr_t *hwaddr,
+        acl_action_e action)
+{
+    char hwaddr_str[OS_MACSTR_SZ];
+    snprintf(hwaddr_str, sizeof(hwaddr_str), PRI(os_macaddr_t), FMT(os_macaddr_pt, hwaddr));
+
+    switch (action)
+    {
+        case ACL_ACTION_ADD:
+            LOGD(LOG_PREFIX"%s: Add %s to blacklist", ifname, hwaddr_str);
+            if (WARN_ON(!BCMWL_ACL_ADD(ifname, BCMWL_ACL_BM, hwaddr_str))) {
+                return false;
+            }
+            break;
+        case ACL_ACTION_REMOVE:
+            LOGD(LOG_PREFIX"%s: Remove %s from blacklist", ifname, hwaddr_str);
+            if (WARN_ON(!BCMWL_ACL_DEL(ifname, BCMWL_ACL_BM, hwaddr_str))) {
+                return false;
+            }
+            break;
+        default:
+            LOGE("Failed to update ACL! Unknown action :: acl_action=%d", action);
+            return false;
+    }
+
+    return bcmwl_acl_commit(ifname);
+}
+
+
 static bool client_acl_block(client_t *client)
 {
     if (client->is_blacklisted)
         return true;
 
-    LOGD(LOG_PREFIX"%s: Add "PRI(os_macaddr_t)" to blacklist", client->ifname, FMT(os_macaddr_t, client->hwaddr));
-    if (!bcmwl_acl_add_dev(client->ifname, &client->hwaddr))
+    if (!acl_update(client->ifname, &client->hwaddr, ACL_ACTION_ADD))
     {
         LOGE(LOG_PREFIX"%s: Failed to add "PRI(os_macaddr_t)" to ACL!", client->ifname, FMT(os_macaddr_t, client->hwaddr));
         return false;
@@ -394,8 +431,7 @@ static bool client_acl_unblock(client_t *client)
     if (!client->is_blacklisted)
         return true;
 
-    LOGD(LOG_PREFIX"%s: Remove "PRI(os_macaddr_t)" from blacklist!", client->ifname, FMT(os_macaddr_t, client->hwaddr));
-    if (!bcmwl_acl_del_dev(client->ifname, &client->hwaddr))
+    if (!acl_update(client->ifname, &client->hwaddr, ACL_ACTION_REMOVE))
     {
         LOGE(LOG_PREFIX"%s Failed to del "PRI(os_macaddr_t)" from ACL!", client->ifname, FMT(os_macaddr_t, client->hwaddr));
         return false;
@@ -702,7 +738,7 @@ static proc_event_res_t process_event_assoc_reassoc_ind(
         memcpy(client->assoc_ies, payload, payload_size);
         client->assoc_ies_len = payload_size;
     } else {
-        LOGW(LOG_PREFIX"%s: "PRI(os_macaddr_t)" payload_size %d higher than assoc_ies %u", client->ifname,
+        LOGW(LOG_PREFIX"%s: "PRI(os_macaddr_t)" payload_size %zd higher than assoc_ies %zu", client->ifname,
              FMT(os_macaddr_t, client->hwaddr), payload_size, sizeof(client->assoc_ies));
         client->assoc_ies_len = 0;
         memset(client->assoc_ies, 0, sizeof(client->assoc_ies));
@@ -1149,6 +1185,8 @@ bool bcm_bsal_init(
     struct target_radio_ops bcm_ops;
     const char **ifname;
 
+    LOGD(LOG_PREFIX"init");
+
     if (_bcm_bsal_initialized)
     {
         LOGE(LOG_PREFIX"Already initialized");
@@ -1183,6 +1221,8 @@ bool bcm_bsal_init(
     _bcm_bsal_initialized = true;
     _bsal_event_callback = callback;
 
+    LOGD(LOG_PREFIX"init - OK");
+
     return true;
 
 error:
@@ -1195,6 +1235,8 @@ bool bcm_bsal_finalize(
         const char *ifnames[])
 {
     const char **ifname;
+
+    LOGD(LOG_PREFIX"Finalizing -> exiting");
 
     if (_bcm_bsal_initialized)
     {
@@ -1213,6 +1255,8 @@ bool bcm_bsal_iface_add(const bsal_ifconfig_t *ifcfg)
     if (!ifcfg)
         return false;
 
+    LOGD(LOG_PREFIX"Adding iface :: ifname=%s", ifcfg->ifname);
+
     if (!iface_enable_events(ifcfg->ifname))
     {
         LOGE(LOG_PREFIX"%s: Failed set BCM events!", ifcfg->ifname);
@@ -1224,6 +1268,8 @@ bool bcm_bsal_iface_add(const bsal_ifconfig_t *ifcfg)
         LOGE(LOG_PREFIX"%s: Failed prepare ACL!", ifcfg->ifname);
         return false;
     }
+
+    LOGD(LOG_PREFIX"Adding iface: OK");
 
     return true;
 }
@@ -1303,6 +1349,7 @@ bool bcm_bsal_add_client(
                   probe_req_filter_timer_callback,
                   CLIENT_PROBE_REQ_FILTER_PERIOD, 0.);
 
+    LOGD(LOG_PREFIX"Client ADD: OK");
     return true;
 
 leave:
@@ -1310,6 +1357,7 @@ leave:
         remove_client(client);
     }
 
+    LOGD(LOG_PREFIX"Client ADD: FAIL");
     return false;
 }
 
@@ -1364,6 +1412,7 @@ bool bcm_bsal_update_client(
     result = true;
 
 leave:
+    LOGD(LOG_PREFIX"Client UPDATE: %s", (result==true) ? "OK" : "FAIL");
     return result;
 }
 
@@ -1394,6 +1443,7 @@ bool bcm_bsal_remove_client(
     result = true;
 
 leave:
+    LOGD(LOG_PREFIX"Client REMOVE: %s", (result==true) ? "OK" : "FAIL");
     return result;
 }
 
@@ -1426,6 +1476,8 @@ bool bcm_bsal_client_measure(
     rssi_ev = &event.data.rssi;
     memcpy(&rssi_ev->client_addr, mac_addr, sizeof(rssi_ev->client_addr));
     rssi_ev->rssi = rssi_to_snr(ifname, rssi);
+
+    LOGD(LOG_PREFIX"Measuring client's connection RSSI - OK, RSSI: %d", rssi);
 
     _bsal_event_callback(&event);
 
@@ -1464,6 +1516,7 @@ bool bcm_bsal_client_disconnect(
     result = true;
 
 leave:
+    LOGD(LOG_PREFIX"Client DISCONNECT: %s", (result==true) ? "OK" : "FAIL");
     return result;
 }
 
@@ -1507,7 +1560,7 @@ bool bcm_bsal_client_info(
         memcpy(info->assoc_ies, client->assoc_ies, client->assoc_ies_len);
         info->assoc_ies_len = client->assoc_ies_len;
     } else {
-        LOGW(LOG_PREFIX"%s: "PRI(os_macaddr_t)" client ies_len %d higher than info storage %u", client->ifname,
+        LOGW(LOG_PREFIX"%s: "PRI(os_macaddr_t)" client ies_len %d higher than info storage %zu", client->ifname,
              FMT(os_macaddr_t, client->hwaddr), client->assoc_ies_len, sizeof(info->assoc_ies));
     }
 
@@ -1576,6 +1629,8 @@ bool bcm_bsal_bss_tm_request(
         goto leave;
     }
 
+    LOGD(LOG_PREFIX"Issuing 11v - OK");
+
     result = true;
 
 leave:
@@ -1621,6 +1676,8 @@ bool bcm_bsal_rrm_beacon_report_request(
              ifname, FMT(os_macaddr_t, hwaddr));
         goto leave;
     }
+
+    LOGD(LOG_PREFIX"Issuing 11k - OK");
 
     result = true;
 

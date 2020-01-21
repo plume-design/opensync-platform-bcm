@@ -26,6 +26,13 @@ config BCM_BOGUS_SURVEY_WORKAROUND
         that may have problems with chanim_stats reporting
         bogus information in some cases.
 
+config BCMWL_VAP_DELIMITER
+    string "VAP interface delimiter"
+    default "."
+    help
+        Default delimiter in VAP interface name is .
+        but some platforms use _
+
 menuconfig BCM_WPS
     bool "Enable Wireless Protected Setup (WPS)"
     default y

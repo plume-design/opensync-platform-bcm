@@ -28,6 +28,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define BCMWL_WPS_H_INCLUDED
 
 bool bcmwl_wps_enabled(void);
+bool bcmwl_wps_configured(void);
 bool bcmwl_wps_init(void);
 bool bcmwl_wps_set_on_state_change_script(const char *wps_script);
 bool bcmwl_wps_restart(void);

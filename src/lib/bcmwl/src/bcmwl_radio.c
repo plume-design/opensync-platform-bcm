@@ -547,8 +547,18 @@ bool bcmwl_radio_state(const char *phyname,
     rstate->channel_mode_present = false;
     rstate->_partial_update = true;
 
+    TRACE("%s", phyname ?: "");
+
+    if (WARN_ON(!phyname || !*phyname))
+        return false;
+
     // Common
-    SCHEMA_SET_STR(rstate->if_name,         phyname);
+    SCHEMA_SET_STR(rstate->if_name, phyname);
+
+    if (!bcmwl_radio_adapter_is_operational(phyname)) {
+        SCHEMA_SET_INT(rstate->enabled, 0);
+        return false;
+    }
 
     if (bcmwl_radio_get_chanspec(phyname, &channel, &ht_mode)) {
         if (atoi(WL(phyname, "obss_coex") ?: "0") == 1)
@@ -573,8 +583,8 @@ bool bcmwl_radio_state(const char *phyname,
         SCHEMA_SET_INT(rstate->bcn_int, atoi(p));
     if ((q = WL(phyname, "txchain")) && (q = strsep(&q, " ")))
         SCHEMA_SET_INT(rstate->tx_chainmask, atoi(q));
-    if ((q = WL(phyname, "txpwr")) && (q = strsep(&q, " ")))
-        SCHEMA_SET_INT(rstate->tx_power, atoi(q));
+    if ((q = WL(phyname, "txpwr_target_max")) && (p = strrchr(strchomp(q, " "), ' ')))
+        SCHEMA_SET_INT(rstate->tx_power, atoi(p));
 
     // Frequency band
     if (bcmwl_radio_band_get(phyname, band, sizeof(band)))
@@ -616,10 +626,15 @@ bool bcmwl_radio_update(const struct schema_Wifi_Radio_Config *rconfig,
     bool success = true;
 
     // Note that currently we only support channel and ht_mode changes.
-    // Funtionality needs to be extended in the future.
+    // Functionality needs to be extended in the future.
+
+    if (!bcmwl_radio_adapter_is_operational(rconfig->if_name))
+        return false;
 
     if (rchanged->channel || rchanged->ht_mode)
     {
+        LOGD("Radio CSA initiate:: radio=%s channel=%d ht_mode=%s",
+                 rconfig->if_name, rconfig->channel, rconfig->ht_mode);
         // Do CSA
         if (false == bcmwl_radio_csa(rconfig->if_name,
                                      PLUME_CSA_MODE,
@@ -648,7 +663,13 @@ bool bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
     const char *phy = rconf->if_name;
     char *p;
 
-    if (WARN_ON(strstr(phy, ".")))
+    TRACE("%s", phy ?: "");
+
+    if (WARN_ON(!phy || !*phy))
+        return false;
+    if (WARN_ON(strstr(phy, CONFIG_BCMWL_VAP_DELIMITER)))
+        return false;
+    if (!bcmwl_radio_adapter_is_operational(rconf->if_name))
         return false;
 
     if (rchanged->enabled) {
@@ -667,10 +688,8 @@ bool bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
     if (rchanged->ht_mode)
         WARN_ON(!WL(phy, "obss_coex", !strcmp(rconf->ht_mode, "HT2040") ? "1" : "0"));
 
-    if ((rchanged->channel || rchanged->ht_mode) && rconf->channel_exists && rconf->ht_mode_exists) {
-        if (WARN_ON(!bcmwl_radio_channel_set(phy, rconf->channel, strstr(rconf->freq_band, "2.4G") ? "HT20" : rconf->ht_mode)))
-            return false;
-    }
+    if ((rchanged->channel || rchanged->ht_mode) && rconf->channel_exists && rconf->ht_mode_exists)
+        WARN_ON(!bcmwl_radio_channel_set(phy, rconf->channel, strstr(rconf->freq_band, "2.4G") ? "HT20" : rconf->ht_mode));
 
     if (rchanged->bcn_int)
         if (!(p = WL(phy, "bi", strfmta("%d", rconf->bcn_int))) || strlen(p))
@@ -728,4 +747,16 @@ int bcmwl_radio_count(void)
         if (bcmwl_is_phy(basename(g.gl_pathv[i])))
             n++;
     return n;
+}
+
+#define BCMWL_RADIO_DONGLE_NOT_OPERATIONAL "wl driver adapter not found"
+
+bool bcmwl_radio_adapter_is_operational(const char *radio)
+{
+    const char *q;
+    if (WARN_ON(!(q = WL(radio, "status"))))
+        return false;
+    if (strstr(q, BCMWL_RADIO_DONGLE_NOT_OPERATIONAL))
+        return false;
+    return true;
 }

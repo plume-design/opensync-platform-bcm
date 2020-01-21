@@ -28,6 +28,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <stddef.h>
 
 #include "log.h"
 #include "target.h"
@@ -36,6 +37,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "bcmwl_ioctl.h"
 #include "bcmwl_nvram.h"
 #include "bcmwl_debounce.h"
+
+#define FIELD_FITS(_ptr, _field, _len) \
+        ((_len) >= (offsetof(typeof(*_ptr), _field) + sizeof(_ptr->_field)))
 
 /**
  * Public
@@ -290,10 +294,8 @@ static void bcmwl_sta_get_sta_info_v5(
         return;
 
     sta_len = conv->dtoh16(v5->len);
-    if (sta_len < sizeof(sta_info_t)) {
-        LOG(DEBUG, "%s: Driver did not return extended sta info.", __func__);
+    if (WARN_ON(!FIELD_FITS(v5, rateset_adv, sta_len)))
         return;
-    }
 
     sta_get_max_mcs_nss_capab(ifname, hwaddr, &v5->rateset_adv, conv, sta_info);
 #endif

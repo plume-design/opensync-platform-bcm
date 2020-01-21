@@ -37,21 +37,30 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "ds_dlist.h"
 #include "bcmwl_priv.h"
 
+// some platforms use _ as delimiter, but default is .
+#ifndef CONFIG_BCMWL_VAP_DELIMITER
+#define CONFIG_BCMWL_VAP_DELIMITER "."
+#endif
+
+#define STRFMTA_VIF(PHY,IDX) ((IDX == 0) ? strfmta("%s", PHY) \
+        : strfmta("%s%s%d", PHY, CONFIG_BCMWL_VAP_DELIMITER, IDX))
+
 #define bcmwl_for_each_mac(mac, macs)       \
     while ((mac = strsep(&macs, "\n")) &&   \
             strsep(&mac, " ") &&            \
             (mac = strsep(&mac, "")))
 
 #define bcmwl_is_phy(ifname) \
-    (strstr(ifname, "wl") == ifname && !strstr(ifname, "."))
+    (strstr(ifname, "wl") == ifname && !strstr(ifname, CONFIG_BCMWL_VAP_DELIMITER))
 #define bcmwl_is_vif(ifname) \
-    (strstr(ifname, "wl") == ifname && strstr(ifname, "."))
+    (strstr(ifname, "wl") == ifname && strstr(ifname, CONFIG_BCMWL_VAP_DELIMITER))
 
 extern struct target_radio_ops bcmwl_ops;
 
 // Radio handling
 bool        bcmwl_init(const struct target_radio_ops *ops);
 bool        bcmwl_init_wm(void);
+bool        bcmwl_radio_adapter_is_operational(const char *radio);
 bool        bcmwl_radio_is_dhd(const char *ifname);
 bool        bcmwl_radio_create(const struct schema_Wifi_Radio_Config *rconfig);
 bool        bcmwl_radio_update(const struct schema_Wifi_Radio_Config *rconfig,
@@ -152,39 +161,7 @@ bool bcmwl_vap_assoc_list_foreach(const char *ifname,
 
 bool bcmwl_vap_br_tag_get(const char *ifname, char *brtag, size_t brtag_len);
 bool bcmwl_vap_br_name_get(const char *ifname, char *brname, size_t brname_len);
-
-// Events handling
-#define BCMWL_EVENT_MASK_BITS_SIZE ((WLC_E_LAST / 8) + 1)
-
-#define BCMWL_EVENT_HANDLED true
-#define BCMWL_EVENT_CONTINUE false
-
-typedef bool bcmwl_event_cb_t(const char *ifname, os_macaddr_t *client, void  *event);
-
-typedef struct {
-   uint8_t bits[BCMWL_EVENT_MASK_BITS_SIZE];
-} bcmwl_event_mask_t;
-
-bool    bcmwl_event_register(struct ev_loop *evloop, const char *ifname, bcmwl_event_cb_t cb);
-void    bcmwl_event_unregister(struct ev_loop *evloop, const char *ifname, bcmwl_event_cb_t cb);
-bool    bcmwl_event_handler(const char *ifname,
-                            os_macaddr_t *hwaddr,
-                            void *event);
-void    bcmwl_event_setup(struct ev_loop *loop);
-void    bcmwl_event_setup_extra_cb(bcmwl_event_cb_t cb);
-int     bcmwl_event_socket_open(const char *ifname);
-int     bcmwl_event_socket_close(int fd);
-void    bcmwl_event_discard_probereq(void);
-ssize_t bcmwl_event_msg_read(int fd, void *msg, size_t msglen);
-
-
-bool bcmwl_event_mask_get(const char* ifname, bcmwl_event_mask_t* mask);
-bool bcmwl_event_mask_set(const char* ifname,
-                          const bcmwl_event_mask_t* mask);
-void bcmwl_event_mask_bit_set(bcmwl_event_mask_t* mask, unsigned int bit);
-void bcmwl_event_mask_bit_unset(bcmwl_event_mask_t* mask, unsigned int bit);
-bool bcmwl_event_mask_bit_isset(bcmwl_event_mask_t* mask, unsigned int bit);
-bool bcmwl_event_enable(const char *ifname, unsigned int bit);
+bool bcmwl_parse_vap(const char *ifname, int *ri, int *vi);
 
 // STA handling
 typedef struct
@@ -336,5 +313,6 @@ bool bcmwl_misc_set_neighbor(const char *ifname, const char *bssid, const char *
                              const char *regulatory, const char *channel, const char *phytype,
                              const char *prefer);
 bool bcmwl_misc_remove_neighbor(const char *ifname, const char *bssid);
+int bcmwl_system_start_closefd(const char *command);
 
 #endif /* BCMWL_H_INCLUDED */
