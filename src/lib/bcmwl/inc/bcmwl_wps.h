@@ -27,11 +27,20 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef BCMWL_WPS_H_INCLUDED
 #define BCMWL_WPS_H_INCLUDED
 
+#ifdef CONFIG_BCM_USE_NAS
 bool bcmwl_wps_enabled(void);
 bool bcmwl_wps_configured(void);
 bool bcmwl_wps_init(void);
 bool bcmwl_wps_set_on_state_change_script(const char *wps_script);
 bool bcmwl_wps_restart(void);
 char* bcmwl_wps_process_name(void);
+#else
+static inline bool bcmwl_wps_enabled(void) { return false; }
+static inline bool bcmwl_wps_configured(void) { return false; }
+static inline bool bcmwl_wps_init(void) { return true; }
+static inline bool bcmwl_wps_set_on_state_change_script(const char *wps_script) { return true; }
+static inline bool bcmwl_wps_restart(void) { return true; }
+static inline char* bcmwl_wps_process_name(void) { return ""; }
+#endif
 
 #endif /* BCMWL_WPS_H_INCLUDED */

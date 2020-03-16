@@ -54,7 +54,6 @@ void    bcmwl_event_unregister(struct ev_loop *evloop, const char *ifname, bcmwl
 bool    bcmwl_event_handler(const char *ifname,
                             os_macaddr_t *hwaddr,
                             void *event);
-void    bcmwl_event_setup(struct ev_loop *loop);
 void    bcmwl_event_setup_extra_cb(bcmwl_event_cb_t cb);
 int     bcmwl_event_socket_open(const char *ifname);
 int     bcmwl_event_socket_close(int fd);

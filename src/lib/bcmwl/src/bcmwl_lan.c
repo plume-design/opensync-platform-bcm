@@ -161,7 +161,6 @@ bcmwl_lan_unset(const char *ifname)
 bool
 bcmwl_lan_set(const char *ifname, const char *bridge)
 {
-    const char *p;
     int i;
     if (!strcmp(bridge, strdupafree(bcmwl_lan_search(ifname)) ?: "")) {
         LOGD("%s: already in %s", ifname, bridge);
@@ -172,9 +171,9 @@ bcmwl_lan_set(const char *ifname, const char *bridge)
         if ((i = bcmwl_lan_alloc()) < 0)
             return false;
         LOGI("%s: allocated lan %d for %s", ifname, i, bridge);
-        if (!(p = NVS(bcmwl_lan(i), "ifname", bridge)) || strlen(p)) {
-            LOGW("%s: failed to set lan %d ifname to %s: %s",
-                 ifname, i, bridge, p ?: strerror(errno));
+        if (!NVS(bcmwl_lan(i), "ifname", bridge)) {
+            LOGW("%s: failed to set lan %d ifname to %s",
+                 ifname, i, bridge);
             return false;
         }
     }

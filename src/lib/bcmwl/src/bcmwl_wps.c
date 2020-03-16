@@ -36,6 +36,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <bcmwl.h>
 #include <bcmwl_wps.h>
 #include <bcmwl_nvram.h>
+#include <kconfig.h>
 
 #if defined(CONFIG_TARGET_LAN_BRIDGE_NAME)
 #define BCMWL_WPS_LAN_BRIDGE   CONFIG_TARGET_LAN_BRIDGE_NAME
@@ -121,11 +122,11 @@ bool bcmwl_wps_configured(void)
 
 bool bcmwl_wps_enabled(void)
 {
-#if defined(CONFIG_BCM_WPS)
+    if (!kconfig_enabled(CONFIG_BCM_WPS)) {
+        LOGD("WPS disabled");
+        return false;
+    }
     return true;
-#endif
-    LOGD("WPS disabled");
-    return false;
 }
 
 bool bcmwl_wps_init(void)

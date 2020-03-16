@@ -38,6 +38,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "bcmwl_lan.h"
 #include "bcmwl_nvram.h"
 #include "bcmwl_event.h"
+#include "bcmwl_ioctl.h"
 
 static log_severity_t g_opt_severity = LOG_SEVERITY_INFO;
 static int g_opt_delay;
@@ -63,6 +64,10 @@ void usage()
            "   Be careful. This changes system state and can race with daemons.\n" \
            " watch_events ifname<ifname,ifname,...>\n" \
            "   Monitor BCM events on specified interfaces.\n" \
+           " wlctl ifname <args..>\n" \
+           "   Launch iovar wrapper, similar to native wlctl\n" \
+           " dhdctl ifname <args..>\n" \
+           "   Launch iovar wrapper, similar to native dhdctl\n" \
            " set_event e ifname<ifname,ifname,...>\n" \
            " unset_event e ifname<ifname,ifname,...>\n" \
            "   Manage BCM active events on specified interfaces. \"e\" is a decimal \n" \
@@ -516,6 +521,30 @@ static bool cmd_detect_max_lan_ifnames(int argc, char *argv[])
     return true;
 }
 
+static bool cmd_tx_avg_rate(int argc, char *argv[])
+{
+    const char *ifname;
+    const char *macstr;
+    float mbps;
+    float psr;
+    float tried;
+
+    if (WARN_ON(argc < 2))
+        return false;
+
+    bcmwl_ioctl_init();
+    ifname = *argv++;
+    macstr = *argv++;
+    if (bcmwl_sta_get_tx_avg_rate(ifname, macstr, &mbps, &psr, &tried) < 0)
+        return false;
+
+    printf("%s: %s: tx mbps %f psr %f tried %f expected %f\n",
+           ifname, macstr, mbps, psr, tried,
+           /* rule of thumb: 10% mac overhead, 15% tcp ack/collisions */
+           mbps * psr * 0.9 * 0.85);
+    return true;
+}
+
 int main(int argc, char *argv[])
 {
     bool success = false;
@@ -575,11 +604,25 @@ int main(int argc, char *argv[])
     {
         success = cmd_detect_max_lan_ifnames(argc, argv);
     }
+    else if (strcmp(argv[1], "tx_avg_rate") == 0)
+    {
+        success = cmd_tx_avg_rate(argc - 2, argv + 2);
+    }
     else if (strcmp(argv[1], "detect_dongle") == 0)
     {
         success = bcmwl_radio_adapter_is_operational(argv[2]);
         printf("Dongle %s: attached: %s", argv[2], success == true ? "yes" : "no");
         success = true;
+    }
+    else if ((strcmp(argv[1], "dhdctl") == 0) || (strcmp(argv[1], "wlctl") == 0))
+    {
+        char *buf = bcmwl_wl(argv[2], argv[1], (const char **)argv + 3);
+
+        if (buf) {
+            printf("%s\n", buf);
+            free(buf);
+            success = true;
+        }
     }
     else
     {

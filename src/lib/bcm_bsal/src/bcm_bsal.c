@@ -35,9 +35,15 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <limits.h>
 #include <arpa/inet.h>
 
-#include "proto/ethernet.h"
-#include "proto/bcmevent.h"
-#include "proto/802.11.h"
+#if defined(USE_ALTERNATE_BCM_DRIVER_PATHS)
+    #include "ethernet.h"
+    #include "bcmevent.h"
+    #include "802.11.h"
+#else
+    #include "proto/ethernet.h"
+    #include "proto/bcmevent.h"
+    #include "proto/802.11.h"
+#endif
 
 #include "const.h"
 #include "target.h"
@@ -45,10 +51,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "bcmwl_nvram.h"
 #include "bcmwl.h"
 #include "bcmwl_event.h"
+#include "bcmwl_acl.h"
 
 #include "bcm_bsal.h"
 
-bool bcm_bsal_finalize(struct ev_loop *loop, const char *ifnames[]);
+bool bcm_bsal_finalize(struct ev_loop *loop);
 
 /******************************************************************************
  *  PRIVATE definitions
@@ -140,6 +147,23 @@ static ev_timer _client_sta_info_watcher;
 
 os_macaddr_t _hwaddr_mask;
 
+static int bin2hex(const uint8_t *in, size_t in_size, char *out, size_t out_size)
+{
+    unsigned int i;
+    char *ptr;
+
+    if (out_size < (in_size * 2 + 1))
+        return -1;
+
+    memset(out, 0, out_size);
+    ptr = &out[0];
+
+    for (i = 0; i < in_size; i++)
+        ptr += sprintf(ptr, "%02hhx", in[i]);
+
+    return 0;
+}
+
 static void probe_add(client_t *client, int snr, time_t time, bool ssid_null)
 {
     LOGT("%s: %s: "PRI(os_macaddr_t)" %d %u %d", client->ifname, __func__,
@@ -226,6 +250,8 @@ static bool is_event_ignored(int etype)
         case WLC_E_AUTH_IND:
         case WLC_E_ASSOC_IND:
         case WLC_E_REASSOC_IND:
+        case WLC_E_PRUNE:
+        case WLC_E_ACTION_FRAME:
             return false;
         default:
             return true;
@@ -340,9 +366,8 @@ static bool iface_prepare_acl(const char *ifname)
         return false;
     }
 
-    if (!bcmwl_acl_set_prob_resp_blocking(ifname, true))
+    if (WARN_ON(!bcmwl_acl_commit(ifname)))
     {
-        LOGE(LOG_PREFIX"%s: Failed to set probe responses blocking!", ifname);
         return false;
     }
 
@@ -360,7 +385,9 @@ static bool iface_enable_events(const char *ifname)
         WARN_ON(!bcmwl_event_enable(ifname, WLC_E_DEAUTH)) ||
         WARN_ON(!bcmwl_event_enable(ifname, WLC_E_AUTH_IND)) ||
         WARN_ON(!bcmwl_event_enable(ifname, WLC_E_ASSOC)) ||
-        WARN_ON(!bcmwl_event_enable(ifname, WLC_E_REASSOC_IND)))
+        WARN_ON(!bcmwl_event_enable(ifname, WLC_E_REASSOC_IND)) ||
+        WARN_ON(!bcmwl_event_enable(ifname, WLC_E_PRUNE)) ||
+        WARN_ON(!bcmwl_event_enable(ifname, WLC_E_ACTION_FRAME)))
     {
         return false;
     }
@@ -507,7 +534,7 @@ static proc_event_res_t process_event_deauth_ind(
 
     client->connect_send = false;
     event->type = BSAL_EVENT_CLIENT_DISCONNECT;
-    strncpy(event->ifname, client->ifname, sizeof(event->ifname));
+    STRSCPY(event->ifname, client->ifname);
 
     disconn_ev = &event->data.disconnect;
     memcpy(&disconn_ev->client_addr, &client->hwaddr.addr, sizeof(disconn_ev->client_addr));
@@ -548,7 +575,7 @@ static proc_event_res_t process_event_deauth(
 
     client->connect_send = false;
     event->type = BSAL_EVENT_CLIENT_DISCONNECT;
-    strncpy(event->ifname, client->ifname, sizeof(event->ifname));
+    STRSCPY(event->ifname, client->ifname);
 
     disconn_ev = &event->data.disconnect;
     memcpy(&disconn_ev->client_addr, &client->hwaddr.addr, sizeof(disconn_ev->client_addr));
@@ -579,7 +606,7 @@ static proc_event_res_t process_event_disassoc_ind(
 
     client->connect_send = false;
     event->type = BSAL_EVENT_CLIENT_DISCONNECT;
-    strncpy(event->ifname, client->ifname, sizeof(event->ifname));
+    STRSCPY(event->ifname, client->ifname);
 
     disconn_ev = &event->data.disconnect;
     memcpy(&disconn_ev->client_addr, &client->hwaddr.addr, sizeof(disconn_ev->client_addr));
@@ -623,7 +650,7 @@ static proc_event_res_t process_event_auth_ind(
     }
 
     event->type = BSAL_EVENT_AUTH_FAIL;
-    strncpy(event->ifname, client->ifname, sizeof(event->ifname));
+    STRSCPY(event->ifname, client->ifname);
 
     auth_fail_ev = &event->data.auth_fail;
     memcpy(&auth_fail_ev->client_addr, &client->hwaddr.addr, sizeof(auth_fail_ev->client_addr));
@@ -631,6 +658,73 @@ static proc_event_res_t process_event_auth_ind(
     auth_fail_ev->reason = 1; // TODO BCM driver doesn't report any reason, field is 0
     auth_fail_ev->bs_blocked = 1; // TODO Not needed?
     auth_fail_ev->bs_rejected = 1; // TODO Not needed?
+
+    return PROC_EVENT_NEW_BSAL_EVENT;
+}
+
+static proc_event_res_t process_event_prune_ind(
+        client_t *client,
+        const bcm_event_t *event_raw,
+        bsal_event_t *event)
+{
+    const wl_event_msg_t *wl_event = &event_raw->event;
+    bsal_ev_auth_fail_t *auth_fail_ev;
+
+    LOGD(LOG_PREFIX"%s: prune_ind addr="PRI(os_macaddr_t) "reason %d", client->ifname,
+         FMT(os_macaddr_t, client->hwaddr), ntohl(wl_event->reason));
+
+    switch (ntohl(wl_event->reason))
+    {
+        case WLC_E_PRUNE_AUTH_RESP_MAC:
+            break;
+        default:
+            return PROC_EVENT_NO_BSAL_EVENT;
+    }
+
+    event->type = BSAL_EVENT_AUTH_FAIL;
+    STRSCPY(event->ifname, client->ifname);
+
+    auth_fail_ev = &event->data.auth_fail;
+    memcpy(&auth_fail_ev->client_addr, &client->hwaddr.addr, sizeof(auth_fail_ev->client_addr));
+    auth_fail_ev->rssi = 0;
+    auth_fail_ev->reason = 1;
+    auth_fail_ev->bs_blocked = 1;
+    auth_fail_ev->bs_rejected = 1;
+
+    return PROC_EVENT_NEW_BSAL_EVENT;
+}
+
+static proc_event_res_t process_event_action_frame(
+        client_t *client,
+        const bcm_event_t *event_raw,
+        bsal_event_t *event)
+{
+    const wl_event_msg_t *wl_event = &event_raw->event;
+    const void *data;
+    unsigned int length;
+    struct dot11_management_header hdr;
+
+    length = ntohl(wl_event->datalen);
+    data = event_raw + 1;
+
+    LOGD(LOG_PREFIX"%s: action frame addr="PRI(os_macaddr_t) " len %d", client->ifname,
+         FMT(os_macaddr_t, client->hwaddr), length);
+
+    if (length + sizeof(hdr) > sizeof(event->data.action_frame.data)) {
+        LOGD("%s: action frame length exceed buffer size (%u %u)", client->ifname,
+             length + sizeof(hdr), sizeof(event->data.action_frame.data));
+        return PROC_EVENT_NO_BSAL_EVENT;
+    }
+
+    /* Upper layer expects 80211 header, at least correct SA */
+    memset(&hdr, 0, sizeof(hdr));
+    memcpy(hdr.sa.octet, &client->hwaddr, sizeof(hdr.sa.octet));
+
+    event->type = BSAL_EVENT_ACTION_FRAME;
+    STRSCPY_WARN(event->ifname, client->ifname);
+    memcpy(event->data.action_frame.data, &hdr, sizeof(hdr));
+    memcpy(event->data.action_frame.data + sizeof(hdr), data, length);
+    event->data.action_frame.data_len = length + sizeof(hdr);
 
     return PROC_EVENT_NEW_BSAL_EVENT;
 }
@@ -646,7 +740,7 @@ static proc_event_res_t process_event_authorized(
 
     client->connect_send = true;
     connect_event->type = BSAL_EVENT_CLIENT_CONNECT;
-    strncpy(connect_event->ifname, client->ifname, sizeof(connect_event->ifname));
+    STRSCPY(connect_event->ifname, client->ifname);
 
     connect_ev = &connect_event->data.connect;
     memcpy(&connect_ev->client_addr, &client->hwaddr.addr, sizeof(connect_ev->client_addr));
@@ -708,7 +802,7 @@ static proc_event_res_t process_event_assoc_reassoc_ind(
     if (ntohl(wl_event->status) != 0)
     {
         event->type = BSAL_EVENT_AUTH_FAIL;
-        strncpy(event->ifname, client->ifname, sizeof(event->ifname));
+        STRSCPY(event->ifname, client->ifname);
 
         auth_fail_ev = &event->data.auth_fail;
         memcpy(&auth_fail_ev->client_addr, &client->hwaddr.addr, sizeof(auth_fail_ev->client_addr));
@@ -807,11 +901,11 @@ static bool process_event_callback(
         return true;
     }
 
-    LOGT(LOG_PREFIX"Processing event! :: ifname=%s client_hwaddr="PRI(os_macaddr_t),
-         ifname, FMT(os_macaddr_pt, client_hwaddr));
+    LOGT(LOG_PREFIX"Processing event! :: ifname=%s client_hwaddr="PRI(os_macaddr_t)" %d",
+         ifname, FMT(os_macaddr_pt, client_hwaddr), ntohl(bcm_event->event.event_type));
 
     memset(&event, 0, sizeof(event));
-    strncpy(event.ifname, ifname, sizeof(event.ifname));
+    STRSCPY(event.ifname, ifname);
 
     switch (ntohl(bcm_event->event.event_type))
     {
@@ -837,6 +931,12 @@ static bool process_event_callback(
         case WLC_E_REASSOC_IND:
             proc_event_res = process_event_assoc_reassoc_ind(client, bcm_event, &event);
             break;
+        case WLC_E_PRUNE:
+            proc_event_res = process_event_prune_ind(client, bcm_event, &event);
+            break;
+        case WLC_E_ACTION_FRAME:
+            proc_event_res = process_event_action_frame(client, bcm_event, &event);
+            break;
         default:
             LOGE(LOG_PREFIX"Event Error: (event: %u) (%s)", ntohl(bcm_event->event.event_type),
                  __PRETTY_FUNCTION__);
@@ -856,7 +956,7 @@ leave:
         default:
             LOGE(LOG_PREFIX"%s: Failed to process BCM event, etype=%d", ifname,
                  ntohl(bcm_event->event.event_type));
-            return false;
+            return true;
     }
 
     return true;
@@ -911,7 +1011,7 @@ static bool client_update_activity_event(
 update:
     // Prepare event
     event->type = BSAL_EVENT_CLIENT_ACTIVITY;
-    strncpy(event->ifname, client->ifname, BSAL_IFNAME_LEN);
+    STRSCPY(event->ifname, client->ifname);
 
     activity_ev = &event->data.activity;
     memcpy(&activity_ev->client_addr, &client->hwaddr.addr, sizeof(activity_ev->client_addr));
@@ -946,7 +1046,7 @@ static bool client_update_rssi_event(
 
     // Prepare event
     event->type = BSAL_EVENT_RSSI;
-    strncpy(event->ifname, client->ifname, BSAL_IFNAME_LEN);
+    STRSCPY(event->ifname, client->ifname);
 
     rssi_ev = &event->data.rssi;
     memcpy(&rssi_ev->client_addr, &client->hwaddr.addr, sizeof(rssi_ev->client_addr));
@@ -1085,7 +1185,7 @@ static void client_sta_info_update_callback(
         }
 
         memset(&event, 0, sizeof(event));
-        strncpy(event.ifname, client->ifname, sizeof(event.ifname));
+        STRSCPY(event.ifname, client->ifname);
         snr = sta_info.rssi - sta_info.nf;
 
         if ((activity_changed = client_update_activity_event(client, &sta_info, &event)))
@@ -1145,7 +1245,7 @@ static void probe_req_filter_timer_callback(
     memset(&event, 0, sizeof(event));
 
     event.type = BSAL_EVENT_PROBE_REQ;
-    strncpy(event.ifname, client->ifname, sizeof(event.ifname));
+    STRSCPY(event.ifname, client->ifname);
 
     prob_req_ev = &event.data.probe_req;
     memcpy(&prob_req_ev->client_addr, &client->hwaddr.addr, sizeof(prob_req_ev->client_addr));
@@ -1179,11 +1279,9 @@ static void probe_req_filter_timer_callback(
 
 bool bcm_bsal_init(
         struct ev_loop *loop,
-        const char *ifnames[],
         bsal_event_cb_t callback)
 {
     struct target_radio_ops bcm_ops;
-    const char **ifname;
 
     LOGD(LOG_PREFIX"init");
 
@@ -1195,19 +1293,12 @@ bool bcm_bsal_init(
 
     memset(&bcm_ops, 0, sizeof(bcm_ops));
 
+    bcmwl_event_setup_extra_cb(process_event_callback);
+
     if (!bcmwl_init(&bcm_ops))
     {
         LOGE(LOG_PREFIX"Failed to initialize bcmwl");
         goto error;
-    }
-
-    for (ifname = ifnames; *ifname; ifname++)
-    {
-        if (!bcmwl_event_register(loop, *ifname, process_event_callback))
-        {
-            LOGE(LOG_PREFIX"Failed to register to events on interface! :: ifname=%s", *ifname);
-            goto error;
-        }
     }
 
     assert(ds_dlist_is_empty(&_clients));
@@ -1226,23 +1317,16 @@ bool bcm_bsal_init(
     return true;
 
 error:
-    bcm_bsal_finalize(loop, ifnames);
+    bcm_bsal_finalize(loop);
     return false;
 }
 
-bool bcm_bsal_finalize(
-        struct ev_loop *loop,
-        const char *ifnames[])
+bool bcm_bsal_finalize(struct ev_loop *loop)
 {
-    const char **ifname;
-
     LOGD(LOG_PREFIX"Finalizing -> exiting");
 
     if (_bcm_bsal_initialized)
     {
-        for (ifname = ifnames; *ifname; ifname++)
-            bcmwl_event_unregister(loop, *ifname, process_event_callback);
-
         _bsal_event_callback = NULL;
         _bcm_bsal_initialized = false;
     }
@@ -1318,7 +1402,7 @@ bool bcm_bsal_add_client(
     }
 
     client_reset(client);
-    strncpy(client->ifname, ifname, BSAL_IFNAME_LEN);
+    STRSCPY(client->ifname, ifname);
     memcpy(&client->hwaddr, &hwaddr, sizeof(client->hwaddr));
     client->snr_lwm = client_conf->rssi_probe_lwm;
     client->snr_hwm = client_conf->rssi_probe_hwm;
@@ -1471,7 +1555,7 @@ bool bcm_bsal_client_measure(
     }
 
     event.type = BSAL_EVENT_RSSI;
-    strncpy(event.ifname, ifname, sizeof(event.ifname));
+    STRSCPY(event.ifname, ifname);
 
     rssi_ev = &event.data.rssi;
     memcpy(&rssi_ev->client_addr, mac_addr, sizeof(rssi_ev->client_addr));
@@ -1540,12 +1624,31 @@ bool bcm_bsal_client_info(
 
     info->connected = sta_info.is_authorized;
     info->is_BTM_supported = sta_info.is_btm_supported;
+    info->snr = sta_info.rssi - sta_info.nf;
 
     /* TODO check how we can get RRM caps from driver */
 
     client = get_client(ifname, &hwaddr);
     if (!client) {
         return true;
+    }
+
+    if (sta_info.rrm_caps[0]) {
+        info->is_RRM_supported = true;
+        if (sta_info.rrm_caps[0] & (1 << DOT11_RRM_CAP_BCN_PASSIVE))
+            info->rrm_caps.bcn_rpt_passive = true;
+        if (sta_info.rrm_caps[0] & (1 << DOT11_RRM_CAP_BCN_ACTIVE))
+            info->rrm_caps.bcn_rpt_active = true;
+        if (sta_info.rrm_caps[0] & (1 << DOT11_RRM_CAP_BCN_TABLE))
+            info->rrm_caps.bcn_rpt_table = true;
+    } else {
+        /* If client was connected before we have this already from ASSOC event */
+        info->is_RRM_supported = client->support_rrm;
+        if (client->support_rrm) {
+            info->rrm_caps.bcn_rpt_passive = client->support_rrm_beacon_passive_mes;
+            info->rrm_caps.bcn_rpt_active = client->support_rrm_beacon_active_mes;
+            info->rrm_caps.bcn_rpt_table = client->support_rrm_beacon_table_mes;
+        }
     }
 
     info->datarate_info.max_chwidth = sta_info.max_chwidth;
@@ -1563,6 +1666,9 @@ bool bcm_bsal_client_info(
         LOGW(LOG_PREFIX"%s: "PRI(os_macaddr_t)" client ies_len %d higher than info storage %zu", client->ifname,
              FMT(os_macaddr_t, client->hwaddr), client->assoc_ies_len, sizeof(info->assoc_ies));
     }
+
+    info->tx_bytes = sta_info.tx_total_bytes;
+    info->rx_bytes = sta_info.rx_total_bytes;
 
     return true;
 }
@@ -1642,31 +1748,51 @@ bool bcm_bsal_rrm_beacon_report_request(
         const uint8_t *mac_addr,
         const bsal_rrm_params_t *rrm_params)
 {
-    const char *req_fmt = "05000100002619020005"
+    char ssid[128] = "";
+    int ssid_len = 0;
+    int len = 25;
+    struct wl_status status;
+
+    const char* req_fmt = "050001000026%02x020005" // len
                           "%02x" // Operating Class
                           "%02x" // Measurement Channel
                           "%02x00" // Measurement Interval
                           "%02x00" // Measurement Duration
                           "%02x" // Measurement Mode
-                          "ffffffffffff00000102"
-                          "%02x" // Reporting Condition
-                          "000201"
+                          "ffffffffffff" // bssid
+                          "00%02x" // SSID len
+                          "%s"    // SSID
+                          "0102"
+                          "%02x00" // Reporting Condition
+                          "0201"
                           "%02x"; // Reporting Detail
     bool result = false;
-    char buffer[128] = { '\0' };
+    char buffer[256] = { '\0' };
     os_macaddr_t hwaddr;
 
+    memset(&status, 0, sizeof(status));
     memcpy(&hwaddr.addr, mac_addr, sizeof(hwaddr.addr));
 
-    LOGD(LOG_PREFIX"%s: Issuing 11k request for client, addr="PRI(os_macaddr_t),
-         ifname, FMT(os_macaddr_t, hwaddr));
+    if (rrm_params->req_ssid == 1) {
+        bcmwl_vap_get_status(ifname, &status);
+        if (!bin2hex((const uint8_t *) status.ssid, strlen(status.ssid), ssid, sizeof(ssid))) {
+            ssid_len = strlen(ssid)/2;
+            len += ssid_len;
+        }
+    }
+
+    LOGI(LOG_PREFIX"%s: Issuing 11k request for client, addr="PRI(os_macaddr_t) " ssid: %s",
+         ifname, FMT(os_macaddr_t, hwaddr), status.ssid);
 
     snprintf(buffer, sizeof(buffer), req_fmt,
+             len,
              rrm_params->op_class,
              rrm_params->channel,
              rrm_params->rand_ivl,
              rrm_params->meas_dur,
              rrm_params->meas_mode,
+             ssid_len,
+             ssid,
              rrm_params->rep_cond,
              rrm_params->rpt_detail);
 
@@ -1719,4 +1845,32 @@ bool bcm_bsal_rrm_remove_neighbor(
                                       strfmta("%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
                                               nr->bssid[0], nr->bssid[1], nr->bssid[2],
                                               nr->bssid[3], nr->bssid[4], nr->bssid[5]));
+}
+
+bool bcm_bsal_send_action(
+        const char *ifname,
+        const uint8_t *mac_addr,
+        const uint8_t *data,
+        unsigned int data_len)
+{
+    char hex[4096];
+    os_macaddr_t hwaddr;
+
+    memcpy(&hwaddr.addr, mac_addr, sizeof(hwaddr.addr));
+
+    if (bin2hex(data, data_len, hex, sizeof(hex)))
+    {
+        LOGE(LOG_PREFIX"%s: bin2hex conversion failed, addr="PRI(os_macaddr_t),
+             ifname, FMT(os_macaddr_t, hwaddr));
+        return false;
+    }
+
+    if (!bcmwl_misc_send_action_frame(ifname, &hwaddr, hex))
+    {
+        LOGE(LOG_PREFIX"%s: Failed to send action frame, addr="PRI(os_macaddr_t),
+             ifname, FMT(os_macaddr_t, hwaddr));
+        return false;
+    }
+
+    return true;
 }

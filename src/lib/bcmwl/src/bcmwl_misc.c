@@ -118,7 +118,7 @@ bool bcmwl_get_noise(const char *ifname, int *noise)
     const struct bcmwl_ioctl_num_conv *conv;
     if (WARN_ON(!(conv = bcmwl_ioctl_lookup_num_conv(ifname))))
         return false;
-    if (WARN_ON(!bcmwl_ioctl_get(ifname, WLC_GET_PHY_NOISE, noise, sizeof(noise))))
+    if (WARN_ON(!bcmwl_GIOC(ifname, WLC_GET_PHY_NOISE, NULL, noise)))
         return false;
     *noise = conv->dtoh32(*noise);
     if (*noise >= 0)

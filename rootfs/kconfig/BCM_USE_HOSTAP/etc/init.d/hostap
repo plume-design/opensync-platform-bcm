@@ -1,0 +1,38 @@
+#!/bin/sh
+hapdsock=/var/run/hostapd/global
+wpassock=/var/run/wpa_supplicantglobal
+hapdpid=/var/run/hostapd-global.pid
+wpaspid=/var/run/wpa_supplicant-global.pid
+wait() {
+	for i in $(seq 1 5); do pidof $1 || return 0; sleep 1; done
+	return 1
+}
+kill() {
+	echo TERM $i..; killall -TERM $1; wait $1 && return 0
+	echo KILL $i..; killall -KILL $1; wait $1 && return 0
+}
+case "$1" in
+start)
+	echo $0: starting..
+	hostapd -g $hapdsock -B -P $hapdpid -s
+	wpa_supplicant -g $wpassock -B -P $wpaspid -s
+	echo $0: started
+	;;
+stop)
+	echo $0: stopping..
+	kill hostapd
+	kill wpa_supplicant
+	rm -vf $hapdsock
+	rm -vf $wpassock
+	rm -vf /tmp/wpa_ctrl_*
+	echo $0: stopped
+	;;
+restart)
+	$0 stop
+	$0 start
+	;;
+*)
+	echo $0: $1 not supported
+	exit 1
+	;;
+esac

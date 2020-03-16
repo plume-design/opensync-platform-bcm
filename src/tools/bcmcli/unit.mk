@@ -34,3 +34,5 @@ UNIT_TYPE       := BIN
 UNIT_SRC        := bcmcli_main.c
 
 UNIT_DEPS       := platform/bcm/src/lib/bcmwl
+
+include platform/bcm/build/bcm-sdk-wifi.mk

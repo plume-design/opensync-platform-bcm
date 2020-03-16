@@ -29,12 +29,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 bool bcm_bsal_init(
         struct ev_loop *loop,
-        const char *ifnames[],
         bsal_event_cb_t callback);
 
-bool bcm_bsal_finalize(
-        struct ev_loop *loop,
-        const char *ifnames[]);
+bool bcm_bsal_finalize(struct ev_loop *loop);
 
 bool bcm_bsal_iface_add(const bsal_ifconfig_t *ifcfg);
 bool bcm_bsal_iface_update(const bsal_ifconfig_t *ifcfg);
@@ -54,6 +51,7 @@ bool bcm_bsal_remove_client(
         const char *ifname,
         const uint8_t *mac_addr);
 
+
 bool bcm_bsal_client_measure(
         const char *ifname,
         const uint8_t *mac_addr,
@@ -70,6 +68,7 @@ bool bcm_bsal_client_info(
         const uint8_t *mac_addr,
         bsal_client_info_t *info);
 
+
 bool bcm_bsal_bss_tm_request(
         const char *ifname,
         const uint8_t *mac_addr,
@@ -80,6 +79,7 @@ bool bcm_bsal_rrm_beacon_report_request(
         const uint8_t *mac_addr,
         const bsal_rrm_params_t *rrm_params);
 
+
 bool bcm_bsal_rrm_set_neighbor(
         const char *ifname,
         const bsal_neigh_info_t *nr);
@@ -87,5 +87,11 @@ bool bcm_bsal_rrm_set_neighbor(
 bool bcm_bsal_rrm_remove_neighbor(
         const char *ifname,
         const bsal_neigh_info_t *nr);
+
+bool bcm_bsal_send_action(
+        const char *ifname,
+        const uint8_t *mac_addr,
+        const uint8_t *data,
+        unsigned int data_len);
 
 #endif /* BCM_BSAL_H_INCLUDED */

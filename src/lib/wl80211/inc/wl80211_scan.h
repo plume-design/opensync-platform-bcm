@@ -28,7 +28,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define WL80211_SCAN_H_INCLUDED
 
 #include "ds_dlist.h"
-#include "evsched.h"
 
 #include "dppline.h"
 

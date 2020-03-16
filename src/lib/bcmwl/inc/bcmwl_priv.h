@@ -30,9 +30,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Need to define TYPEDEF_BOOL so that bool is not redefined in ethernet.h
 #define TYPEDEF_BOOL
 #include <stdbool.h>
-#include "proto/ethernet.h"
-#include "proto/bcmevent.h"
 #include <wlioctl.h>
 
+#if defined(USE_ALTERNATE_BCM_DRIVER_PATHS)
+    #include "ethernet.h"
+    #include "bcmevent.h"
+    #include "wlioctl_defs.h"
+#else
+    #include "proto/ethernet.h"
+    #include "proto/bcmevent.h"
+    #include "devctrl_if/wlioctl_defs.h"
+#endif
 
 #endif /* BCMWL_PRIV_H_INCLUDED */

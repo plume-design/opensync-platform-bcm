@@ -1,0 +1,29 @@
+#!/bin/sh
+
+tmp_nvram_file="/tmp/.kernel_nvram.setting"
+
+
+case "$1" in
+start)
+    # load variables and functions from original BCM file;
+    # do not execute any code from it, as it does an "exit 0", which exits
+    # from this script as well
+    . /etc/init.d/hndnvram.sh --do-nothing
+
+    # create a symlink from /data/.kernel_nvram.setting to a file in tmpfs
+    if [ ! -L "$kernel_nvram_file" ];
+    then
+        echo "Creating symlink";
+        ln -sf "$tmp_nvram_file" "$kernel_nvram_file";
+        sync;
+    fi
+
+    # regenerate NVRAM from default NVRAM file and ENVRAM
+    cp -v "$original_kernel_nvram_file" "$tmp_nvram_file"
+    mount_mfg_nvram_fs && ( nvram_mfg_restore_default ; umount_mfg_nvram_fs; )
+    ;;
+*)
+    echo $0: $1 not supported
+    exit 1
+    ;;
+esac

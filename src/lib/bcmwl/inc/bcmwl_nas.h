@@ -27,9 +27,35 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef BCMWL_NAS_H_INCLUDED
 #define BCMWL_NAS_H_INCLUDED
 
-bool bcmwl_nas_multipsk_is_supported(void);
-bool bcmwl_nas_init(void);
-void bcmwl_nas_reload(const char *);
+enum {
+    BCMWL_NAS_RELOAD_FULL,
+    BCMWL_NAS_RELOAD_FAST,
+};
+
+#ifdef CONFIG_BCM_USE_NAS
+void bcmwl_nas_init(void);
 void bcmwl_nas_reload_full(void);
+bool bcmwl_nas_update_security(
+        const struct schema_Wifi_VIF_Config *vconf,
+        const struct schema_Wifi_Radio_Config *rconf,
+        const struct schema_Wifi_Credential_Config *cconfs,
+        const struct schema_Wifi_VIF_Config_flags *vchanged,
+        int num_cconfs);
+bool bcmwl_nas_get_security(
+        const char *ifname,
+        struct schema_Wifi_VIF_State *vstate);
+#else
+static inline void bcmwl_nas_init(void) {}
+static inline void bcmwl_nas_reload_full(void) { WARN_ON(1); /* FIXME: kill bcwl_vap_create() */ }
+static inline bool bcmwl_nas_update_security(
+        const struct schema_Wifi_VIF_Config *vconf,
+        const struct schema_Wifi_Radio_Config *rconf,
+        const struct schema_Wifi_Credential_Config *cconfs,
+        const struct schema_Wifi_VIF_Config_flags *vchanged,
+        int num_cconfs) { return true; }
+static inline bool bcmwl_nas_get_security(
+        const char *ifname,
+        struct schema_Wifi_VIF_State *vstate) { return true; }
+#endif
 
 #endif /* BCMWL_NAS_H_INCLUDED */

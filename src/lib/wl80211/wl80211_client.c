@@ -24,6 +24,7 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <getopt.h>
@@ -40,6 +41,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "ds_tree.h"
 #include "const.h"
 #include "util.h"
+#include "kconfig.h"
 
 #include "bcmwl.h"
 #include "wl80211.h"
@@ -48,13 +50,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define MODULE_ID LOG_MODULE_ID_WL
 
 #define WL80211_DATA_RATE_LEN       (128)
-
-#ifndef MAX
-#define MAX(x, y) ((x) > (y) ? (x) : (y))
-#endif
-#ifndef MIN
-#define MIN(x, y) ((x) < (y) ? (x) : (y))
-#endif
 
 
 #define WL_MCS_REPORT_VERSION    1  /* Suported wl rate_histo_report version */
@@ -308,82 +303,39 @@ static bool wl80211_client_stats_calculate(
     /* RSSI is value above the noise floor */
     if (new_stats->rx.snr)
     {
-        /* Sliding window averaging */
-        if (old_stats->rx.snr)
-        {
-            client_result->stats.rssi =
-                (old_stats->rx.snr + new_stats->rx.snr) / 2;
-            LOG(TRACE,
-                "Calculated %s client delta stats for "
-                MAC_ADDRESS_FORMAT" rssi=%d (new=%d-old=%d)",
-                radio_get_name_from_type(radio_type),
-                MAC_ADDRESS_PRINT(data_new->info.mac),
-                client_result->stats.rssi,
-                new_stats->rx.snr,
-                old_stats->rx.snr);
-        }
-        else
-        {
-            client_result->stats.rssi = new_stats->rx.snr;
-        }
+        client_result->stats.rssi = new_stats->rx.snr;
+        LOG(TRACE,
+            "Calculated %s client delta stats for "
+            MAC_ADDRESS_FORMAT" rssi=%d",
+            radio_get_name_from_type(radio_type),
+            MAC_ADDRESS_PRINT(data_new->info.mac),
+            client_result->stats.rssi);
     }
 
-    uint32_t    rate_tx = 0;
     if (new_stats->tx.last_rate)
     {
-        /* Sliding window averaging */
-        if (old_stats->tx.last_rate) {
-            rate_tx= (old_stats->tx.last_rate + new_stats->tx.last_rate) / 2;
-        } else {
-            rate_tx = new_stats->tx.last_rate;
-        }
-
-        char data_rate_tx[WL80211_DATA_RATE_LEN];
-        memset (data_rate_tx, 0, sizeof(data_rate_tx));
-        snprintf(data_rate_tx,
-                sizeof(data_rate_tx),
-                "%u.%01u",
-                rate_tx / 1000,
-                rate_tx % 1000);
-        client_result->stats.rate_tx = atof(data_rate_tx);
+        client_result->stats.rate_tx = new_stats->tx.last_rate;
+        client_result->stats.rate_tx /= 1000;
 
         LOG(TRACE,
             "Calculated %s client delta stats for "
-            MAC_ADDRESS_FORMAT" rate_tx=%0.2f (new=%u.%01u-old=%u.%01u)",
+            MAC_ADDRESS_FORMAT" rate_tx=%0.2f",
             radio_get_name_from_type(radio_type),
             MAC_ADDRESS_PRINT(data_new->info.mac),
-            client_result->stats.rate_tx,
-            new_stats->tx.last_rate / 1000, new_stats->tx.last_rate % 1000,
-            old_stats->tx.last_rate / 1000, old_stats->tx.last_rate % 1000);
+            client_result->stats.rate_tx);
     }
 
-    uint32_t    rate_rx = 0;
     if (new_stats->rx.last_rate)
     {
-        /* Sliding window averaging */
-        if (old_stats->rx.last_rate) {
-            rate_rx= (old_stats->rx.last_rate + new_stats->rx.last_rate) / 2;
-        } else {
-            rate_rx = new_stats->rx.last_rate;
-        }
-
-        char data_rate_rx[WL80211_DATA_RATE_LEN];
-        memset (data_rate_rx, 0, sizeof(data_rate_rx));
-        snprintf(data_rate_rx,
-                sizeof(data_rate_rx),
-                "%u.%01u",
-                rate_rx / 1000,
-                rate_rx % 1000);
-        client_result->stats.rate_rx = atof(data_rate_rx);
+        client_result->stats.rate_rx = new_stats->rx.last_rate;
+        client_result->stats.rate_rx /= 1000;
 
         LOG(TRACE,
             "Calculated %s client delta stats for "
-            MAC_ADDRESS_FORMAT" rate_rx=%0.2f (new=%u.%01u-old=%u.%01u)",
+            MAC_ADDRESS_FORMAT" rate_rx=%0.2f",
             radio_get_name_from_type(radio_type),
             MAC_ADDRESS_PRINT(data_new->info.mac),
-            client_result->stats.rate_rx,
-            new_stats->rx.last_rate / 1000, new_stats->rx.last_rate % 1000,
-            old_stats->rx.last_rate / 1000, old_stats->rx.last_rate % 1000);
+            client_result->stats.rate_rx);
     }
 
 
@@ -416,6 +368,33 @@ static bool wl80211_client_stats_calculate(
 
 
     return true;
+}
+
+static void wl80211_client_tx_rate_stats_get(const char *ifname,
+                                             wl80211_client_record_t *client)
+{
+    const uint8_t *mac = client->info.mac;
+    const char *macstr = strfmta(MAC_ADDRESS_FORMAT, MAC_ADDRESS_PRINT(mac));
+    float mbps;
+    float psr;
+    float tried;
+
+    if (WARN_ON(bcmwl_sta_get_tx_avg_rate(ifname, macstr, &mbps, &psr, &tried) < 0))
+        return;
+
+    /* the mbps is known to be buggy in some corner cases.
+     * its better to not override the not-so-accurate
+     * sta_info derived rx.last_rate with a completely bogus
+     * value. moreover, if there was no traffic then its
+     * better to report last used rate too instead of 0.
+     */
+    if (tried == 0.0 || mbps < 0.1)
+        return;
+
+    client->stats.tx.last_rate = mbps * 1024;
+
+    LOG(DEBUG, "PHY stats: %s: "MAC_ADDRESS_FORMAT": tx mbps=%.0f psr=%1.2f snr=%"PRId32,
+        ifname, MAC_ADDRESS_PRINT(mac), mbps, psr, client->stats.rx.snr);
 }
 
 static int wl80211_client_sta_info_parse(
@@ -653,6 +632,7 @@ static int wl80211_client_sta_info_parse(
 
     /* Now, let's get mcs (rate histogram) stats for this client: */
     wl80211_client_mcs_stats_get(client_ctx->ifname, client);
+    wl80211_client_tx_rate_stats_get(client_ctx->ifname, client);
 
 
     ds_dlist_insert_tail(client_ctx->list, client);
@@ -704,6 +684,10 @@ static void wl80211_client_mcs_stats_get(
     uint8_t *macaddr = client->info.mac;
     char cmd[WL80211_CMD_BUFF_SIZE];
     FILE *f = 0;
+
+    if (!kconfig_enabled(CONFIG_BCM_USE_RATE_HISTO)) {
+        return;
+    }
 
     if (!wl80211_mcs_stats_supported(ifname)) {
         return;
@@ -768,6 +752,45 @@ static const char* mcs_parse_legacy_line_token(
 }
 
 
+static uint32_t mcs_to_mbps(const int mcs, const int bw, const int nss)
+{
+    /* The following table is precomputed from:
+     *
+     * bpsk -> 1bit
+     * qpsk -> 2bit
+     * 16-qam -> 4bit
+     * 64-qam -> 6bit
+     * 256-qam -> 8bit
+     *
+     * 20mhz -> 52 tones
+     * 40mhz -> 108 tones
+     * 80mhz -> 234 tones
+     * 160mhz -> 486 tones
+     *
+     * Once divided by 4 will get an long GI phyrate.
+     */
+    static const unsigned short bps[10][4] = {
+        /* 20mhz 40mhz 80mhz  160mhz */
+        {  26,   54,   117,   234   }, /* BPSK 1/2 */
+        {  52,   108,  234,   468   }, /* QPSK 1/2 */
+        {  78,   162,  351,   702   }, /* QPSK 3/4 */
+        {  104,  216,  468,   936   }, /* 16-QAM 1/2 */
+        {  156,  324,  702,   1404  }, /* 16-QAM 3/4 */
+        {  208,  432,  936,   1248  }, /* 16-QAM 2/3 */
+        {  234,  486,  1053,  2106  }, /* 64-QAM 3/4 */
+        {  260,  540,  1170,  2340  }, /* 64-QAM 5/6 */
+        {  312,  648,  1404,  2808  }, /* 256-QAM 3/4 */
+        {  346,  720,  1560,  3120  }, /* 256-QAM 5/6 */
+    };
+    const int i = mcs < 10 ? mcs : 9;
+    const int j = bw == 20 ? 0 :
+                  bw == 40 ? 1 :
+                  bw == 80 ? 2 :
+                  bw == 160 ? 3 : 0;
+    return (bps[i][j] * nss) / 4; /* hopefully compiler makes a bitshift */
+}
+
+
 static int wl80211_client_mcs_stats_parse(FILE *f, wl80211_client_record_t *client)
 {
 
@@ -784,6 +807,11 @@ static int wl80211_client_mcs_stats_parse(FILE *f, wl80211_client_record_t *clie
     uint64_t tx_total = 0;
     uint32_t duration = 0;
     uint64_t non_legacy = 0;
+    uint64_t tx_phyrate = 0;
+    uint64_t rx_phyrate = 0;
+    uint32_t tx_mpdus = 0;
+    uint32_t rx_mpdus = 0;
+    uint64_t mbps;
 
 
     line_num = 0;
@@ -872,6 +900,26 @@ static int wl80211_client_mcs_stats_parse(FILE *f, wl80211_client_record_t *clie
                     if (pkts == 0)
                         continue; /* skip if packet count 0 */
 
+                    if (kconfig_enabled(CONFIG_BCM_USE_RATE_HISTO_TO_EXPECTED_TPUT)) {
+                        mbps = rate;
+                        mbps *= pkts;
+
+                        if (is_tx_entry) {
+                            tx_phyrate += mbps;
+                            tx_mpdus += pkts;
+                        } else {
+                            rx_phyrate += mbps;
+                            rx_mpdus += pkts;
+                        }
+
+                        /* histograms have been converted to
+                         * expected throughput. there's no need to
+                         * allocate and send out histograms anymore
+                         * so skip them.
+                         */
+                        continue;
+                    }
+
                     wl80211_client_mcs_stats_t *rate_histo = wl80211_client_mcs_stats_alloc();
                     rate_histo->freq = 20;
                     rate_histo->pkts = pkts;
@@ -930,6 +978,26 @@ static int wl80211_client_mcs_stats_parse(FILE *f, wl80211_client_record_t *clie
                 }
             }
 
+            if (kconfig_enabled(CONFIG_BCM_USE_RATE_HISTO_TO_EXPECTED_TPUT)) {
+                mbps = rate ?: mcs_to_mbps(mcs, freq, nss);
+                mbps *= pkts;
+
+                if (is_tx_entry) {
+                    tx_phyrate += mbps;
+                    tx_mpdus += pkts;
+                } else {
+                    rx_phyrate += mbps;
+                    rx_mpdus += pkts;
+                }
+
+                /* histograms have been converted to
+                 * expected throughput. there's no need to
+                 * allocate and send out histograms anymore
+                 * so skip them.
+                 */
+                continue;
+            }
+
             rate_histo = wl80211_client_mcs_stats_alloc();
 
             rate_histo->freq = freq;
@@ -961,6 +1029,27 @@ static int wl80211_client_mcs_stats_parse(FILE *f, wl80211_client_record_t *clie
                        rate_histo->pkts_total,
                        duration);
         }
+    }
+
+    if (kconfig_enabled(CONFIG_BCM_USE_RATE_HISTO_TO_EXPECTED_TPUT)) {
+        if (tx_mpdus) {
+            tx_phyrate /= tx_mpdus;
+            tx_phyrate *= 1024;
+            client->stats.tx.last_rate = tx_phyrate;
+        }
+
+        if (rx_mpdus) {
+            rx_phyrate /= rx_mpdus;
+            rx_phyrate *= 1024;
+            client->stats.rx.last_rate = rx_phyrate;
+        }
+
+        LOG(DEBUG, "MCS expected tput: %s (%s): "MAC_ADDRESS_FORMAT
+                   " Computed phy rates: tx=%llu (pkts=%u) rx=%llu (pkts=%u)",
+                   client->info.ifname, client->info.essid,
+                   MAC_ADDRESS_PRINT(client->info.mac),
+                   tx_phyrate, tx_mpdus,
+                   rx_phyrate, rx_mpdus);
     }
 
     return 0;
@@ -1029,6 +1118,41 @@ static void wl80211_client_assoclist_parse(
 
         /* Callback that shall get stats for client with specified macaddr: */
         cb(macaddr, client_ctx);
+    }
+}
+
+static void wl80211_client_rxavgrate_cb(
+        const char                 *ifname,
+        const char                 *mac_octet,
+        float                       mbps,
+        float                       psr,
+        float                       tried,
+        void                       *arg)
+{
+    wl80211_client_ctx_t *ctx = arg;
+    wl80211_client_record_t *client;
+
+    /* the mbps is known to be buggy in some corner cases.
+     * its better to not override the not-so-accurate
+     * sta_info derived rx.last_rate with a completely bogus
+     * value. moreover, if there was no traffic then its
+     * better to report last used rate too instead of 0.
+     */
+    if (tried == 0.0 || mbps < 0.1)
+        return;
+
+    ds_dlist_foreach(ctx->list, client) {
+        if (strcmp(client->info.ifname, ifname))
+            continue;
+        if (memcmp(client->info.mac, mac_octet, sizeof(client->info.mac)))
+            continue;
+
+        client->stats.rx.last_rate = mbps * 1024;
+        LOGD("Setting rx.last_rate to %d for "MAC_ADDRESS_FORMAT" on %s",
+             client->stats.rx.last_rate,
+             MAC_ADDRESS_PRINT(client->info.mac),
+             ifname);
+        return;
     }
 }
 
@@ -1127,6 +1251,11 @@ bool wl80211_client_list_get(
             &client_ctx);
 
     pclose(file_desc);
+
+    bcmwl_sta_get_rx_avg_rate(
+            ifname,
+            wl80211_client_rxavgrate_cb,
+            &client_ctx);
 
     return true;
 }

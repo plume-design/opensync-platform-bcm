@@ -43,7 +43,7 @@ typedef void target_capacity_data_t;
 #include "target_common.h"
 
 
-#define TARGET_BIN_PATH             "/usr/plume/bin"
+#define TARGET_BIN_PATH             CONFIG_INSTALL_PREFIX"/bin"
 
 #define TARGET_MANAGER_PATH(X)      TARGET_BIN_PATH"/"X
 

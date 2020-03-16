@@ -38,6 +38,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "wl80211_survey.h"
 
 #include "target.h"
+#include "bcmwl.h"
 
 #define MODULE_ID LOG_MODULE_ID_TARGET
 

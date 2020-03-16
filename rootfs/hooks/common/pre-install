@@ -1,10 +1,15 @@
-#!/bin/bash
+#!/bin/sh
 
-# libplume.so needs to be accessible from /lib or /usr/lib
+# libopensync.so needs to be accessible from /lib or /usr/lib
 # otherwise hostTools/libcreduction complains with error:
-# *** Missing 32-bit libraries: libplume.so.  Stop.
+# *** Missing 32-bit libraries: libopensync.so.  Stop.
+#
+# Create a symlink from /usr/lib/opensync to /usr/opensync/lib
 
 ROOTFS="$1"
-mkdir -p "${ROOTFS}"/usr/lib
-ln -sf ../plume/lib/libplume.so "${ROOTFS}"/usr/lib/libplume.so
+DEST_LIB_DIR="/usr/lib"
+[ -z "$INSTALL_PREFIX" ] && INSTALL_PREFIX="/usr/plume"
+REL_SRC_DIR="$(realpath "$INSTALL_PREFIX" --relative-to="$DEST_LIB_DIR")"
+mkdir -p "$ROOTFS$DEST_LIB_DIR"
+ln -sf "$REL_SRC_DIR/lib" "$ROOTFS$DEST_LIB_DIR/$(basename "$INSTALL_PREFIX")"
 

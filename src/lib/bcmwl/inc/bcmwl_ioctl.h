@@ -31,6 +31,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "bcmwl_priv.h"
 #include <wlioctl.h>
+#include <dhdioctl.h>
 
 
 struct bcmwl_ioctl_num_conv
@@ -40,23 +41,157 @@ struct bcmwl_ioctl_num_conv
     uint64_t (*dtoh64) (uint64_t);
 };
 
+struct bcmwl_ioctl_arg {
+    const char *ifname;
+    const char *iovar;
+    const void *param; /* optional */
+    void *buf; /* output buffer */
+    int cmd; /* eg. WLC_GET_VAR */
+    int bsscfgidx; /* used by bsscfg=1 */
+    bool set; /* 0=getter 1=setter */
+    bool dongle; /* for dhd iovars */
+    bool bsscfg; /* eg. for ssid iovar with -C 3 */
+    size_t plen; /* param len */
+    size_t len; /* output buffer len */
+};
+
 bool bcmwl_ioctl_init(void);
+
+bool bcmwl_ioctl(struct bcmwl_ioctl_arg *arg);
+
+char *bcmwl_wl(const char *ifname, const char *prog, const char *args[]);
 
 const struct bcmwl_ioctl_num_conv* bcmwl_ioctl_lookup_num_conv(const char *ifname);
 
-bool bcmwl_ioctl_prepare_args_with_addr(void *buf,
-                                        size_t buf_size,
-                                        const char *wl_cmd,
-                                        const os_macaddr_t *hwaddr);
+#define bcmwl_GIOC(_ifname, _cmd, _param, _buf) \
+    bcmwl_ioctl(&(struct bcmwl_ioctl_arg){ \
+        .ifname = _ifname, \
+        .cmd = _cmd, \
+        .param = _param, \
+        .plen = sizeof(*_param), \
+        .buf = _buf, \
+        .len = sizeof(*_buf), \
+    })
 
-bool bcmwl_ioctl_set(const char *ifname,
-                     unsigned int ioctl_cmd,
-                     const void *buf,
-                     size_t buf_size);
+#define bcmwl_SIOC(_ifname, _cmd, _param) \
+    bcmwl_ioctl(&(struct bcmwl_ioctl_arg){ \
+        .ifname = _ifname, \
+        .cmd = _cmd, \
+        .param = _param, \
+        .plen = sizeof(*_param), \
+        .set = true, \
+    })
 
-bool bcmwl_ioctl_get(const char *ifname,
-                     unsigned int ioctl_cmd,
-                     void *buf,
-                     size_t buf_size);
+#define bcmwl_SIOV(_ifname, _iovar, _param) \
+    bcmwl_ioctl(&(struct bcmwl_ioctl_arg){ \
+        .ifname = _ifname, \
+        .iovar = _iovar, \
+        .cmd = WLC_SET_VAR, \
+        .param = _param, \
+        .plen = sizeof(*_param), \
+        .set = true, \
+    })
+
+#define bcmwl_GIOV(_ifname, _iovar, _param, _buf) \
+    bcmwl_ioctl(&(struct bcmwl_ioctl_arg){ \
+        .ifname = _ifname, \
+        .iovar = _iovar, \
+        .cmd = WLC_GET_VAR, \
+        .param = _param, \
+        .plen = sizeof(*_param), \
+        .buf = _buf, \
+        .len = sizeof(*_buf), \
+    })
+
+#define bcmwl_DHDSIOV(_ifname, _iovar, _param) \
+    bcmwl_ioctl(&(struct bcmwl_ioctl_arg){ \
+        .ifname = _ifname, \
+        .iovar = _iovar, \
+        .cmd = DHD_SET_VAR, \
+        .param = _param, \
+        .plen = sizeof(*_param), \
+        .dongle = true, \
+        .set = true, \
+    })
+
+#define bcmwl_DHDGIOV(_ifname, _iovar, _param, _buf) \
+    bcmwl_ioctl(&(struct bcmwl_ioctl_arg){ \
+        .ifname = _ifname, \
+        .iovar = _iovar, \
+        .cmd = DHD_GET_VAR, \
+        .param = _param, \
+        .plen = sizeof(*_param), \
+        .dongle = true, \
+        .buf = _buf, \
+        .len = sizeof(*_buf), \
+    })
+
+#define bcmwl_SIOVBSS(_ifname, _iovar, _idx, _param) \
+    bcmwl_ioctl(&(struct bcmwl_ioctl_arg){ \
+        .ifname = _ifname, \
+        .iovar = _iovar, \
+        .cmd = WLC_SET_VAR, \
+        .param = _param, \
+        .plen = sizeof(*_param), \
+        .bsscfg = true, \
+        .bsscfgidx = _idx, \
+        .set = true, \
+    })
+
+#define bcmwl_GIOVBSS(_ifname, _iovar, _idx, _param, _buf) \
+    bcmwl_ioctl(&(struct bcmwl_ioctl_arg){ \
+        .ifname = _ifname, \
+        .iovar = _iovar, \
+        .cmd = WLC_GET_VAR, \
+        .param = _param, \
+        .plen = sizeof(*_param), \
+        .bsscfg = true, \
+        .bsscfgidx = _idx, \
+        .buf = _buf, \
+        .len = sizeof(*_buf), \
+    })
+
+#define bcmwl_DHDGIOC(_ifname, _cmd, _param, _buf) \
+    bcmwl_ioctl(&(struct bcmwl_ioctl_arg){ \
+        .ifname = _ifname, \
+        .cmd = _cmd, \
+        .param = _param, \
+        .plen = sizeof(*_param), \
+        .buf = _buf, \
+        .len = sizeof(*_buf), \
+        .dongle = true, \
+    })
+
+#define bcmwl_DHDSIOVBSS(_ifname, _iovar, _idx, _param) \
+    bcmwl_ioctl(&(struct bcmwl_ioctl_arg){ \
+        .ifname = _ifname, \
+        .iovar = _iovar, \
+        .cmd = DHD_SET_VAR, \
+        .param = _param, \
+        .plen = sizeof(*_param), \
+        .bsscfg = true, \
+        .bsscfgidx = _idx, \
+        .dongle = true, \
+        .set = true, \
+    })
+
+#define bcmwl_DHDGIOVBSS(_ifname, _iovar, _idx, _param, _buf) \
+    bcmwl_ioctl(&(struct bcmwl_ioctl_arg){ \
+        .ifname = _ifname, \
+        .iovar = _iovar, \
+        .cmd = DHD_GET_VAR, \
+        .param = _param, \
+        .plen = sizeof(*_param), \
+        .bsscfg = true, \
+        .bsscfgidx = _idx, \
+        .dongle = true, \
+        .buf = _buf, \
+        .len = sizeof(*_buf), \
+    })
+
+#define BCMWL_IOCMAX_GCHANLIST ((WLC_IOCTL_MAXLEN - sizeof(int)) / sizeof(int))
+#define BCMWL_IOCMAX_SCHANLIST (BCMWL_IOCMAX_GCHANLIST - (128 / sizeof(int)))
+#define BCMWL_IOCMAX_GMACLIST ((WLC_IOCTL_MAXLEN - sizeof(int)) / sizeof(struct ether_addr))
+#define BCMWL_IOCMAX_SMACLIST (BCMWL_IOCMAX_GMACLIST - (128 / sizeof(struct ether_addr)))
 
 #endif /* BCMWL_IOCTL_H_INCLUDED */

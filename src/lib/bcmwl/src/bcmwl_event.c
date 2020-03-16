@@ -45,6 +45,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <fcntl.h>
 #include <sys/file.h>
 #include <linux/filter.h>
+#include <linux/rtnetlink.h>
+#include <linux/socket.h>
+#include <linux/netlink.h>
 
 #include "os.h"
 
@@ -54,15 +57,24 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "os.h"
 #include "target.h"
 #include "evx_debounce_call.h"
+#include "kconfig.h"
+
+/* This clearly violates the abstraction separation but it's
+ * better than do that than to slowness of calling fork+exec
+ * for ovs-vsctl.
+ */
+#include "ovsdb.h"
+#include "ovsdb_update.h"
+#include "ovsdb_sync.h"
+#include "ovsdb_table.h"
+#include "ovsdb_cache.h"
 
 #include "bcmwl.h"
 #include "bcmwl_nvram.h"
-#include "bcmwl_lan.h"
 #include "bcmwl_roam.h"
 #include "bcmwl_debounce.h"
-#include "bcmutil.h"
-
 #include "bcmwl_event.h"
+#include "bcmwl_ioctl.h"
 
 struct bcmwl_event_watcher {
     ev_io                   io;
@@ -70,11 +82,30 @@ struct bcmwl_event_watcher {
     struct ds_dlist_node    list;
     char                    ifname[32];
     int                     was_down;
+    bool                    removing;
 };
 
 static ds_dlist_t g_watcher_list = DS_DLIST_INIT(struct bcmwl_event_watcher, list);
 static bcmwl_event_cb_t *g_bcmwl_extra_cb;
 static int g_bcmwl_discard_probereq;
+static ev_async g_nl_async;
+static ev_io g_nl_io;
+
+#define util_nl_each_msg(buf, len, hdr, hdrlen) \
+    for (hdr = buf, hdrlen = len; NLMSG_OK(hdr, hdrlen); hdr = NLMSG_NEXT(hdr, hdrlen))
+
+#define util_nl_each_msg_type(buf, len, hdr, hdrlen, type) \
+    util_nl_each_msg(buf, len, hdr, hdrlen) \
+        if (hdr->nlmsg_type == type)
+
+#define util_nl_each_attr(hdr, attr, attrlen) \
+    for (attr = IFLA_RTA(NLMSG_DATA(hdr)), attrlen = IFLA_PAYLOAD(hdr); \
+         RTA_OK(attr, attrlen); \
+         attr = RTA_NEXT(attr, attrlen))
+
+#define util_nl_each_attr_type(hdr, attr, attrlen, type) \
+    util_nl_each_attr(hdr, attr, attrlen) \
+        if (attr->rta_type == type)
 
 /**
  * Private
@@ -110,7 +141,7 @@ static bool bcmwl_event_sockbuf_resize(int fd)
 #endif
     }
 
-    LOGI("Event socket RCVBUF fd=%d set=%d get=%d", fd, rcvbuf, buf);
+    LOGD("Event socket RCVBUF fd=%d set=%d get=%d", fd, rcvbuf, buf);
     return true;
 }
 
@@ -132,7 +163,7 @@ static void bcmwl_event_setup_bpf(const char *ifname, int fd)
     if (!g_bcmwl_discard_probereq)
         return;
 
-    LOGI("%s: setting up bpf filter to discard some events", ifname);
+    LOGD("%s: setting up bpf filter to discard some events", ifname);
     if (setsockopt(fd, SOL_SOCKET, SO_ATTACH_FILTER, &prog, sizeof(prog)) < 0) {
         LOGW("Failed to set up bpf filter :: ifname=%s errno=%d (%s)",
              ifname, errno, strerror(errno));
@@ -150,6 +181,71 @@ static int bcmwl_event_get_dropped(int fd)
     return stats.tp_drops;
 }
 
+/* `buf` gets filled with space-separated ifnames, w/ possibly trailing space */
+static bool bcmwl_event_br_get_if_ovs(const char *brname, char *buf, size_t len)
+{
+    struct schema_Bridge bridge;
+    struct schema_Port *ports;
+    struct schema_Port *port;
+    ovsdb_table_t table_Bridge;
+    ovsdb_table_t table_Port;
+    int n_ports;
+    int i;
+
+    OVSDB_TABLE_INIT(Bridge, name);
+    OVSDB_TABLE_INIT(Port, name);
+
+    if (!ovsdb_table_select_one(&table_Bridge, "name", brname, &bridge))
+        return false;
+
+    ports = ovsdb_table_select_where(&table_Port, NULL, &n_ports);
+    if (!ports)
+        return false;
+
+    for (port = ports; n_ports; n_ports--, port++)
+        for (i = 0; i < bridge.ports_len; i++)
+            if (!strcmp(port->_uuid.uuid, bridge.ports[i].uuid))
+                csnprintf(&buf, &len, "%s ", port->name);
+
+
+    free(ports);
+    return true;
+}
+
+/* `buf` gets filled with space-separated ifnames, w/ possibly trailing space */
+static bool bcmwl_event_br_get_if_linux(const char *brname, char *buf, size_t len)
+{
+    char path[128];
+    struct dirent *d;
+    DIR *dir;
+
+    snprintf(path, sizeof(path), "/sys/class/net/%s/brif", brname);
+    if (!(dir = opendir(path)))
+        return false;
+
+    while ((d = readdir(dir)))
+        if (strcmp(d->d_name, ".") && strcmp(d->d_name, ".."))
+            csnprintf(&buf, &len, "%s ", d->d_name);
+
+    closedir(dir);
+    return true;
+}
+
+static char* bcmwl_event_br_get_if(const char *brname)
+{
+    char ports[1024];
+
+    memset(ports, 0, sizeof(ports));
+
+    if (bcmwl_event_br_get_if_linux(brname, ports, sizeof(ports)))
+        return strdup(ports);
+
+    if (bcmwl_event_br_get_if_ovs(brname, ports, sizeof(ports)))
+        return strdup(ports);
+
+    return NULL;
+}
+
 static void bcmwl_event_overrun_recover_ifname(const char *ifname)
 {
     if (!bcmwl_is_vif(ifname) && !bcmwl_is_phy(ifname))
@@ -162,33 +258,15 @@ static void bcmwl_event_overrun_recover_ifname(const char *ifname)
         evx_debounce_call(bcmwl_radio_state_report, ifname);
 }
 
-static void bcmwl_event_overrun_recover_all(void)
-{
-    const char *ifname;
-    struct dirent *p;
-    DIR *d;
-
-    if (!(d = WARN_ON(opendir("/sys/class/net"))))
-        return;
-    while ((p = readdir(d)) && (ifname = p->d_name))
-        if (bcmwl_is_vif(ifname) || bcmwl_is_phy(ifname))
-            bcmwl_event_overrun_recover_ifname(ifname);
-    closedir(d);
-}
-
 static void bcmwl_event_overrun_recover(const char *bridge)
 {
     const char *ifname;
     char *ifnames;
-    int i;
 
-    if (WARN_ON((i = bcmwl_lan_lookup(bridge)) < 0) ||
-        WARN_ON(!(ifnames = NVG(bcmwl_lan(i), "ifnames")))) {
-        bcmwl_event_overrun_recover_all();
-        return;
-    }
-
-    while ((ifname = strsep(&ifnames, " ")))
+    ifnames = strdupafree(bcmwl_event_br_get_if(bridge));
+    if (!ifnames)
+        ifnames = strdupa(bridge);
+    while ((ifname = strsep(&ifnames, " \n")))
         bcmwl_event_overrun_recover_ifname(ifname);
 }
 
@@ -227,7 +305,7 @@ again:
              * is re-enabled if it was poked at by 3rd party. This is
              * just playing it safe.
              */
-            LOGI("%s: interface is down, scheduling force-update later", ew->ifname);
+            LOGD("%s: interface is down, scheduling force-update later", ew->ifname);
             ew->was_down = 1;
             return;
         }
@@ -261,7 +339,7 @@ again:
     }
     if (ew->was_down)
     {
-        LOGI("%s: interface was down, forcing updates", ew->ifname);
+        LOGD("%s: interface was down, forcing updates", ew->ifname);
         bcmwl_event_overrun_recover(ew->ifname);
         ew->was_down = 0;
     }
@@ -482,7 +560,7 @@ int bcmwl_event_socket_open(const char *ifname)
     bcmwl_event_sockbuf_resize(fd);
     bcmwl_event_setup_bpf(ifname, fd);
 
-    LOGI("Opened event socket :: ifname=%s ifindex=%d fd=%d", ifname, ifindex, fd);
+    LOGD("Opened event socket :: ifname=%s ifindex=%d fd=%d", ifname, ifindex, fd);
     return fd;
 }
 
@@ -505,13 +583,11 @@ static void bcmwl_event_register_h_sta_sync(const char *bridge)
 {
     const char *ifname;
     char *ifnames;
-    int i;
 
-    if (WARN_ON((i = bcmwl_lan_lookup(bridge)) < 0))
-        return;
-    if (WARN_ON(!(ifnames = NVG(bcmwl_lan(i), "ifnames"))))
-        return;
-    while ((ifname = strsep(&ifnames, " ")))
+    ifnames = strdupafree(bcmwl_event_br_get_if(bridge));
+    if (!ifnames)
+        ifnames = strdupa(bridge);
+    while ((ifname = strsep(&ifnames, " \n")))
         if (strlen(ifname) && strncmp(ifname, "wl", 2) == 0)
             evx_debounce_call(bcmwl_sta_resync, ifname);
 }
@@ -531,6 +607,7 @@ bool bcmwl_event_register(struct ev_loop *loop,
 
     if (ew)
     {
+        ew->removing = false;
         LOGD("%s: already registered, skipping", ifname);
         return true;
     }
@@ -546,6 +623,7 @@ bool bcmwl_event_register(struct ev_loop *loop,
     if (fd < 0)
     {
         LOGE("Unable to register event watcher! :: ifname=%s", ifname);
+        free(ew);
         return false;
     }
 
@@ -556,6 +634,15 @@ bool bcmwl_event_register(struct ev_loop *loop,
     ew->cb = callback;
     ds_dlist_insert_tail(&g_watcher_list, ew);
     bcmwl_event_register_h_sta_sync(ifname);
+    if (bcmwl_is_phy(ifname))
+        evx_debounce_call(bcmwl_radio_state_report, ifname);
+    if (bcmwl_is_netdev(ifname))
+        evx_debounce_call(bcmwl_vap_state_report, ifname);
+
+    if (strstr(ifname, "wds") == ifname) {
+        LOGI("%s: forcing netdev up", ifname);
+        strexa("ip", "link", "set", ifname, "up");
+    }
 
     LOGI("%s: registered event handler %p", ifname, callback);
     return true;
@@ -657,6 +744,26 @@ static void bcmwl_event_handle_radio(const char *ifname)
     evx_debounce_call(bcmwl_radio_state_report, ifname);
 }
 
+static void bcmwl_event_handle_if(const bcm_event_t *ev)
+{
+    const void *data = ev + 1;
+    const struct wl_event_data_if *eif = data;
+    const char *ifname = ev->event.ifname;
+    const char *str;
+
+    switch (eif->opcode) {
+        case WLC_E_IF_ADD: str = "add"; break;
+        case WLC_E_IF_DEL: str = "del"; break;
+        case WLC_E_IF_CHANGE: str = "change"; break;
+        case WLC_E_IF_BSSCFG_UP: str = "bsscfg-up"; break;
+        case WLC_E_IF_BSSCFG_DOWN: str = "bsscfg-down"; break;
+        default: str = "unknown"; break;
+    }
+
+    LOGI("%s: vif state changed: %s (%hhu)", ifname, str, eif->opcode);
+    evx_debounce_call(bcmwl_vap_state_report, ifname);
+}
+
 static void bcmwl_event_print(const bcm_event_t *ev)
 {
     const char *ifname = ev->event.ifname;
@@ -683,6 +790,26 @@ static void bcmwl_event_print(const bcm_event_t *ev)
         LOGI("%s: %s: deauth status %d reason %d", ifname, mac, status, reason);
     if (e == WLC_E_DISASSOC)
         LOGI("%s: %s: disassoc status %d reason %d", ifname, mac, status, reason);
+}
+
+static void bcmwl_event_handle_link(const bcm_event_t *ev)
+{
+    const char *ifname = ev->event.ifname;
+    const char *reason_str;
+    int reason = ntohl(ev->event.reason);
+    int flags = ntohs(ev->event.flags);
+
+    reason_str = (reason == WLC_E_LINK_DISASSOC ? "disassoc" :
+                  reason == WLC_E_LINK_BCN_LOSS ? "beacon loss" :
+                  reason == WLC_E_LINK_ASSOC_REC ? "assoc recreation failure" :
+                  reason == WLC_E_LINK_BSSCFG_DIS ? "bss down request" :
+                  "some other reason");
+
+    LOGI("%s: link state changed to %s due to %s (%d)",
+         ifname,
+         (flags == WLC_EVENT_MSG_LINK) ? "up" : "down",
+         reason_str,
+         reason);
 }
 
 bool bcmwl_event_handler(const char *ifname,
@@ -714,6 +841,9 @@ bool bcmwl_event_handler(const char *ifname,
     bcmwl_event_print(ev);
 
     switch (e) {
+        case WLC_E_IF:
+            bcmwl_event_handle_if(ev);
+            return BCMWL_EVENT_HANDLED;
         case WLC_E_RADIO:
             bcmwl_event_handle_radio(ifname);
             return BCMWL_EVENT_HANDLED;
@@ -730,30 +860,39 @@ bool bcmwl_event_handler(const char *ifname,
         case WLC_E_RADAR_DETECTED:
             bcmwl_event_handle_radar(ifname);
             return BCMWL_EVENT_HANDLED;
+        case WLC_E_AP_CHAN_CHANGE:
+            bcmwl_event_handle_ap_chan_change(ifname, ev);
+            return BCMWL_EVENT_HANDLED;
+        case WLC_E_LINK:
+            bcmwl_event_handle_link(ev);
+            return BCMWL_EVENT_HANDLED;
     }
 
     return BCMWL_EVENT_CONTINUE;
 }
 
-void bcmwl_event_setup(struct ev_loop *loop)
+static void bcmwl_event_setup(struct ev_loop *loop)
 {
     struct bcmwl_event_watcher *e;
-    char *i, *k, *v, *p;
-    int idx;
+    struct dirent *p;
+    DIR *d;
 
-    bcmwl_nvram_for_each(i, k, v, p)
-        if ((idx = bcmwl_lan_get_idx(k)) >= 0)
-            if (!bcmwl_event_register(loop, v, bcmwl_event_handler))
-                LOGW("%s: failed to register events for %s=%s", __func__, k, v);
+    ds_dlist_foreach(&g_watcher_list, e)
+        if (e->cb == bcmwl_event_handler)
+            e->removing = true;
+
+    for (d = opendir("/sys/class/net"); d && (p = readdir(d)); ) {
+        if (!strcmp(p->d_name, "")) continue;
+        if (!strcmp(p->d_name, ".")) continue;
+        if (!strcmp(p->d_name, "..")) continue;
+        WARN_ON(!bcmwl_event_register(loop, p->d_name, bcmwl_event_handler));
+    }
+
+    closedir(d);
 
 again:
-    ds_dlist_foreach(&g_watcher_list, e)
-    {
-        bcmwl_nvram_for_each(i, k, v, p)
-            if (bcmwl_lan_get_idx(k) >= 0 && !strcmp(v, e->ifname))
-                break;
-        if (!v)
-        {
+    ds_dlist_foreach(&g_watcher_list, e) {
+        if (e->cb == bcmwl_event_handler && e->removing) {
             bcmwl_event_unregister(loop, e->ifname, bcmwl_event_handler);
             /* dlist can't handle removal during iteration
              * so jump outside and re-do it from scratch
@@ -761,6 +900,66 @@ again:
             goto again;
         }
     }
+}
+
+static void bcmwl_event_nl_handle(const void *const buf, unsigned int len)
+{
+    const struct nlmsghdr *hdr;
+    const struct rtattr *attr;
+    int attrlen;
+    int hdrlen;
+
+    util_nl_each_msg_type(buf, len, hdr, hdrlen, RTM_NEWLINK)
+        util_nl_each_attr_type(hdr, attr, attrlen, IFLA_IFNAME)
+            WARN_ON(!bcmwl_event_register(EV_DEFAULT_ RTA_DATA(attr), bcmwl_event_handler));
+
+    util_nl_each_msg_type(buf, len, hdr, hdrlen, RTM_DELLINK)
+        util_nl_each_attr_type(hdr, attr, attrlen, IFLA_IFNAME)
+            bcmwl_event_unregister(EV_DEFAULT_ RTA_DATA(attr), bcmwl_event_handler);
+}
+
+static void bcmwl_event_nl_cb(EV_P_ ev_io *io, int events)
+{
+    char buf[4096];
+    ssize_t n;
+
+    n = recv(io->fd, buf, sizeof(buf), MSG_DONTWAIT);
+    LOGD("netlink buffer recv %d bytes errno %d", n, errno);
+    if (n < 0) {
+        if (errno == EAGAIN)
+            return;
+        LOGN("netlink socket error, re-opening");
+        ev_io_stop(EV_DEFAULT_ &g_nl_io);
+        close(g_nl_io.fd);
+        g_nl_io.fd = 0;
+        ev_async_send(EV_DEFAULT_ &g_nl_async);
+        return;
+    }
+
+    bcmwl_event_nl_handle(buf, n);
+}
+
+static void bcmwl_event_nl_async_cb(EV_P_ ev_async *async, int events)
+{
+    struct sockaddr_nl addr = {
+        .nl_family = AF_NETLINK,
+        .nl_groups = RTMGRP_LINK,
+    };
+    int fd;
+
+    if (WARN_ON(g_nl_io.fd))
+        return;
+    if (WARN_ON((fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE)) < 0))
+        return;
+    if (WARN_ON(bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0))
+        return;
+    if (WARN_ON(setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (int []) { 2*1024*1024 }, sizeof(int)) < 0))
+        return;
+
+    ev_io_init(&g_nl_io, bcmwl_event_nl_cb, fd, EV_READ);
+    ev_io_start(EV_DEFAULT_ &g_nl_io);
+    bcmwl_event_setup(EV_DEFAULT);
+    LOGI("netlink socket opened");
 }
 
 void bcmwl_event_setup_extra_cb(bcmwl_event_cb_t cb)
@@ -875,7 +1074,7 @@ bool bcmwl_event_mask_bit_isset(bcmwl_event_mask_t *mask, unsigned int bit)
 
 #define BCMWL_EVENT_LOCK_PATH "/tmp/.bcmwl.event.lock"
 
-bool bcmwl_event_enable(const char *ifname, unsigned int bit)
+static bool bcmwl_event_enable_exec(const char *ifname, unsigned int bit)
 {
     bcmwl_event_mask_t mask;
     bool ok = false;
@@ -902,6 +1101,37 @@ out:
     return ok;
 }
 
+static bool bcmwl_event_enable_iov(const char *ifname, unsigned int bit)
+{
+    struct {
+        /* eventmsgs_ext_t is variable length and needs to
+         * be stretched for iovar declaration to figure out
+         * the input parameter length
+         */
+        eventmsgs_ext_t ext;
+        char buf[(WLC_E_LAST + 7) / 8];
+    } arg;
+
+    LOGD("%s: enabling event bit %d", ifname, bit);
+    memset(&arg, 0, sizeof(arg));
+    arg.ext.ver = EVENTMSGS_VER;
+    arg.ext.len = sizeof(arg.buf);
+    arg.ext.command = EVENTMSGS_SET_BIT;
+    arg.ext.mask[bit / 8] |= 1 << (bit % 8);
+    if (WARN_ON(!bcmwl_SIOV(ifname, "event_msgs_ext", &arg)))
+        return false;
+
+    return true;
+}
+
+bool bcmwl_event_enable(const char *ifname, unsigned int bit)
+{
+    if (kconfig_enabled(CONFIG_BCM_PREFER_IOV))
+        return bcmwl_event_enable_iov(ifname, bit);
+    else
+        return bcmwl_event_enable_exec(ifname, bit);
+}
+
 void bcmwl_event_enable_all(unsigned int bit)
 {
     struct dirent *p;
@@ -912,4 +1142,11 @@ void bcmwl_event_enable_all(unsigned int bit)
             WARN_ON(!bcmwl_event_enable(p->d_name, bit));
     if (!WARN_ON(!d))
         closedir(d);
+}
+
+void bcmwl_event_init(void)
+{
+    ev_async_init(&g_nl_async, bcmwl_event_nl_async_cb);
+    ev_async_start(EV_DEFAULT_ &g_nl_async);
+    ev_async_send(EV_DEFAULT_ &g_nl_async);
 }

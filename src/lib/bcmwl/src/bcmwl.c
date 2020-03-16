@@ -42,6 +42,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <bcmwl_nas.h>
 #include <bcmwl_debounce.h>
 #include <bcmwl_wps.h>
+#include <bcmwl_hostap.h>
+#include <bcmwl_acl.h>
 
 /* local */
 static void bcmwl_mpc_disable(void)
@@ -96,8 +98,6 @@ static void bcmwl_mask_nonstd_11n_2ghz_rates(void)
 bool bcmwl_init_wm(void)
 {
     LOGI("bcmwl: wm: initializing");
-    assert(strexa("which", "eapd"));
-    assert(strexa("which", "nas"));
     bcmwl_event_discard_probereq();
     bcmwl_event_enable_all(WLC_E_ACTION_FRAME);
     bcmwl_event_enable_all(WLC_E_AP_CHAN_CHANGE);
@@ -122,6 +122,7 @@ bool bcmwl_init_wm(void)
     bcmwl_event_enable_all(WLC_E_RADIO);
     bcmwl_event_enable_all(WLC_E_REASSOC_IND);
     bcmwl_event_enable_all(WLC_E_SCAN_COMPLETE);
+    bcmwl_event_enable_all(WLC_E_IF);
     bcmwl_mpc_disable();
     bcmwl_mask_nonstd_11n_2ghz_rates();
     bcmwl_dfs_init();
@@ -137,6 +138,8 @@ bool bcmwl_init(const struct target_radio_ops *ops)
     assert(strexa("which", "wl"));
     assert(strexa("which", "nvram"));
     bcmwl_debounce_init(ops);
+    bcmwl_hostap_init();
+    bcmwl_event_init();
     if (WARN_ON(!bcmwl_ioctl_init()))
         return false;
     if (WARN_ON(!bcmwl_acl_init()))

@@ -23,13 +23,41 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
+# This is example of include paths for different wl
+# implementations for wlioctl_defs.h:
+#
+# bcmdrivers/broadcom/net/wl/impl29/main/src/common/include/devctrl_if/wlioctl_defs.h
+# bcmdrivers/broadcom/net/wl/impl32/main/src/common/include/devctrl_if/wlioctl_defs.h
+# bcmdrivers/broadcom/net/wl/impl53/main/components/wlioctl/include/wlioctl_defs.h
+# bcmdrivers/broadcom/net/wl/impl61/main/components/wlioctl/include/wlioctl_defs.h
+#
+# DRIVER_VERSION contains implXX, so strip away non-numeric
+# characters and compare against the threshold version.
+SDK_NEW_INC_PATHS_SINCE = 53
+SDK_DRV_VER = $(if $(strip $(DRIVER_VERSION_REAL)),$(DRIVER_VERSION_REAL),$(DRIVER_VERSION))
+SDK_NEW_INC_PATHS = $(shell test $(shell echo $(SDK_DRV_VER) | tr -dc 0-9) -ge $(SDK_NEW_INC_PATHS_SINCE) && echo y || echo n)
+
 SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/public/include
 SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/gpl/include
 SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/public/include/protobuf-c
 SDK_INCLUDES += -I$(BRCMDRIVERS_DIR)/broadcom/net/wl/$(DRIVER_VERSION)/main/src/include/
+ifeq ($(SDK_NEW_INC_PATHS),y)
+# Add core/src/lib/common/inc first for duplicate naming of monitor.h
+SDK_INCLUDES += -I$(shell pwd)/src/lib/common/inc
+SDK_INCLUDES += -I$(BRCMDRIVERS_DIR)/broadcom/net/wl/$(DRIVER_VERSION)/main/components/wlioctl/include
+SDK_INCLUDES += -I$(BRCMDRIVERS_DIR)/broadcom/net/wl/$(DRIVER_VERSION)/main/components/proto/include
+else
 SDK_INCLUDES += -I$(BRCMDRIVERS_DIR)/broadcom/net/wl/$(DRIVER_VERSION)/main/src/common/include
+endif
 SDK_INCLUDES += -I$(BRCMDRIVERS_DIR)/broadcom/net/wl/$(DRIVER_VERSION)/main/src/shared/bcmwifi/include
+
 INCLUDES     += $(SDK_INCLUDES)
+
+HOSTAP_HEADERS := -I$(BRCMDRIVERS_DIR)/broadcom/net/wl/$(DRIVER_VERSION)/main/components/opensource/router_tools/hostapd/src/common
+
+ifeq ($(SDK_NEW_INC_PATHS),y)
+DEFINES += -DUSE_ALTERNATE_BCM_DRIVER_PATHS
+endif
 DEFINES      += -Wno-strict-aliasing
 DEFINES      += -Wno-unused-but-set-variable
 DEFINES      += -Wno-deprecated-declarations
@@ -40,6 +68,7 @@ DEFINES      += -Wno-error=cpp
 LDFLAGS      += -L$(BCM_FSBUILD_DIR)/lib
 LDFLAGS      += -L$(BCM_FSBUILD_DIR)/public/lib
 LDFLAGS      += -L$(BCM_FSBUILD_DIR)/gpl/lib
+LDFLAGS      += -L$(INSTALL_DIR)/usr/lib
 SDK_ROOTFS   := $(INSTALL_DIR)
 
 ifeq ($(V),1)

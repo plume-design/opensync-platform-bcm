@@ -36,11 +36,15 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 /* internal */
 #include <os_proc.h>
 #include <evx.h>
+#include <evx_debounce_call.h>
 #include <target.h>
 #include <log.h>
 #include <bcmwl.h>
 #include <bcmwl_nvram.h>
 #include <bcmwl_wps.h>
+#include <bcmwl_lan.h>
+#include <bcmwl_priv.h>
+#include <bcmwl_nas.h>
 
 /* local */
 struct ev_timer g_bcmwl_nas_supervise_timer;
@@ -54,7 +58,7 @@ static void bcmwl_nas_sigusr1(struct ev_loop *loop, ev_signal *s, int revent)
     LOGI("nas: fast reload completed");
 }
 
-bool bcmwl_nas_multipsk_is_supported(void)
+static bool bcmwl_nas_multipsk_is_supported(void)
 {
     const char *pid = strexa("pidof", "nas") ?: "";
     const char *path = strfmta("/proc/%s/exe", pid);
@@ -115,7 +119,7 @@ int bcmwl_system_start_closefd(const char *command)
     exit(res);
 }
 
-void bcmwl_nas_reload_full()
+void bcmwl_nas_reload_full(void)
 {
     struct dirent *p;
     DIR *d;
@@ -150,7 +154,7 @@ void bcmwl_nas_reload_full()
     closedir(d);
 }
 
-void bcmwl_nas_reload(const char *arg)
+static void bcmwl_nas_reload(const char *arg)
 {
     int flag;
 
@@ -201,6 +205,8 @@ static void bcmwl_nas_supervise_timer(struct ev_loop *loop, ev_timer *s, int rev
 
 void bcmwl_nas_init(void)
 {
+    assert(strexa("which", "eapd"));
+    assert(strexa("which", "nas"));
     ev_timer_init(&g_bcmwl_nas_supervise_timer,
                   bcmwl_nas_supervise_timer,
                   BCMWL_NAS_SUPERVISE_FIRST_DELAY_SEC,
@@ -209,4 +215,321 @@ void bcmwl_nas_init(void)
     ev_signal_init(&g_bcmwl_nas_sigusr1, bcmwl_nas_sigusr1, SIGUSR1);
     ev_signal_start(EV_DEFAULT, &g_bcmwl_nas_sigusr1);
     NVS("nas", "fast_reload_notify_pid", strfmta("%d", getpid()));
+}
+
+static unsigned short int bcmwl_fletcher16(const char *data, int count)
+{
+    unsigned short int sum1 = 0;
+    unsigned short int sum2 = 0;
+    int index;
+
+    for (index = 0; index < count; ++index)
+    {
+        sum1 = (sum1 + data[index]) % 255;
+        sum2 = (sum2 + sum1) % 255;
+    }
+
+    return (sum2 << 8) | sum1;
+}
+
+static const char* bcmwl_ft_nas_id(void)
+{
+    return "plumewifi";
+}
+
+static int bcmwl_ft_reassoc_deadline_tu(void)
+{
+    return 5000;
+}
+
+static void bcmwl_nas_update_ft_psk(
+        const struct schema_Wifi_VIF_Config *vconf,
+        const struct schema_Wifi_Radio_Config *rconf,
+        const struct schema_Wifi_VIF_Config_flags *vchanged)
+{
+    const char *vif = vconf->if_name;
+    const char *phy = rconf->if_name;
+    const char *fbt;
+    const char *fbt_mdid;
+    unsigned short int mdid;
+    bool is_up;
+
+    if (!vchanged->ft_psk &&
+        !vchanged->ssid &&
+        !vchanged->ft_mobility_domain)
+        return;
+
+    if (WARN_ON(!(fbt = WL(vif, "fbt"))))
+        return;
+
+    /* When disabled we don't need to check MDID (base on ssid) */
+    if (!vconf->ft_psk && atoi(fbt) == vconf->ft_psk)
+        return;
+
+    fbt_mdid = WL(vif, "fbt_mdid");
+    if (!fbt_mdid)
+        fbt_mdid = "";
+
+    if (vconf->ft_mobility_domain_exists)
+        mdid = htons(vconf->ft_mobility_domain);
+    else
+        mdid = htons(bcmwl_fletcher16(vconf->ssid, strlen(vconf->ssid)));
+
+    if (atoi(fbt) == vconf->ft_psk && atoi(fbt_mdid) == mdid)
+        return;
+
+    is_up = !strcmp(WL(phy, "isup") ?: "0", "1");
+    if (is_up) {
+        LOGI("%s@%s: pulling radio down to reconfigure ft psk", vif, phy);
+        if (WARN_ON(!WL(vif, "down")))
+            return;
+    }
+
+    WARN_ON(!WL(vif, "fbt", strfmta("%d", vconf->ft_psk)));
+    WARN_ON(!WL(vif, "fbt_ap", strfmta("%d", vconf->ft_psk)));
+    WARN_ON(!WL(vif, "fbt_mdid", strfmta("%d", mdid)));
+    WARN_ON(!WL(vif, "fbtoverds", "0"));
+    WARN_ON(!WL(vif, "fbt_reassoc_time", strfmta("%d", bcmwl_ft_reassoc_deadline_tu())));
+    WARN_ON(!WL(vif, "fbt_r0kh_id", bcmwl_ft_nas_id()));
+
+    if (is_up) {
+        LOGI("%s@%s: pulling radio up after reconfigure ft psk", vif, phy);
+        if (WARN_ON(!WL(vif, "up")))
+            return;
+    }
+}
+
+static void bcmwl_nas_update_security_multipsk(
+        const struct schema_Wifi_VIF_Config *vconf,
+        int *changed)
+{
+    const char *vif = vconf->if_name;
+    const char *keysumold;
+    const char *keysum;
+    const char *oftag;
+    const char *keyid;
+    const char *key;
+    int keynum;
+    int i;
+
+    for (keynum = 0, keysumold = "";; keynum++) {
+        key = NVG(vif, strfmta("wpa_psk%d", keynum));
+        if (!key || !strlen(key))
+            break;
+
+        keysumold = strfmta("%s,[%d]=%s", keysumold, keynum, key);
+    }
+
+    for (i = 0, keynum = 0, keysum = ""; i < vconf->security_len; i++) {
+        if (strstr(vconf->security_keys[i], "key-") != vconf->security_keys[i])
+            continue;
+
+        key = vconf->security[i];
+        keyid = vconf->security_keys[i];
+        oftag = SCHEMA_KEY_VAL(vconf->security, strfmta("oftag-%s", keyid));
+        keysumold = strfmta("%s,[%d]=%s", keysumold, keynum, key);
+        LOGD("%s: setting wpa_psk %d to '%s' [%s, %s]", vif, keynum, key, keyid, oftag);
+        WARN_ON(!NVS(vif, strfmta("wpa_psk%d", keynum), key));
+        WARN_ON(!NVS(vif, strfmta("wpa_psk%d_keyid", keynum), keyid));
+        WARN_ON(!NVS(vif, strfmta("plume_oftag_%s", keyid), oftag));
+        keynum++;
+    }
+
+    WARN_ON(!NVU(vif, strfmta("wpa_psk%d", keynum)));
+
+    LOGT("%s: keysum old='%s' new='%s'", vif, keysumold, keysum);
+    if (strcmp(keysum, keysumold)) {
+        if (!bcmwl_nas_multipsk_is_supported())
+            LOGE("%s: cannot configure multi-psk, nas does not support it", vif);
+        *changed |= 1;
+    }
+}
+
+bool bcmwl_nas_update_security(
+        const struct schema_Wifi_VIF_Config *vconf,
+        const struct schema_Wifi_Radio_Config *rconf,
+        const struct schema_Wifi_Credential_Config *cconfs,
+        const struct schema_Wifi_VIF_Config_flags *vchanged,
+        int num_cconfs)
+{
+    const char *vif = vconf->if_name;
+    const char *crypto = SCHEMA_KEY_VAL(vconf->security, "mode");
+    const char *oftag = SCHEMA_KEY_VAL(vconf->security, "oftag");
+    const char *akm = SCHEMA_KEY_VAL(vconf->security, "encryption");
+    const char *key = SCHEMA_KEY_VAL(vconf->security, "key");
+    const char *br = vconf->bridge_exists && strlen(vconf->bridge) ? vconf->bridge : vif;
+    const char *nv_akm;
+    const char *nv_crypto;
+    const char *wl_eap;
+    const char *wl_wsec;
+    const char *wl_wsec_restrict;
+    const char *wl_wpa_auth;
+    const char *wl_wpa_auth_prev;
+    int wl_crypto;
+    int drv_wsec;
+    int was_up;
+    int full = 0;
+    int fast = 0;
+    int flag;
+
+    WARN_ON(strcmp(akm, "WPA-PSK") &&
+            strcmp(akm, "OPEN") &&
+            strcmp(akm, ""));
+
+    nv_akm = !strcmp(akm, "WPA-PSK")
+             ? (atoi(crypto) == 1 ? "psk" :
+                atoi(crypto) == 2 ? "psk2" :
+                atoi(crypto) == 3 ? "psk psk2" :
+                "psk2")
+             : "";
+    nv_crypto = !strcmp(akm, "WPA-PSK")
+                ?  atoi(crypto) == 1 ? "tkip+aes" :
+                   atoi(crypto) == 2 ? "aes" :
+                   atoi(crypto) == 3 ? "tkip+aes" :
+                   "aes"
+                : "";
+
+    wl_eap = !strcmp(akm, "WPA-PSK") ? "1" : "0";
+    wl_wsec = strfmta("%d", !strcmp(akm, "WPA-PSK")
+                            ? (atoi(crypto) == 1 ? TKIP_ENABLED :
+                               atoi(crypto) == 2 ? AES_ENABLED :
+                               atoi(crypto) == 3 ? TKIP_ENABLED + AES_ENABLED :
+                               AES_ENABLED)
+                            : 0);
+    wl_wsec_restrict = !strcmp(akm, "WPA-PSK") ? "1" : "0";
+    wl_crypto = !strcmp(akm, "WPA-PSK")
+                ? (atoi(crypto) == 1 ? WPA_AUTH_PSK :
+                    atoi(crypto) == 2 ? WPA2_AUTH_PSK :
+                    atoi(crypto) == 3 ? WPA_AUTH_PSK | WPA2_AUTH_PSK :
+                    WPA2_AUTH_PSK)
+                : 0;
+
+    /*
+     * We have to save bss up/down state here, because
+     * bcmwl_nas_update_ft_psk() could run vif down/up
+     * which also do bss down and take some time before
+     * up again. In some cases, when we change wl_wpa_auth,
+     * bss left down all the time and we didn't send
+     * beacons.
+     */
+    was_up = !strcmp(WL(vif, "bss") ?: "", "up");
+    bcmwl_nas_update_ft_psk(vconf, rconf, vchanged);
+
+    if (vconf->ft_psk_exists && vconf->ft_psk) {
+        nv_akm = strfmta("%s psk2ft", nv_akm);
+        wl_crypto |= WPA2_AUTH_FT;
+    }
+
+    wl_wpa_auth = strfmta("0x%02x", wl_crypto);
+    wl_wpa_auth_prev = strtok(WL(vif, "wpa_auth") ?: strdupa(""), " ") ?: "";
+
+    drv_wsec = atoi(WL(vif, "wsec") ?: "0");
+    drv_wsec &= ~SES_OW_ENABLED; /* wps_monitor adds it outside our control */
+
+    full |= strcmp(strdupafree(bcmwl_lan_search(vif)) ?: "", br)
+         |  strcmp(NVG(vif, "mode") ?: "", vconf->mode)
+         |  strcmp(NVG(vif, "plume_oftag") ?: "", oftag)
+         |  strcmp(NVG(vif, "akm") ?: "", nv_akm)
+         |  strcmp(NVG(vif, "crypto") ?: "", nv_crypto)
+         |  strcmp(WL(vif, "eap") ?: "", wl_eap)
+         |  strcmp(WL(vif, "wsec_restrict") ?: "", wl_wsec_restrict)
+         |  strcmp(wl_wpa_auth_prev, wl_wpa_auth)
+         |  (drv_wsec != atoi(wl_wsec))
+         ;
+    fast |= strcmp(NVG(vif, "ssid") ?: "", vconf->ssid)
+         |  strcmp(NVG(vif, "wpa_psk") ?: "", key)
+         |  (atoi(NVG(vif, "wpa_gtk_rekey") ?: "-1") != vconf->group_rekey)
+         ;
+
+    WARN_ON(!bcmwl_lan_set(vif, br));
+    WARN_ON(!NVS(vif, "ifname", vif));
+    WARN_ON(!NVS(vif, "radio", "1"));
+    WARN_ON(!NVS(vif, "bss_enabled", "1"));
+    WARN_ON(!NVS(vif, "mode", vconf->mode));
+    WARN_ON(!NVS(vif, "plume_oftag", strlen(oftag) ? oftag : NULL));
+    WARN_ON(!NVS(vif, "akm", nv_akm));
+    WARN_ON(!NVS(vif, "crypto", nv_crypto));
+    WARN_ON(!NVS(vif, "ssid", vconf->ssid));
+    WARN_ON(!NVS(vif, "wpa_psk", strlen(key) ? key : NULL));
+    WARN_ON(!NVS(vif, "plume_wpa_mode", atoi(crypto) ? "true" : "false"));
+    WARN_ON(!NVS(vif, "wpa_gtk_rekey", vconf->group_rekey_exists
+                                       ? strfmta("%d", vconf->group_rekey)
+                                       : NULL));
+
+    WARN_ON(!WL(vif, "eap", wl_eap));
+    WARN_ON(!WL(vif, "wsec", wl_wsec));
+    WARN_ON(!WL(vif, "wsec_restrict", wl_wsec_restrict));
+
+    if (strcmp(wl_wpa_auth, wl_wpa_auth_prev)) {
+        WARN_ON(!WL(vif, "bss", "down"));
+        WARN_ON(!WL(vif, "wpa_auth", wl_wpa_auth));
+        if (was_up)
+            WARN_ON(!WL(vif, "bss", "up"));
+    }
+
+    bcmwl_nas_update_security_multipsk(vconf, &fast);
+
+    flag = atoi(NVG("nas", "reload") ?: "0")
+         | (full ? (1 << BCMWL_NAS_RELOAD_FULL) : 0)
+         | (fast ? (1 << BCMWL_NAS_RELOAD_FAST) : 0)
+         ;
+
+    if (flag) {
+        LOGI("%s: scheduling auth reload due to %d (full=%d, fast=%d)",
+             vif, flag, full, fast);
+        WARN_ON(!NVS("nas", "reload", strfmta("%d", flag)));
+        evx_debounce_call(bcmwl_nas_reload, NULL);
+    }
+
+    return true;
+}
+
+
+bool bcmwl_nas_get_security(
+        const char *ifname,
+        struct schema_Wifi_VIF_State *vstate)
+{
+    const char *oftag;
+    const char *keyid;
+    const char *key;
+    char *p;
+    int i;
+
+    if ((p = WL(ifname, "wpa_auth")) &&
+        (i = (strstr(p, "WPA-PSK") ? 1 : 0) |
+             (strstr(p, "WPA2-PSK") ? 2 : 0))) {
+        if ((p = NVG(ifname, "wpa_psk"))) {
+            SCHEMA_KEY_VAL_APPEND(vstate->security, "encryption", "WPA-PSK");
+            SCHEMA_KEY_VAL_APPEND(vstate->security, "key", p);
+            /* Do not advertise [mode] unless it was asked in the config.
+             * Otherwise WM2 will detect [security] as changed all the time.
+             */
+            if ((p = NVG(ifname, "plume_wpa_mode")) && !strcmp(p, "true"))
+                SCHEMA_KEY_VAL_APPEND(vstate->security, "mode", i == 3 ? "mixed" : strfmta("%d", i));
+        }
+        if ((oftag = NVG(ifname, "plume_oftag")) && strlen(oftag))
+            SCHEMA_KEY_VAL_APPEND(vstate->security, "oftag", oftag);
+        for (i = 0;; i++) {
+            if (!(key = NVG(ifname, strfmta("wpa_psk%d", i))) || !strlen(key))
+                break;
+            if (!(keyid = NVG(ifname, strfmta("wpa_psk%d_keyid", i))) || !strlen(keyid))
+                break;
+            if (!(oftag = NVG(ifname, strfmta("plume_oftag_%s", keyid))) || !strlen(oftag))
+                break;
+
+            SCHEMA_KEY_VAL_APPEND(vstate->security, keyid, key);
+            SCHEMA_KEY_VAL_APPEND(vstate->security, strfmta("oftag-%s", keyid), oftag);
+        }
+    } else {
+        if ((p = WL(ifname, "wpa_auth")) && strstr(p, "Disabled"))
+            SCHEMA_KEY_VAL_APPEND(vstate->security, "encryption", "OPEN");
+    }
+
+    if ((p = NVG(ifname, "wpa_gtk_rekey")) && strlen(p))
+        SCHEMA_SET_INT(vstate->group_rekey, atoi(p));
+
+    if ((p = bcmwl_lan_search(ifname)) && (p = strdupafree(p)))
+        SCHEMA_SET_STR(vstate->bridge, strcmp(ifname, p) ? p : "");
+
+    return true;
 }

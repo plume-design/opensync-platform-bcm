@@ -24,11 +24,10 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef WL80211_CLIENTS_H_INCLUDED
-#define WL80211_CLIENTS_H_INCLUDED
+#ifndef WL80211_CLIENT_H_INCLUDED
+#define WL80211_CLIENT_H_INCLUDED
 
 #include "ds_dlist.h"
-#include "evsched.h"
 #include "schema.h"
 
 #include "dppline.h"
@@ -142,4 +141,4 @@ bool wl80211_client_stats_convert(
         wl80211_client_record_t    *data_old,
         dpp_client_record_t        *client_result);
 
-#endif /* WL80211_CLIENTS_H_INCLUDED */
+#endif /* WL80211_CLIENT_H_INCLUDED */

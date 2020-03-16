@@ -31,12 +31,20 @@
 UNIT_NAME := bcmutil
 UNIT_TYPE := LIB
 
-UNIT_SRC := src/bcmutil.c
+UNIT_SRC += src/mcpd_util.c
 
 UNIT_CFLAGS := -I$(UNIT_PATH)/inc
 
 UNIT_EXPORT_CFLAGS := $(UNIT_CFLAGS)
+UNIT_EXPORT_LDFLAGS := $(UNIT_LDFLAGS)
 
 UNIT_DEPS := src/lib/ds
-UNIT_DEPS_CFLAGS := src/lib/log
+UNIT_DEPS += src/lib/schema
+UNIT_DEPS += src/lib/daemon
+UNIT_DEPS += src/lib/common
+UNIT_DEPS += src/lib/kconfig
+UNIT_DEPS += src/lib/log
 
+UNIT_DEPS_CFLAGS += src/lib/target
+
+include platform/bcm/build/bcm-sdk-wifi.mk

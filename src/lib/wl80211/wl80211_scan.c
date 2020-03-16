@@ -120,6 +120,8 @@ static radio_chanwidth_t wl80211_scan_chanwidth_get(const wl80211_scan_record_t 
                 return RADIO_CHAN_WIDTH_40MHZ;
         case 80:
             return RADIO_CHAN_WIDTH_80MHZ;
+        case 160:
+            return RADIO_CHAN_WIDTH_160MHZ;
     }
 
     return RADIO_CHAN_WIDTH_NONE;
@@ -165,9 +167,9 @@ static bool wl80211_scan_results_convert(
         }
         entry->chan         = record->chan_control;
         entry->chanwidth    = wl80211_scan_chanwidth_get(record);
-        strlcpy(entry->ssid, record->ssid, sizeof(entry->ssid));
-        strlcpy(bssid, record->bssid, sizeof(bssid));
-        strlcpy(entry->bssid, str_tolower(bssid), sizeof(entry->bssid));
+        STRSCPY(entry->ssid, record->ssid);
+        STRSCPY(bssid, record->bssid);
+        STRSCPY(entry->bssid, str_tolower(bssid));
 
         ds_dlist_insert_tail(&scan_results->list, neighbor);
 
@@ -266,7 +268,7 @@ static bool wl80211_scan_results_parse(
             v = strtok(NULL, "\"");
             if (v)
             {
-                strlcpy(wl_ssid, v, sizeof(wl_ssid));
+                STRSCPY(wl_ssid, v);
 
                 // remove empty "\n" strings
                 if ((strlen(v) == 1) && (wl_ssid[0] == 0x0A))
@@ -293,7 +295,7 @@ static bool wl80211_scan_results_parse(
              */
             str_unescape_hex(wl_ssid);
 
-            strlcpy(entry->ssid, wl_ssid, sizeof(entry->ssid));
+            STRSCPY(entry->ssid, wl_ssid);
 
             LOG(TRACE,
                 "Parsed %s SSID '%s' (len: %zu)",
@@ -302,7 +304,7 @@ static bool wl80211_scan_results_parse(
 
         } else if (strcmp(k, "Mode") == 0) {
             char buf_mode[256];
-            strcpy(buf_mode, v);
+            STRSCPY(buf_mode, v);
 
             LOG(TRACE, "\n\n %s \n\n", buf_mode);
 
@@ -311,7 +313,7 @@ static bool wl80211_scan_results_parse(
             chan = strstr(buf_mode, "Channel:");
             v = strtok(v, " ");
             if (v)
-                strlcpy(entry->role, v, sizeof(entry->role));
+                STRSCPY(entry->role, v);
 
             if (rssi) {
                 strtok(rssi, ":");
@@ -348,7 +350,7 @@ static bool wl80211_scan_results_parse(
         } else if (strcmp(k, "BSSID") == 0) {
             v = strtok(v, " ");
             if (v) {
-                strlcpy(entry->bssid, v, sizeof(entry->bssid));
+                STRSCPY(entry->bssid, v);
 
                 LOG(TRACE,
                     "Parsed %s BSSID %s",

@@ -24,23 +24,18 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef BCMUTIL_H_INCLUDED
-#define BCMUTIL_H_INCLUDED
+#include <stdint.h>
 
-#include <stdbool.h>
+#pragma message("WARNING: using default empty secure boot keys")
 
-// nvram utils
-bool util_nvram_get      (const char *name, char *value, ssize_t len);
-bool util_nvram_set      (const char *name, const char *value);
-bool util_nvram_unset    (const char *name);
+uint16_t key_mid = 0x0000;
 
-bool util_nvram_get_fmt  (char *value, ssize_t len, const char *fmt, ...) __attribute__ ((format(printf, 3, 4)));
-bool util_nvram_set_fmt  (const char *fmt, ...) __attribute__ ((format(printf, 1, 2)));
-bool util_nvram_unset_fmt(const char *fmt, ...) __attribute__ ((format(printf, 1, 2)));
+uint32_t key_kroe_fld[8] = {
+    0, 0, 0, 0,
+    0, 0, 0, 0
+};
 
-
-// wlctl utils
-bool util_wlctl_fmt      (const char *fmt, ...) __attribute__ ((format(printf, 1, 2)));
-
-
-#endif /* BCMUTIL_H_INCLUDED */
+uint32_t key_hmid_rot_fld_pub[8] = {
+    0, 0, 0, 0,
+    0, 0, 0, 0
+};

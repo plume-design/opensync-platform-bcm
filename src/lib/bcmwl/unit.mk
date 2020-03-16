@@ -37,26 +37,35 @@ UNIT_SRC  += src/bcmwl_event.c
 UNIT_SRC  += src/bcmwl_sta.c
 UNIT_SRC  += src/bcmwl_acl.c
 UNIT_SRC  += src/bcmwl_nvram.c
+UNIT_SRC  += $(if $(CONFIG_BCM_NVRAM_EXEC),src/bcmwl_nvram_exec.c,)
+UNIT_SRC  += $(if $(CONFIG_BCM_NVRAM_LIB),src/bcmwl_nvram_lib.c,)
 UNIT_SRC  += src/bcmwl_lan.c
-UNIT_SRC  += src/bcmwl_roam.c
 UNIT_SRC  += src/bcmwl_chanspec.c
 UNIT_SRC  += src/bcmwl_misc.c
 UNIT_SRC  += src/bcmwl_ioctl.c
-UNIT_SRC  += src/bcmwl_nas.c
+UNIT_SRC  += $(if $(CONFIG_BCM_USE_NAS),src/bcmwl_roam.c,)
+UNIT_SRC  += $(if $(CONFIG_BCM_USE_NAS),src/bcmwl_nas.c,)
+UNIT_SRC  += $(if $(CONFIG_BCM_USE_NAS),src/bcmwl_wps.c,)
+UNIT_SRC  += $(if $(CONFIG_BCM_USE_HOSTAP),src/bcmwl_hostap.c,)
 UNIT_SRC  += src/bcmwl_debounce.c
 UNIT_SRC  += src/bcmwl_dfs.c
-UNIT_SRC  += src/bcmwl_wps.c
 UNIT_SRC  += src/bcmwl.c
 
 UNIT_CFLAGS := -I$(UNIT_PATH)/inc
+UNIT_CFLAGS += $(if $(CONFIG_BCM_NVRAM_LIB),-I$(BCM_BUILD_ROOT)/userspace/private/libs/wlcsm/include,)
+UNIT_LDFLAGS += $(if $(CONFIG_BCM_NVRAM_LIB),-L$(INSTALL_DIR)/lib -lwlcsm,)
 
 UNIT_EXPORT_CFLAGS := $(UNIT_CFLAGS)
+UNIT_EXPORT_LDFLAGS := $(UNIT_LDFLAGS)
 
 UNIT_DEPS := src/lib/ds
 UNIT_DEPS += src/lib/schema
-UNIT_DEPS += platform/bcm/src/lib/bcmutil
 UNIT_DEPS += src/lib/common
 UNIT_DEPS += src/lib/evx
 UNIT_DEPS += src/lib/kconfig
+UNIT_DEPS += src/lib/log
+UNIT_DEPS += $(if $(CONFIG_BCM_USE_HOSTAP),src/lib/hostap,)
 
-UNIT_DEPS_CFLAGS := src/lib/log
+UNIT_DEPS_CFLAGS += src/lib/target
+
+include platform/bcm/build/bcm-sdk-wifi.mk

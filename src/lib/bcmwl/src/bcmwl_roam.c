@@ -102,22 +102,6 @@ bcmwl_roam_ptr2ifname(struct bcmwl_roam *r)
     return "wl999";
 }
 
-static const char *
-bcmwl_roam_type_to_str(int reason)
-{
-    switch (reason) {
-        case WLC_E_LINK_DISASSOC:
-            return "disassoc";
-        case WLC_E_LINK_BCN_LOSS:
-            return "beacon loss";
-        case WLC_E_LINK_ASSOC_REC:
-            return "assoc recreation failure";
-        case WLC_E_LINK_BSSCFG_DIS:
-            return "bss down request";
-    }
-    return "some other reason";
-}
-
 static char *
 bcmwl_roam_get_allowed_channels(const char *ifname)
 {
@@ -222,7 +206,7 @@ bcmwl_roam_prep(const char *ifname)
     if ((p = NVG(ifname, "chanspec")) && strlen(p)) {
         LOGD("roam: %s: chanspec '%s' found, syncing", ifname, p);
         bcmwl_radio_chanspec_extract(p, &c, &w);
-        if (WARN_ON(!bcmwl_radio_channel_set(ifname, c, strfmta("HT%d", !strcmp(ifname, "wl1") ? 20 : w))))
+        if (WARN_ON(!bcmwl_radio_channel_set(ifname, c, strfmta("HT%d", w))))
             return false;
     }
 
@@ -316,11 +300,12 @@ bcmwl_roam_timeout_cb(EV_P_ ev_timer *ev, int revent)
 }
 
 void
-bcmwl_roam_init(const char *ifname)
+bcmwl_roam_init(const char *ifname, const char *bssid)
 {
     struct bcmwl_roam *r = bcmwl_roam_get(ifname);
     if (WARN_ON(!r))
         return;
+    WARN_ON(!NVS(ifname, "plume_desired_bssid", bssid));
     if (r->update.timer.cb)
         return;
     LOGI("roam: %s: initializing", ifname);
@@ -337,8 +322,6 @@ void
 bcmwl_roam_event_handler(const bcm_event_t *ev)
 {
     const char *ifname = ev->event.ifname;
-    int reason = ntohl(ev->event.reason);
-    int flags = ntohs(ev->event.flags);
     int type = ntohl(ev->event.event_type);
 
     switch (type) {
@@ -352,16 +335,9 @@ bcmwl_roam_event_handler(const bcm_event_t *ev)
         case WLC_E_LINK:
         case WLC_E_EAPOL_MSG:
         case WLC_E_CSA_COMPLETE_IND:
+        case WLC_E_AUTHORIZED:
             if (!bcmwl_vap_is_sta(ifname))
                 return;
-
-            if (type == WLC_E_LINK) {
-                LOGI("%s: link state changed to %s due to %s (%d)",
-                     ifname,
-                     (flags == WLC_EVENT_MSG_LINK) ? "up" : "down",
-                     bcmwl_roam_type_to_str(reason),
-                     reason);
-            }
 
             LOGD("roam: %s: processing event %d", ifname, type);
             bcmwl_roam_later(ifname);

@@ -37,6 +37,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "bcmwl.h"
 #include "bcmwl_nvram.h"
 #include "bcmwl_debounce.h"
+#include "bcmwl_acl.h"
 
 /**
  * Private
@@ -50,124 +51,6 @@ static int bcmwl_acl_lock_fd = -1;
 /**
  * Public
  */
-
-bool bcmwl_acl_set_mode(
-        const char *ifname,
-        bcmwl_acl_mode_t mode)
-{
-    return strexpect("", "wl", "-i", ifname, "macmode", strfmta("%d", mode));
-}
-
-bool bcmwl_acl_del_devs(const char *ifname)
-{
-    return strexpect("", "wl", "-i", ifname, "mac", "none");
-}
-
-bool bcmwl_acl_del_dev(
-        const char *ifname,
-        const os_macaddr_t *hwaddr)
-{
-    char *macs;
-    char *mac;
-
-    if (!(macs = strexa("wl", "-i", ifname, "mac")))
-    {
-        LOGE("Failed to get ACL content! :: ifname=%s", ifname);
-        return false;
-    }
-
-    if (!bcmwl_acl_del_devs(ifname))
-    {
-        LOGE("Failed to clear ACL! :: ifname=%s", ifname);
-        return false;
-    }
-
-    bcmwl_for_each_mac(mac, macs)
-    {
-        os_macaddr_t tmp_mac;
-
-        if (sscanf(mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-                   &tmp_mac.addr[0], &tmp_mac.addr[1], &tmp_mac.addr[2],
-                   &tmp_mac.addr[3], &tmp_mac.addr[4], &tmp_mac.addr[5]) != 6)
-        {
-            LOGE("Failed to parse \"wl\" output! :: output=\"%s\"", mac);
-            return false;
-        }
-
-        if (!memcmp(&tmp_mac, hwaddr, sizeof(tmp_mac)))
-        {
-            continue;
-        }
-
-        if (!bcmwl_acl_add_dev(ifname, &tmp_mac))
-        {
-            LOGE("Failed to re-add MAC to ACL! :: ifname=%s", ifname);
-            return false;
-        }
-    }
-
-    return true;
-}
-
-bool bcmwl_acl_add_dev(
-        const char *ifname,
-        const os_macaddr_t *hwaddr)
-{
-    return strexpect("", "wl", "-i", ifname, "mac", strfmta(PRI(os_macaddr_t),
-                     FMT(os_macaddr_t, *hwaddr)));
-}
-
-
-bool bcmwl_acl_set_prob_resp_blocking(
-        const char *ifname,
-        bool block)
-{
-    if (!strexpect("", "wl", "-i", ifname, "probresp_sw", strfmta("%d", block)))
-    {
-        return false;
-    }
-
-    if (!strexpect("", "wl", "-i", ifname, "probresp_mac_filter",
-                   strfmta("%d", block)))
-    {
-        return false;
-    }
-
-    return true;
-}
-
-bool bcmwl_acl_set_auth_resp_blocking(
-        const char *ifname,
-        bool block)
-{
-    if (!strexpect("", "wl", "-i", ifname, "authresp_mac_filter",
-                   strfmta("%d", block)))
-    {
-        return false;
-    }
-
-    return true;
-}
-
-bool bcmwl_acl_contains_dev(
-        const char *ifname,
-        const os_macaddr_t *hwaddr,
-        bool *contains)
-{
-    const char *macs;
-    char buf[32];
-
-    if (!(macs = strexa("wl", "-i", ifname, "mac")))
-    {
-       LOGE("Failed to get ACL content! :: ifname=%s", ifname);
-       return false;
-    }
-
-    snprintf(buf, sizeof(buf), PRI(os_macaddr_t), FMT(os_macaddr_pt, hwaddr));
-    *contains = strstr(macs, buf) != NULL ? true : false;
-
-    return true;
-}
 
 static bool bcmwl_acl_sync(
         const char *ifname,
@@ -211,7 +94,7 @@ static bool bcmwl_acl_enforce(const char *ifname)
      * or don't allow (ACL "allow" mode) to connect.
      */
     enum bcmwl_acl_policy policy = atoi(BCMWL_ACL_POLICY_GET(ifname, BCMWL_ACL_WM));
-    const char *acl = BCMWL_ACL_POLICY_GET(ifname, BCMWL_ACL_WM);
+    const char *acl = BCMWL_ACL_GET(ifname, BCMWL_ACL_WM) ?: "";
     char *assoc;
     char *mac;
 
@@ -322,6 +205,9 @@ bool bcmwl_acl_is_synced(const char *ifname)
     const char *str;
     char *acl;
 
+    str = WL(ifname, "probresp_sw");
+    if (str && atoi(str) != 1)
+        return false;
     str = WL(ifname, "authresp_mac_filter");
     if (str && atoi(str) != 1)
         return false;
@@ -345,7 +231,10 @@ bool bcmwl_acl_commit(const char *ifname)
         return false;
     WL(ifname, "authresp_mac_filter", "1");
     if (WARN_ON(!WL(ifname, "probresp_mac_filter", "1")))
-        return false;
+        goto out;
+    if (atoi(WL(ifname, "probresp_sw") ?: "0") != 1 &&
+        WARN_ON(!WL(ifname, "probresp_sw", "1")))
+        goto out;
     if (WARN_ON(!(acl = bcmwl_acl_merge(ifname, &policy))))
         goto out;
     ok = true;

@@ -30,12 +30,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <ev.h>
 #include <stdbool.h>
 #include <string.h>
-#include <devctrl_if/wlioctl_defs.h>
 
 #include "schema.h"
 #include "os_nif.h"
 #include "ds_dlist.h"
-#include "bcmwl_priv.h"
+
+/* FIXME: This shouldn't be included here. But fixing all
+ * the includers now is a bit of a hassle. This needs to be
+ * eventually cleaned up though.
+ */
+#include "bcmwl_ioctl.h"
 
 // some platforms use _ as delimiter, but default is .
 #ifndef CONFIG_BCMWL_VAP_DELIMITER
@@ -54,6 +58,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     (strstr(ifname, "wl") == ifname && !strstr(ifname, CONFIG_BCMWL_VAP_DELIMITER))
 #define bcmwl_is_vif(ifname) \
     (strstr(ifname, "wl") == ifname && strstr(ifname, CONFIG_BCMWL_VAP_DELIMITER))
+#define bcmwl_is_netdev(ifname) \
+    (strstr(ifname, "wl") == ifname || strstr(ifname, "wds") == ifname)
 
 extern struct target_radio_ops bcmwl_ops;
 
@@ -62,9 +68,6 @@ bool        bcmwl_init(const struct target_radio_ops *ops);
 bool        bcmwl_init_wm(void);
 bool        bcmwl_radio_adapter_is_operational(const char *radio);
 bool        bcmwl_radio_is_dhd(const char *ifname);
-bool        bcmwl_radio_create(const struct schema_Wifi_Radio_Config *rconfig);
-bool        bcmwl_radio_update(const struct schema_Wifi_Radio_Config *rconfig,
-                               const struct schema_Wifi_Radio_Config_flags *rchanged);
 bool        bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
                                 const struct schema_Wifi_Radio_Config_flags *rchanged);
 bool        bcmwl_radio_state(const char *phyname,
@@ -73,9 +76,7 @@ void        bcmwl_radio_state_report(const char *ifname);
 void        bcmwl_radio_chanspec_extract(const char *chanspec, int *chan, int *width);
 bool        bcmwl_radio_channel_set(const char *phy, int channel, const char *ht_mode);
 int         bcmwl_radio_get_ap_active_cnt(const char *phy);
-bool        bcmwl_radio_channel_get(const char *phyname, int *channel);
 bool        bcmwl_radio_chanspec_get(const char *phyname, int *channel, int *ht_mode);
-bool        bcmwl_radio_get_chanspec(const char *phy, int *chan, int *width);
 bool        bcmwl_radio_band_get(const char *phyname, char *band, ssize_t band_len);
 int         bcmwl_radio_ht_mode_to_int(const char *ht_mode);
 const char* bcmwl_radio_ht_mode_to_str(int ht_mode);
@@ -107,12 +108,6 @@ struct wl_status
 
 void bcmwl_vap_get_status(const char *ifname, struct wl_status *status);
 bool bcmwl_vap_ready(const char *ifname);
-bool bcmwl_vap_create(const struct bcmwl_vap_config_t *bcmwl_vap_config,
-                      const struct schema_Wifi_VIF_Config *vconfig,
-                      const struct schema_Wifi_Radio_Config *rconfig);
-bool bcmwl_vap_update(const struct schema_Wifi_VIF_Config *vconfig,
-                      const struct schema_Wifi_Radio_Config *rconfig,
-                      const struct schema_Wifi_VIF_Config_flags *vchanged);
 bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
                        const struct schema_Wifi_Radio_Config *rconf,
                        const struct schema_Wifi_Credential_Config *cconfs,
@@ -121,8 +116,6 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
 bool bcmwl_vap_state(const char *ifname,
                      struct schema_Wifi_VIF_State *vstate);
 void bcmwl_vap_state_report(const char *ifname);
-bool bcmwl_vap_psk_get(const char *ifname, char *psk, ssize_t psk_len);
-bool bcmwl_vap_ssid_get(const char *ifname, char *ssid, ssize_t ssid_len);
 bool bcmwl_vap_is_sta(const char *ifname);
 void bcmwl_vap_mac_xfrm(char *addr, int idx, int max);
 bool bcmwl_vap_prealloc(const char *phy, int max_idx, void (*mac_xfrm)(char *addr, int idx, int max));
@@ -135,32 +128,6 @@ bool bcmwl_vap_update_security(const struct schema_Wifi_VIF_Config *vconf,
                                const struct schema_Wifi_Credential_Config *cconfs,
                                const struct schema_Wifi_VIF_Config_flags *vchanged,
                                int num_cconfs);
-
-bool        bcmwl_vap_ssid_broadcast_get(const char *ifname, int *ssid_broadcast);
-int         bcmwl_vap_ssid_broadcast_to_int(const char *ssid_broadcast);
-const char *bcmwl_vap_ssid_broadcast_to_str(int ssid_broadcast);
-
-bool        bcmwl_vap_mac_list_type_get(const char *ifname, int *mac_list_type);
-int         bcmwl_vap_mac_list_type_to_int(const char *mac_list_type);
-const char *bcmwl_vap_mac_list_type_to_str(int mac_list_type);
-
-typedef void bcmwl_vap_assoc_list_cb_t(const char *ifname,
-                                       const os_macaddr_t *mac,
-                                       const int index,
-                                       void *context);
-typedef void bcmwl_vap_mac_list_cb_t(const char *ifname,
-                                     const os_macaddr_t *mac,
-                                     const int index,
-                                     void *context);
-bool bcmwl_vap_mac_list_foreach(const char *ifname,
-                                bcmwl_vap_mac_list_cb_t cb,
-                                void *context);
-bool bcmwl_vap_assoc_list_foreach(const char *ifname,
-                                  bcmwl_vap_mac_list_cb_t cb,
-                                  void *context);
-
-bool bcmwl_vap_br_tag_get(const char *ifname, char *brtag, size_t brtag_len);
-bool bcmwl_vap_br_name_get(const char *ifname, char *brname, size_t brname_len);
 bool bcmwl_parse_vap(const char *ifname, int *ri, int *vi);
 
 // STA handling
@@ -171,6 +138,7 @@ typedef struct
     uint64_t rx_total_bytes;
     uint64_t tx_total_bytes;
     bool is_btm_supported;
+    uint8_t rrm_caps[DOT11_RRM_CAP_LEN];
     int rssi;
     int nf;
     uint8_t max_chwidth;
@@ -205,63 +173,23 @@ void bcmwl_sta_get_schema(const char *ifname,
                           const char *mac,
                           struct schema_Wifi_Associated_Clients *c);
 void bcmwl_sta_resync(const char *ifname);
+int bcmwl_sta_get_tx_avg_rate(const char *ifname,
+                              const char *mac,
+                              float *mbps,
+                              float *psr,
+                              float *tried);
+int bcmwl_sta_get_rx_avg_rate(const char *ifname,
+                              void (*iter)(const char *ifname,
+                                           const char *mac_octet,
+                                           float mbps,
+                                           float psr,
+                                           float tried,
+                                           void *arg),
+                              void *arg);
 
-// ACLs
-typedef enum
-{
-    BCMWL_ACL_MODE_DISABLE = 0,
-    BCMWL_ACL_MODE_DENY = 1,
-    BCMWL_ACL_MODE_ALLOW = 2,
-} bcmwl_acl_mode_t;
-
-bool bcmwl_acl_set_mode(const char* ifname,
-                        bcmwl_acl_mode_t mode);
-
-bool bcmwl_acl_del_devs(const char* ifname);
-
-bool bcmwl_acl_del_dev(const char* ifname,
-                       const os_macaddr_t* hwaddr);
-
-bool bcmwl_acl_add_dev(const char* ifname,
-                       const os_macaddr_t* hwaddr);
-
-bool bcmwl_acl_set_prob_resp_blocking(const char* ifname,
-                                      bool block);
-
-bool bcmwl_acl_set_auth_resp_blocking(const char* ifname,
-                                      bool block);
-
-bool bcmwl_acl_contains_dev(const char* ifname,
-                            const os_macaddr_t* hwaddr,
-                            bool* contains);
-
-#define WL(ifname, ...) strchomp(strexa("wlctl", "-i", ifname, ##__VA_ARGS__), " \t\r\n")
+#define WL(ifname, ...) strdupafree(strchomp(bcmwl_wl(ifname, "wlctl", (const char *[]) { __VA_ARGS__, NULL }), " \t\r\n"))
 #define WL_VAL(s) (strsep(&s, " ") && (s = strsep(&s, "")))
-#define DHD(ifname, ...) strchomp(strexa("dhdctl", "-i", ifname, ##__VA_ARGS__), " \t\r\n")
-
-enum {
-    BCMWL_NAS_RELOAD_FULL,
-    BCMWL_NAS_RELOAD_FAST,
-};
-
-bool bcmwl_acl_is_synced(const char *ifname);
-bool bcmwl_acl_commit(const char *ifname);
-bool bcmwl_acl_init(void);
-
-enum bcmwl_acl_policy {
-    BCMWL_ACL_NONE = 0,
-    BCMWL_ACL_DENY = 1,
-    BCMWL_ACL_ALLOW = 2,
-};
-
-#define BCMWL_ACL_WM "wm"
-#define BCMWL_ACL_BM "bm"
-#define BCMWL_ACL_GET(ifname, entity) (NVG(ifname, strfmta("acl_%s", entity)))
-#define BCMWL_ACL_SET(ifname, entity, acl) (NVS(ifname, strfmta("acl_%s", entity), acl))
-#define BCMWL_ACL_ADD(ifname, entity, mac) (bcmwl_nvram_append(ifname, strfmta("acl_%s", entity), mac, strcasecmp) >= 0)
-#define BCMWL_ACL_DEL(ifname, entity, mac) (bcmwl_nvram_remove(ifname, strfmta("acl_%s", entity), mac, strcasecmp) >= 0)
-#define BCMWL_ACL_POLICY_SET(ifname, entity, policy) (NVS(ifname, strfmta("acl_policy_%s", entity), strfmta("%d", policy)))
-#define BCMWL_ACL_POLICY_GET(ifname, entity) (NVG(ifname, strfmta("acl_policy_%s", entity)))
+#define DHD(ifname, ...) strdupafree(strchomp(bcmwl_wl(ifname, "dhdctl", (const char *[]) { __VA_ARGS__, NULL }), " \t\r\n"))
 
 // chanspec util
 typedef struct
@@ -300,19 +228,24 @@ enum bcmwl_chan_state
 
 void bcmwl_dfs_init(void);
 void bcmwl_event_handle_radar(const char *ifname);
+void bcmwl_event_handle_ap_chan_change(const char *ifname, void *ev);
 void bcmwl_radio_radar_get(const char *phyname, struct schema_Wifi_Radio_State *rstate);
+char* bcmwl_radio_get_vifs(const char *phy);
 void bcmwl_radio_channels_get(const char *phyname, struct schema_Wifi_Radio_State *rstate);
 const char* bcmwl_channel_state(enum bcmwl_chan_state state);
+bool bcmwl_radio_get_chanspec(const char *phy, int *chan, int *width);
 int bcmwl_get_current_channels(const char *phyname, int *chan, int size);
 void bcmwl_radio_fallback_parents_set(const char *phyname, const struct schema_Wifi_Radio_Config *rconf);
 void bcmwl_radio_fallback_parents_get(const char *phyname, struct schema_Wifi_Radio_State *rstate);
-void bcmwl_radio_dfs_demo_set(const char *cphy, const struct schema_Wifi_Radio_Config *rconf);
-void bcmwl_radio_dfs_demo_get(const char *cphy, struct schema_Wifi_Radio_State *rstate);
 
 bool bcmwl_misc_set_neighbor(const char *ifname, const char *bssid, const char *bssid_info,
                              const char *regulatory, const char *channel, const char *phytype,
                              const char *prefer);
 bool bcmwl_misc_remove_neighbor(const char *ifname, const char *bssid);
 int bcmwl_system_start_closefd(const char *command);
+bool bcmwl_radio_is_dfs_channel(const char *phy, uint8_t chan, const char *ht_mode);
+bool bcmwl_dfs_bgcac_active(const char *phy, uint8_t chan, const char *ht_mode);
+void bcmwl_dfs_bgcac_deactivate(const char *phy);
+void bcmwl_dfs_bgcac_recalc(const char *phy);
 
 #endif /* BCMWL_H_INCLUDED */

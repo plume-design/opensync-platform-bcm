@@ -32,12 +32,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *  - wl%d_maclist
  *  - lan_ifnames
  *  - lan%d_ifnames
- *
- * All BCM platforms are assumed to have nvram, one way or another.
- *
- * Some of them may be missing "nvram" userspace tool. In such case
- * plume system integrator is expected to make sure to import and
- * implement "nvram" tool using available vendor APIs.
  */
 #define _GNU_SOURCE
 
@@ -55,7 +49,6 @@ int bcmwl_nvram_append(const char *ifname, const char *prop, const char *needle,
 {
     const char *o = NVG(ifname, prop) ?: "";
     const char *v;
-    const char *p;
     char *m;
 
     m = strdupa(o);
@@ -66,10 +59,9 @@ int bcmwl_nvram_append(const char *ifname, const char *prop, const char *needle,
     }
 
     v = strchomp(strfmta("%s %s", needle, o), " ");
-    p = NVS(ifname, prop, v);
-    if (!p || strlen(p)) {
-        LOGW("%s: failed to set '%s' to '%s' to remove '%s': %s",
-             ifname, prop, v, needle, p ?: strerror(errno));
+    if (!NVS(ifname, prop, v)) {
+        LOGW("%s: failed to set '%s' to '%s' to remove '%s'",
+             ifname, prop, v, needle);
         return -1;
     }
     return strlen(v);
@@ -79,10 +71,9 @@ int bcmwl_nvram_remove(const char *ifname, const char *prop, const char *needle,
                        int (*strcmp_fun) (const char*, const char*))
 {
     const char *v = strchomp(strdel(NVG(ifname, prop) ?: strdupa(""), needle, strcmp_fun), " ");
-    const char *p = NVS(ifname, prop, v);
-    if (!p || strlen(p)) {
-        LOGW("%s: failed to set '%s' to '%s' to remove '%s': %s",
-             ifname, prop, v, needle, p ?: strerror(errno));
+    if (!NVS(ifname, prop, v)) {
+        LOGW("%s: failed to set '%s' to '%s' to remove '%s'",
+             ifname, prop, v, needle);
         return -1;
     }
     return strlen(v);

@@ -97,9 +97,10 @@ bool wl80211_survey_results_get(
 
 
     str_join_int(chan_str, sizeof(chan_str), (int*)chan_list, chan_num, ",");
-    TRACE("r:%s c:%d i:%s t:%s [%s]",
+    TRACE("r:%s c:%d p:%s i:%s t:%s [%s]",
             radio_get_name_from_type(radio_type),
             radio_cfg->chan,
+            radio_cfg->phy_name,
             radio_cfg->if_name,
             radio_get_scan_name_from_type(scan_type),
             chan_str);
@@ -131,6 +132,8 @@ version: 2
 chanspec tx   inbss   obss   nocat   nopkt   doze     txop     goodtx  badtx   glitch   badplcp  knoise  idle  timestamp
 0x1006  10      1       31      27      11      0       3       2       6       4448    34      -81     14      447786260
 */
+    // note, using if_name here because of issues when
+    // running survey on 5G phy (sta) interface
     result = os_cmd_exec(&buf, WL80211_SURVEY_CHANNEL_GET, radio_cfg->if_name);
     if (!result) goto error;
 
@@ -148,7 +151,7 @@ chanspec tx   inbss   obss   nocat   nopkt   doze     txop     goodtx  badtx   g
             int cs = 0;
             sscanf(ptr, "%i", &cs);
             if (!cs) continue;
-            csinfo = bcmwl_chanspec_get(radio_cfg->if_name, cs);
+            csinfo = bcmwl_chanspec_get(radio_cfg->phy_name, cs);
             if (csinfo && (uint32_t)csinfo->channel == chan) goto found;
         }
         continue; // not found
@@ -206,9 +209,10 @@ found:
     return true;
 
 error:
-    LOG(ERROR, "survey get r:%s c:%d i:%s t:%s [%s]",
+    LOG(ERROR, "survey get r:%s c:%d p:%s i:%s t:%s [%s]",
             radio_get_name_from_type(radio_type),
             radio_cfg->chan,
+            radio_cfg->phy_name,
             radio_cfg->if_name,
             radio_get_scan_name_from_type(scan_type),
             chan_str);

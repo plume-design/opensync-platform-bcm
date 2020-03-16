@@ -5,11 +5,40 @@ menuconfig PLATFORM_IS_BCM
 
 if PLATFORM_IS_BCM
 
-config BCM_SDK_PATH
-    string "Broadcomm SDK path"
+menuconfig BCM_WIFI_DRIVER_PATH
+    bool "Broadcom WiFi path"
+    default n
+    help
+        This options avoid header redefined error
+        in case of multiple selected platforms
+        SDK_INCLUDE must not include BCM WiFi headers
 
-config BCM_NVRAM
-    bool "NVRAM support"
+if BCM_WIFI_DRIVER_PATH
+
+config BCM_WIFI_IMPL_PATH
+    string "Path to net/wl directory within Broadcom SDK"
+    default "bcmdrivers/broadcom/net/wl"
+
+config BCM_IMP_DRIVER_VERSION
+    int "impl"
+    default "29"
+
+endif # BCM_WIFI_DRIVER_PATH
+
+config BCM_REF_WIFI
+    bool "Enable reference wifi api implementation"
+    default n
+    help
+        Given product may require non-standard integration.
+        In such case it is expected that an integrator will
+        implement all the necessary target_ functions.
+
+        If the given product is generic enough it might be
+        able to re-use as-is the reference implementation.
+
+        If it can't be used as-is it is highly recommended
+        to try to work it out so it can be generic enough to
+        satisfy more products.
 
 config BCMWL_EVENT_SOCK_FORCED_RESIZE
     bool "Allow forced resize of BCM event socket"
@@ -17,6 +46,13 @@ config BCMWL_EVENT_SOCK_FORCED_RESIZE
     help
         Disable this option on platforms that may have problems
         with force resize of BCM event socket.
+
+config BCM_FORCE_FLOW_CACHE_FLUSH
+    bool "Flush Flow Cache on open flow rule action"
+    default y
+    help
+        Execute fcctl flush on open flow add/delete action.
+        This should be enabled for BCM sdk older than 5.2.L07-p1.
 
 config BCM_BOGUS_SURVEY_WORKAROUND
     bool "Workaround for bogus chanim_stats on very old BCM SDKs"
@@ -33,8 +69,123 @@ config BCMWL_VAP_DELIMITER
         Default delimiter in VAP interface name is .
         but some platforms use _
 
+config BCM_USE_NAS
+    bool "Use nas and eapd authentication"
+    default y
+    help
+        This enables driving userspace daemons that are
+        responsible for authenticating clients (AP role)
+        and connecting to network (STA role).
+        If you enable this, disable BCM_USE_HOSTAP.
+
+config BCM_USE_HOSTAP
+    bool "Use hostapd and wpa_supplicant authentication"
+    default n
+    help
+        This enables use of hostap suite (hostapd / wpa_supplicant)
+        to authenticate clients (AP role) and connecting
+        to network (STA role).
+        If you enable this, disable BCM_USE_NAS.
+
+choice
+    prompt "Type of nvram implementation to use"
+    default BCM_NVRAM_LIB
+
+config BCM_NVRAM_EXEC
+    bool "nvram executable via fork+exec"
+    help
+        Historically this was the first approach. It tends to just
+        work with some exception, but it's biggest pitfal is slowness.
+        It's resource intensive due to fork() + exec() use.
+
+config BCM_NVRAM_LIB
+    bool "wlcsm library"
+    help
+        This is much faster compared to BCM_NVRAM_EXEC because it does
+        not spawn any additional processes via fork(). However it is
+        more prone to breakage on some systems where nvram access
+        was customized.
+
+config BCM_NVRAM_NONE
+    bool "none"
+    help
+        For platforms with custom nvram solutions the integrator
+        guarantees to implement the following functions:
+          bcmwl_nvram_getall
+          bcmwl_nvram_get
+          bcmwl_nvram_set
+
+endchoice
+
+if BCM_NVRAM_EXEC
+config BCM_NVRAM_EXEC_PATH
+    string "nvram executable path"
+    default "nvram"
+    help
+        Normally the system tries to rely on PATH variable to find the
+        binary, however on some systems PATH may not include the nvram
+        by default, or may have multiple implementations. In case PATH
+        cannot be easily overriden an absolute path can be specified
+        here, eg. /usr/sbin/nvram.
+
+        If unsure, say 'nvram'
+endif
+
+config BCM_PREFER_IOV
+    bool "prefer raw ioctl() calls instead of fork()+exec(wlctl..)"
+    default y
+    help
+        Historically for various reasons all interactions to the
+        driver were performed by using wlctl and dhdctl commands. This
+        means the calling process forks and execs into them.
+
+        fork+exec can be pretty slow on older CPUs and is known to
+        cause some issues. However it's the most tested implementation
+        and known to work on multiple systems.
+
+        This kconfig option (prefer raw ioctl) enables raw ioctl usage
+        instead of fork+exec. The support covers only select few
+        calls to speed the uglies spots.
+
+        Select 'n' if issues are observed.
+
+        If unsure, say 'y'.
+
+config BCM_USE_RATE_HISTO
+    bool "use wlctl rate_histo_report to collect mcs histograms"
+    default y
+    help
+        MCS histograms are used to infer link-quality between devices.
+
+        These histograms can be described as a structure that is
+        accessed like so:
+
+          client[X].rate[Y].counter[Z]
+
+        The rate is a 4-touple of preamble, bandwidth, mcs and nss.
+
+        There are a number of counters, eg. msdu, mpdu, ppdu, bytes.
+
+        If using 11ax and newer devices say 'n'.
+        If using 11ac and older devices say 'y'.
+
+config BCM_USE_RATE_HISTO_TO_EXPECTED_TPUT
+    bool "use mcs histograms to compute expected throughput phyrates"
+    default n
+    depends on BCM_USE_RATE_HISTO
+    help
+        This makes sense only for 11ac and older devices which
+        originally were intended to report mcs histograms. Some of
+        them couldn't be updated to deliver (reliable) expected
+        throughput phyrates. Instead mcs histograms can be utilized to
+        esimate them.
+
+        If using 11ax and newer devices say 'n'.
+        If using 11ac and older devices say 'y'.
+
 menuconfig BCM_WPS
     bool "Enable Wireless Protected Setup (WPS)"
+    depends on BCM_USE_NAS
     default y
 
 if BCM_WPS
@@ -85,8 +236,55 @@ if BCM_WPS_INTERFACE_LIST
     config BCM_WPS_INTERFACE3_NAME
         string "if_name[3]"
         depends on BCM_WPS_INTERFACE3_LIST
-endif
+endif # BCM_WPS_INTERFACE_LIST
 
-endif
+endif # BCM_WPS
 
-endif
+config BCM_NVRAM_IN_TMPFS
+    bool "Regenerate kernel NVRAM file on every boot"
+    default n
+    help
+        This enables re-generation of kernel NVRAM file
+        on every boot and storing it in tmpfs.
+
+        This prevents cases of kernel NVRAM file (/data/.kernel_nvram.setting)
+        storing some NVRAM fields on issuing a "nvram commit",
+        which should not be persistent across reboots.
+
+        This can also prove useful when a new upgrade image
+        has an updated default NVRAM file
+        (/etc/wlan/kernel_nvram.setting), and you want the
+        changes to be reflected in the kernel NVRAM file.
+
+        If you enable this change and want some NVRAM field
+        to be persistent across reboots, you will need to store
+        it in ENVRAM or change the default NVRAM file.
+
+        This relies on the reference BCM SDK script hndnvram.sh
+        and specific functions from that script.
+
+config BCM_SECURE_BOOT_LIB
+    bool "Enable library for secure boot"
+    default n
+    help
+        This enables library for detecting unsecure/manufacturing
+        secure/field secure modes, and to burn the keys into
+        OTP/SOTP. Library is also able to get current status and
+        to lock JTAG access.
+        If you enable this option and want to burn keys used for
+        secure boot, you will have to change the default ones
+        located in file bcmsb_keys.c, or override the file through
+        another sublayer.
+        The library uses ioctl() to call kernel module to retrieve
+        the info.
+        This has been tested only on the BCM 6755 SoC.
+
+        The following options need to be used when building the
+        BCM SDK image:
+          BUILD_SECURE_BOOT=y
+          BRCM_BUILD_SOTP_DRIVER=y
+          BRCM_DRIVER_SOTP=y
+          BUILD_CFE_ALLOW_NONSEC_SOTP_ACCESS=y
+          BUILD_SOTPCTL=y
+
+endif # PLATFORM_IS_BCM

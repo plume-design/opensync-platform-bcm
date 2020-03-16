@@ -31,6 +31,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <sys/types.h>
 #include <dirent.h>
 #include <glob.h>
+#include <byteswap.h>
 
 #include "target.h"
 #include "log.h"
@@ -38,11 +39,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "const.h"
 #include "util.h"
 #include "evx_debounce_call.h"
+#include "kconfig.h"
 #include "bcmwl.h"
 #include "bcmwl_nvram.h"
 #include "bcmwl_debounce.h"
-
-#include "bcmutil.h"
+#include "bcmwl_ioctl.h"
 
 
 #define PLUME_CSA_MODE        0     // Does not block Tx during CSA
@@ -58,10 +59,11 @@ static c_item_t g_map_band[] = {
 };
 
 static c_item_t g_map_ht_mode[] = {
-    C_ITEM_STR(20,          "HT40"),
+    C_ITEM_STR(20,          "HT20"),
     C_ITEM_STR(2040,        "HT2040"),
     C_ITEM_STR(40,          "HT40"),
-    C_ITEM_STR(80,          "HT80")
+    C_ITEM_STR(80,          "HT80"),
+    C_ITEM_STR(160,         "HT160"),
 };
 
 /**
@@ -107,8 +109,24 @@ const char* bcmwl_radio_ht_mode_to_str(int ht_mode)
     return "HT20";
 }
 
+bool bcmwl_radio_is_dhd_fast(const char *ifname)
+{
+    unsigned int magic;
+    bool is_dongle;
+
+    if (!bcmwl_DHDGIOC(ifname, DHD_GET_MAGIC, NULL, &magic))
+        return false;
+
+    is_dongle = magic == DHD_IOCTL_MAGIC ||
+                magic == bswap_32(DHD_IOCTL_MAGIC);
+    return is_dongle;
+}
+
 bool bcmwl_radio_is_dhd(const char *ifname)
 {
+    if (kconfig_enabled(CONFIG_BCM_PREFER_IOV))
+        return bcmwl_radio_is_dhd_fast(ifname);
+
     /* In case there is no dhdctl available we assume that we operate
      * only on non-dongle radios.
      */
@@ -124,13 +142,17 @@ bool bcmwl_radio_is_dhd(const char *ifname)
 
 static const char* bcmwl_radio_get_hwmode(const char *dphy)
 {
-    const char *p;
-    switch (((p = strexa("wlctl", "-i", dphy, "bands")) ?: "")[0]) {
-        case 'a': return "11ac";
-        case 'b': return "11n";
-    }
-    LOGW("%s: unknown band '%s'", dphy, p);
-    return NULL;
+    if (atoi(WL(dphy, "he", "enab") ?: "0") && atoi(WL(dphy, "he", "features") ?: "0"))
+        return "11ax";
+    if (atoi(WL(dphy, "vhtmode") ?: "0"))
+        return "11ac";
+    if (atoi(WL(dphy, "nmode") ?: "0"))
+        return "11n";
+    if ((WL(dphy, "bands") ?: "b")[0] == 'a')
+        return "11a";
+
+    /* FIXME: 11b? */
+    return "11g";
 }
 
 static const char* bcmwl_radio_get_hwname(const char *dphy)
@@ -198,7 +220,7 @@ void bcmwl_radio_chanspec_extract(const char *chanspec, int *chan, int *width)
      * 11u (0x1909)
      * 44/80 (0xe22a)
      */
-    char *buf = strdupa(chanspec);
+    char *buf = strdupa(strpbrk(chanspec, "1234567890") ?: "");
     char *str = strsep(&buf, " ");
     const char *c, *w;;
     if (strstr(str, "l") || strstr(str, "u")) {
@@ -214,90 +236,6 @@ void bcmwl_radio_chanspec_extract(const char *chanspec, int *chan, int *width)
         *width = 20;
         WARN_ON(*chan == 0);
     }
-}
-
-bool bcmwl_radio_channel_get(const char *phyname, int *channel)
-{
-    char *buf;
-    char *line;
-    const char *magic = "target channel";
-
-    // Example output of "wlctl -i wlX channel":
-    //  > No scan in progress.
-    //  > current mac channel     42
-    //  > target channel  42
-    if ((buf = WL(phyname, "channel")))
-    {
-        while ((line = strsep(&buf, "\r\n")))
-        {
-            if (strstr(line, magic) == line)
-            {
-                *channel = atoi(line + strlen(magic));
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
-bool bcmwl_radio_chanspec_get(const char *phyname,
-                              int *channel,
-                              int *ht_mode)
-{
-    char *buf;
-    char *tok;
-
-    // Example output of "wlctl -i wlx chanspec":
-    //  > 1 (0x1001)
-    //  > 44/80 (0xe22a)
-    if ((buf = WL(phyname, "chanspec")) && (tok = strsep(&buf, " ")))
-    {
-        if (strstr(tok, "/"))
-        {
-            *channel = atoi(strsep(&tok, "/"));
-            *ht_mode = atoi(tok);
-        }
-        else
-        {
-            *channel = atoi(tok);
-            *ht_mode = 20;
-        }
-        return true;
-    }
-
-    return false;
-}
-
-bool bcmwl_radio_csa(const char *phyname,
-                     int csa_mode,
-                     int csa_count,
-                     int channel,
-                     const char *ht_mode)
-{
-    bool success = true;
-
-    // Before doing CSA we are also changing channel spec. So that
-    // channel change is presistent over interface restarts.
-    success = success && util_wlctl_fmt("-i %s chanspec %d/%d",
-                                        phyname,
-                                        channel,
-                                        bcmwl_radio_ht_mode_to_int(ht_mode));
-
-    // Do the CSA
-    success = success && util_wlctl_fmt("-i %s csa %d %d %d/%d",
-                                        phyname,
-                                        csa_mode,
-                                        csa_count,
-                                        channel,
-                                        bcmwl_radio_ht_mode_to_int(ht_mode));
-    return success;
-}
-
-bool bcmwl_radio_create(const struct schema_Wifi_Radio_Config *rconfig)
-{
-    // Currently not supported
-    return false;
 }
 
 int bcmwl_radio_get_ap_active_cnt(const char *phy)
@@ -363,6 +301,7 @@ static char* bcmwl_radio_chanspec_prep(const char *phy, int channel, const char 
                             return strdup(i);
             return NULL;
         case 80:
+        case 160:
             return strfmt("%d/%d", channel, bw);
     }
     return NULL;
@@ -370,9 +309,9 @@ static char* bcmwl_radio_chanspec_prep(const char *phy, int channel, const char 
 
 /**
  * Returns a malloc()-ed string with space-separated
- * interfaces names that are AP interfaces.
+ * interfaces names that are running AP interfaces.
  */
-static char* bcmwl_radio_get_vifs(const char *phy)
+char* bcmwl_radio_get_vifs(const char *phy)
 {
     struct dirent *p;
     char *vifs = strdupa("");
@@ -384,7 +323,8 @@ static char* bcmwl_radio_get_vifs(const char *phy)
     while ((p = readdir(d)))
         if (strstr(p->d_name, phy) == p->d_name)
             if (!bcmwl_vap_is_sta(p->d_name))
-                vifs = strchomp(strfmta("%s %s", p->d_name, vifs), " ");
+                if (!strcmp(WL(p->d_name, "bss") ?: "", "up"))
+                    vifs = strchomp(strfmta("%s %s", p->d_name, vifs), " ");
 
     closedir(d);
     return strdup(vifs);
@@ -394,7 +334,9 @@ bool bcmwl_radio_channel_set(const char *phy, int channel, const char *ht_mode)
 {
     const char *chanspec = strdupafree(bcmwl_radio_chanspec_prep(phy, channel, ht_mode)) ?: "";
     const char *current;
+    bool move = false;
     struct dirent *p;
+    const char *q;
     char *apvifs = strdupafree(bcmwl_radio_get_vifs(phy));
     char *apvif;
     int c, cw;
@@ -407,6 +349,11 @@ bool bcmwl_radio_channel_set(const char *phy, int channel, const char *ht_mode)
         WARN_ON(!NVS(phy, "chanspec", chanspec));
         WARN_ON(!NVS(phy, "channel", strfmta("%d", channel)));
     }
+
+    if ((q = NVG(phy, "zero_wait_dfs")) &&
+        (!strcmp(q, "enable") || !strcmp(q, "precac")) &&
+        bcmwl_radio_is_dfs_channel(phy, channel, ht_mode))
+            move = true;
 
     if (!channel)
         return true;
@@ -422,21 +369,33 @@ bool bcmwl_radio_channel_set(const char *phy, int channel, const char *ht_mode)
     if ((apvif = strdupa(apvifs ?: "")) &&
         (apvif = strsep(&apvif, " ")) &&
         (strlen(apvif) > 0)) {
-        if (WARN_ON(!WL(apvif, "csa", "0", "15", chanspec)))
-            return false;
+        if (move) {
+            if (bcmwl_dfs_bgcac_active(phy, channel, ht_mode)) {
+                LOGI("%s backgroud CAC active for %d @ %s, skip moving",
+                     phy, channel, ht_mode);
+            } else {
+                if (WARN_ON(!WL(apvif, "dfs_ap_move", chanspec)))
+                    return false;
+            }
+        } else {
+            /* Skip background CAC, in other case csa will fail */
+            bcmwl_dfs_bgcac_deactivate(phy);
+            if (WARN_ON(!WL(apvif, "csa", "0", "15", chanspec)))
+                return false;
+        }
     } else {
         LOGI("%s: no ap vifs: skipping csa, will set chanspec only", phy);
+        if (WARN_ON(!(d = opendir("/sys/class/net"))))
+            return false;
+        while ((p = readdir(d))) {
+            if (strstr(p->d_name, phy) != p->d_name)
+                continue;
+            WARN_ON(!WL(p->d_name, "chanspec", chanspec));
+        }
+        closedir(d);
     }
-    if (WARN_ON(!(d = opendir("/sys/class/net"))))
-        return false;
-    while ((p = readdir(d))) {
-        if (strstr(p->d_name, phy) != p->d_name)
-            continue;
-        WARN_ON(!WL(p->d_name, "chanspec", chanspec));
-    }
-    closedir(d);
 
-    LOGI("%s: switching to channel %s", phy, chanspec);
+    LOGI("%s: %s to channel %s", move ? "moving" : "switching", phy, chanspec);
     return true;
 }
 
@@ -470,64 +429,22 @@ const char* bcmwl_channel_state(enum bcmwl_chan_state state)
 
 int bcmwl_get_current_channels(const char *phyname, int *chan, int size)
 {
-    int allowed_40[] = { 36, 44, 52, 60, 100, 108, 116, 124, 132, 149, 157, 184, 192 };
-    int allowed_80[] = { 36, 52, 100, 116, 132, 149 };
-    unsigned int i;
-    int c, cw;
-    char band[32];
-    int num_channels = 0;
+    const int *chans;
+    int c;
+    int w;
+    int n;
 
-    if (!bcmwl_radio_band_get(phyname, band, sizeof(band)))
-        return num_channels;
+    if (!bcmwl_radio_get_chanspec(phyname, &c, &w))
+        return 0;
 
-    /* Currently this is specyfic only for 5GHz */
-    if (band[0] != 'a')
-        return num_channels;
+    chans = unii_5g_chan2list(c, w);
+    if (!chans)
+        return 0;
 
-    if (!bcmwl_radio_get_chanspec(phyname, &c, &cw))
-        return num_channels;
+    for (n = 0; *chans && size; n++, size--)
+        *chan++ = *chans++;
 
-    if (size < (cw/20))
-        return num_channels;
-
-    switch (cw) {
-        case 20:
-            chan[0] = c;
-            num_channels = 1;
-            break;
-        case 40:
-            if (c < 36 || c > 196)
-                return num_channels;
-
-            for (i = 0; i < ARRAY_SIZE(allowed_40); i++) {
-                if (c <= allowed_40[i] + 4)
-                    break;
-            }
-
-            chan[0] = allowed_40[i];
-            chan[1] = allowed_40[i] + 4;
-            num_channels = 2;
-            break;
-        case 80:
-            if (c < 36 || c > 161)
-                return num_channels;
-
-            for (i = 0; i < ARRAY_SIZE(allowed_80); i++) {
-                if (c <= allowed_80[i] + 12)
-                    break;
-            }
-
-            chan[0] = allowed_80[i];
-            chan[1] = allowed_80[i] + 4;
-            chan[2] = allowed_80[i] + 8;
-            chan[3] = allowed_80[i] + 12;
-            num_channels = 4;
-            break;
-        default:
-            break;
-    }
-
-    return num_channels;
+    return n;
 }
 
 bool bcmwl_radio_state(const char *phyname,
@@ -585,6 +502,8 @@ bool bcmwl_radio_state(const char *phyname,
         SCHEMA_SET_INT(rstate->tx_chainmask, atoi(q));
     if ((q = WL(phyname, "txpwr_target_max")) && (p = strrchr(strchomp(q, " "), ' ')))
         SCHEMA_SET_INT(rstate->tx_power, atoi(p));
+    if ((q = WL(phyname, "radar")) && (p = WL(phyname, "keep_ap_up") ?: "1"))
+        SCHEMA_SET_INT(rstate->dfs_demo, atoi(q) && atoi(p) ? 0 : 1);
 
     // Frequency band
     if (bcmwl_radio_band_get(phyname, band, sizeof(band)))
@@ -601,10 +520,12 @@ bool bcmwl_radio_state(const char *phyname,
         }
     }
 
-    bcmwl_radio_dfs_demo_get(phyname, rstate);
     bcmwl_radio_fallback_parents_get(phyname, rstate);
     bcmwl_radio_radar_get(phyname, rstate);
     bcmwl_radio_channels_get(phyname, rstate);
+
+    if ((p = NVG(phyname, "zero_wait_dfs")) && strlen(p))
+        SCHEMA_SET_STR(rstate->zero_wait_dfs, p);
 
     return true;
 }
@@ -620,40 +541,6 @@ void bcmwl_radio_state_report(const char *ifname)
         bcmwl_ops.op_rstate(&rstate);
 }
 
-bool bcmwl_radio_update(const struct schema_Wifi_Radio_Config *rconfig,
-                        const struct schema_Wifi_Radio_Config_flags *rchanged)
-{
-    bool success = true;
-
-    // Note that currently we only support channel and ht_mode changes.
-    // Functionality needs to be extended in the future.
-
-    if (!bcmwl_radio_adapter_is_operational(rconfig->if_name))
-        return false;
-
-    if (rchanged->channel || rchanged->ht_mode)
-    {
-        LOGD("Radio CSA initiate:: radio=%s channel=%d ht_mode=%s",
-                 rconfig->if_name, rconfig->channel, rconfig->ht_mode);
-        // Do CSA
-        if (false == bcmwl_radio_csa(rconfig->if_name,
-                                     PLUME_CSA_MODE,
-                                     PLUME_CSA_COUNT,
-                                     rconfig->channel,
-                                     rconfig->ht_mode))
-        {
-            success = false;
-            LOGE("Radio CSA failed :: radio=%s channel=%d ht_mode=%s",
-                 rconfig->if_name, rconfig->channel, rconfig->ht_mode);
-        } else {
-            LOGI("Radio CSA success :: radio=%s channel=%d ht_mode=%s",
-                 rconfig->if_name, rconfig->channel, rconfig->ht_mode);
-        }
-    }
-
-    return success;
-}
-
 /* FIXME: The following is intended to deprecate and
  * eventually replace bcmwl_radio_update().
  */
@@ -661,6 +548,20 @@ bool bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
                          const struct schema_Wifi_Radio_Config_flags *rchanged)
 {
     const char *phy = rconf->if_name;
+    const struct {
+        const char *mode;
+        const char *ht;
+        const char *vht;
+        const char *he;
+    } modes[] = {
+        { "11ax", "-1", "1", "1" },
+        { "11ac", "-1", "1", "0" },
+        { "11n",  "-1", "0", "0" },
+        { "11g",  "0",  "0", "0" },
+        { "11b",  "0",  "0", "0" },
+        { "11a",  "0",  "0", "0" },
+    };
+    size_t i;
     char *p;
 
     TRACE("%s", phy ?: "");
@@ -672,10 +573,33 @@ bool bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
     if (!bcmwl_radio_adapter_is_operational(rconf->if_name))
         return false;
 
+    if (rchanged->hw_mode) {
+        WL(phy, "down");
+
+        for (i = 0; i < ARRAY_SIZE(modes); i++)
+            if (!strcmp(modes[i].mode, rconf->hw_mode))
+                break;
+
+        if (i < ARRAY_SIZE(modes)) {
+            WARN_ON(!WL(phy, "nmode", modes[i].ht));
+            WARN_ON(!WL(phy, "vhtmode", modes[i].vht));
+            if (WL(phy, "he", "enab") != NULL) {
+                WARN_ON(!WL(phy, "he", "enab", modes[i].he));
+                WARN_ON(!WL(phy, "he", "features", "-1"));
+            }
+        }
+
+        /* If rchanged->enabled is true then the radio will
+         * be possibly "up"-ed down below.
+         */
+        if (!rchanged->enabled && rconf->enabled)
+            WL(phy, "up");
+    }
+
     if (rchanged->enabled) {
         if ((p = WL(phy, "isup")) && atoi(p) == 0) {
             if (strstr(rconf->freq_band, "2.4G"))
-                WARN_ON(!WL(phy, "bw_cap", "2g", "0x1"));
+                WARN_ON(!WL(phy, "bw_cap", "2g", "0xff"));
             if (strstr(rconf->freq_band, "5G"))
                 WARN_ON(!WL(phy, "bw_cap", "5g", "0xff"));
         }
@@ -689,7 +613,7 @@ bool bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
         WARN_ON(!WL(phy, "obss_coex", !strcmp(rconf->ht_mode, "HT2040") ? "1" : "0"));
 
     if ((rchanged->channel || rchanged->ht_mode) && rconf->channel_exists && rconf->ht_mode_exists)
-        WARN_ON(!bcmwl_radio_channel_set(phy, rconf->channel, strstr(rconf->freq_band, "2.4G") ? "HT20" : rconf->ht_mode));
+        WARN_ON(!bcmwl_radio_channel_set(phy, rconf->channel, rconf->ht_mode));
 
     if (rchanged->bcn_int)
         if (!(p = WL(phy, "bi", strfmta("%d", rconf->bcn_int))) || strlen(p))
@@ -701,8 +625,13 @@ bool bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
     if (rchanged->fallback_parents)
         bcmwl_radio_fallback_parents_set(phy, rconf);
 
-    if (rchanged->dfs_demo)
-        bcmwl_radio_dfs_demo_set(phy, rconf);
+    if (rchanged->dfs_demo) {
+        WARN_ON(!WL(phy, "radar", rconf->dfs_demo ? "0" : "1"));
+        WL(phy, "keep_ap_up", rconf->dfs_demo ? "0" : "1"); /* may fail */
+    }
+
+    if (rchanged->zero_wait_dfs && strlen(rconf->zero_wait_dfs))
+        NVS(phy, "zero_wait_dfs", rconf->zero_wait_dfs);
 
     if (rchanged->tx_chainmask)
         WARN_ON(!WL(phy, "txchain", strfmta("%d", rconf->tx_chainmask)));
@@ -710,29 +639,13 @@ bool bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
     if (rchanged->tx_power)
         WARN_ON(!WL(phy, "txpwr1", strfmta("%d", rconf->tx_power ?: -1)));
 
-    bcmwl_radio_state_report(rconf->if_name);
+    evx_debounce_call(bcmwl_radio_state_report, rconf->if_name);
     return true;
 }
 
 int bcmwl_radio_max_vifs(const char *phy)
 {
-    const char *p;
-    size_t i;
-    int n = 16;
-    glob_t g;
-
-    (void)phy;
-
-    if (WARN_ON(glob("/sys/class/net/wl*", 0, NULL, &g)))
-        return 1;
-
-    for (i=0; i<g.gl_pathc; i++)
-        if ((p = WL(basename(g.gl_pathv[i]), "bssmax")))
-            if (atoi(p) < n)
-                n = atoi(p);
-
-    globfree(&g);
-    return n;
+    return atoi(WL(phy, "bssmax") ?: "1");
 }
 
 int bcmwl_radio_count(void)

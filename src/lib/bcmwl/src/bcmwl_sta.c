@@ -37,6 +37,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "bcmwl_ioctl.h"
 #include "bcmwl_nvram.h"
 #include "bcmwl_debounce.h"
+#include "bcmwl_hostap.h"
 
 #define FIELD_FITS(_ptr, _field, _len) \
         ((_len) >= (offsetof(typeof(*_ptr), _field) + sizeof(_ptr->_field)))
@@ -189,27 +190,90 @@ static int get_vht_mcs_max(
     return max_vht_mcs;
 }
 
+static int get_he_nss_max(
+        const uint16_t *mcsset,
+        const struct bcmwl_ioctl_num_conv *conv)
+{
+    uint16_t rxmcs;
+    int max = 0;
+    int i;
+    int j;
+
+    if (!mcsset)
+        return 0;
+
+    /* 80, 160, 80+80, interleaved tx/rx */
+    for (i = 0; i < 3; i++)
+    {
+        rxmcs = conv->dtoh16(mcsset[(i*2) + 1]);
+        for (j = 0; j < 8; j++, rxmcs >>= 2)
+            if ((rxmcs & 3) != 3)
+                if (j > max)
+                    max = j;
+    }
+
+    return max + 1;
+}
+
+static int get_he_mcs_max(
+        const uint16_t *mcsset,
+        const struct bcmwl_ioctl_num_conv *conv)
+{
+    uint16_t rxmcs;
+    int max = 0;
+    int i;
+    int j;
+
+    if (!mcsset)
+        return 0;
+
+    /* 80, 160, 80+80, interleaved tx/rx */
+    for (i = 0; i < 3; i++)
+    {
+        rxmcs = conv->dtoh16(mcsset[(i*2) + 1]);
+        for (j = 0; j < 8; j++, rxmcs >>= 2)
+        {
+            switch (rxmcs & 3)
+            {
+                case 0: if (max < 7) max = 7; break;
+                case 1: if (max < 9) max = 9; break;
+                case 2: if (max < 11) max = 11; break;
+                case 3: break;
+            }
+        }
+    }
+
+    return max;
+}
+
 static void sta_get_max_mcs_nss_capab(
         const char *ifname,
         const os_macaddr_t *hwaddr,
-        const wl_rateset_args_v2_t *rateset_adv,
+        const uint8 *mcs,
+        const uint16 *vht_mcs,
+        const uint16 *he_mcs,
         const struct bcmwl_ioctl_num_conv *conv,
         bcmwl_sta_info_t *sta_info)
 {
     int ht_mcs_max = 0;
     int vht_nss_max = 0;
     int vht_mcs_max = 0;
+    int he_nss_max = 0;
+    int he_mcs_max = 0;
     int mcs_max = 0;
     int nss_max = 0;
 
-    ht_mcs_max = get_ht_mcs_max(rateset_adv->mcs);
-    vht_nss_max = get_vht_nss_max(rateset_adv->vht_mcs, conv);
-    vht_mcs_max = get_vht_mcs_max(rateset_adv->vht_mcs, conv);
+    ht_mcs_max = get_ht_mcs_max(mcs);
+    vht_nss_max = get_vht_nss_max(vht_mcs, conv);
+    vht_mcs_max = get_vht_mcs_max(vht_mcs, conv);
+    he_nss_max = get_he_nss_max(he_mcs, conv);
+    he_mcs_max = get_he_mcs_max(he_mcs, conv);
 
     LOGT("%s: "PRI(os_macaddr_t)": ht_mcs_max=%d, vht_mcs_max=%d, "
-              "vht_nss_max=%d",
+              "vht_nss_max=%d he_mcs_max=%d he_nss_max=%d",
               ifname, FMT(os_macaddr_pt, hwaddr),
-              ht_mcs_max, vht_mcs_max, vht_nss_max);
+              ht_mcs_max, vht_mcs_max, vht_nss_max,
+              he_mcs_max, he_nss_max);
 
     /* Max mcs x nss: */
     mcs_max = ht_mcs_max % 8;
@@ -218,6 +282,10 @@ static void sta_get_max_mcs_nss_capab(
         mcs_max = vht_mcs_max;
     if (vht_nss_max > nss_max)
         nss_max = vht_nss_max;
+    if (he_mcs_max > mcs_max)
+        mcs_max = he_mcs_max;
+    if (he_nss_max > nss_max)
+        nss_max = he_nss_max;
 
     sta_info->max_mcs = mcs_max;
     sta_info->max_streams = nss_max;
@@ -288,6 +356,9 @@ static void bcmwl_sta_get_sta_info_v5(
 {
 #if WL_STA_VER >= 5
     const sta_info_t *v5 = buf;
+    const uint8 *mcs = v5->rateset_adv.mcs;
+    const uint16 *vht_mcs = v5->rateset_adv.vht_mcs;
+    const uint16 *he_mcs = NULL;
     uint16_t sta_len;
 
     if (conv->dtoh16(v5->ver) < 5)
@@ -297,7 +368,27 @@ static void bcmwl_sta_get_sta_info_v5(
     if (WARN_ON(!FIELD_FITS(v5, rateset_adv, sta_len)))
         return;
 
-    sta_get_max_mcs_nss_capab(ifname, hwaddr, &v5->rateset_adv, conv, sta_info);
+    sta_get_max_mcs_nss_capab(ifname, hwaddr, mcs, vht_mcs, he_mcs, conv, sta_info);
+#endif
+}
+
+static void bcmwl_sta_get_sta_info_v6(
+        const char *ifname,
+        const os_macaddr_t *hwaddr,
+        bcmwl_sta_info_t *sta_info,
+        const struct bcmwl_ioctl_num_conv *conv,
+        const void *buf)
+{
+#if WL_STA_VER >= 6
+    const sta_info_t *v6 = buf;
+    const uint8 *mcs = v6->rateset_adv.mcs;
+    const uint16 *vht_mcs = v6->rateset_adv.vht_mcs;
+    const uint16 *he_mcs = v6->rateset_adv.he_mcs;
+
+    if (conv->dtoh16(v6->ver) < 6)
+        return;
+
+    sta_get_max_mcs_nss_capab(ifname, hwaddr, mcs, vht_mcs, he_mcs, conv, sta_info);
 #endif
 }
 
@@ -318,6 +409,23 @@ static void bcmwl_sta_get_sta_info_v7(
 #endif
 }
 
+static void bcmwl_sta_get_sta_info_v8(
+        const char *ifname,
+        const os_macaddr_t *hwaddr,
+        bcmwl_sta_info_t *sta_info,
+        const struct bcmwl_ioctl_num_conv *conv,
+        const void *buf)
+{
+#if WL_STA_VER >= 8
+    const sta_info_t *v8 = buf;
+
+    if (conv->dtoh16(v8->ver) < 8)
+        return;
+
+    memcpy(sta_info->rrm_caps, v8->rrm_capabilities, DOT11_RRM_CAP_LEN);
+#endif
+}
+
 bool bcmwl_sta_get_sta_info(
         const char *ifname,
         const os_macaddr_t *hwaddr,
@@ -330,10 +438,7 @@ bool bcmwl_sta_get_sta_info(
     if (WARN_ON(!(conv = bcmwl_ioctl_lookup_num_conv(ifname))))
         return false;
 
-    if (WARN_ON(!bcmwl_ioctl_prepare_args_with_addr(&buf, sizeof(buf), "sta_info", hwaddr)))
-        return false;
-
-    found = bcmwl_ioctl_get(ifname, WLC_GET_VAR, &buf, sizeof(buf));
+    found = bcmwl_GIOV(ifname, "sta_info", &hwaddr->addr, &buf);
     LOGT("%s: "PRI(os_macaddr_t)": sta info %s",
          ifname, FMT(os_macaddr_pt, hwaddr), found ? "found" : "not found");
     if (!found)
@@ -341,7 +446,9 @@ bool bcmwl_sta_get_sta_info(
 
     bcmwl_sta_get_sta_info_v4(ifname, hwaddr, sta_info, conv, buf);
     bcmwl_sta_get_sta_info_v5(ifname, hwaddr, sta_info, conv, buf);
+    bcmwl_sta_get_sta_info_v6(ifname, hwaddr, sta_info, conv, buf);
     bcmwl_sta_get_sta_info_v7(ifname, hwaddr, sta_info, conv, buf);
+    bcmwl_sta_get_sta_info_v8(ifname, hwaddr, sta_info, conv, buf);
 
     LOGT("%s: "PRI(os_macaddr_t)": Client capabilities: mcs_max=%d, "
               "nss_max=%d, bw_max=%d",
@@ -380,6 +487,7 @@ void bcmwl_sta_get_schema(
     SCHEMA_SET_STR(c->key_id, keyid);
     SCHEMA_SET_STR(c->state, "active");
     SCHEMA_SET_STR(c->mac, mac);
+    bcmwl_hostap_sta_get(ifname, mac, c);
 }
 
 void bcmwl_sta_resync(const char *ifname)
@@ -418,4 +526,240 @@ void bcmwl_sta_resync(const char *ifname)
 
     bcmwl_ops.op_clients(clients, n, ifname);
     free(clients);
+}
+
+int bcmwl_sta_get_tx_avg_rate_v6(const wl_iov_pktq_log_t *resp,
+                                 int i,
+                                 const struct bcmwl_ioctl_num_conv *conv,
+                                 float *mbps,
+                                 float *psr,
+                                 float *tried)
+{
+#ifdef PKTQ_LOG_V06_HEADINGS_SIZE
+    const pktq_log_counters_v06_t *c;
+    float phyrate = 0;
+    float acked = 0;
+    float retry = 0;
+    int n;
+
+    if (resp->version != 6)
+        return -1;
+    if ((resp->params.addr_type[i] & 0x7F) != 'A')
+        return -1;
+
+    n = resp->pktq_log.v06.num_prec[i];
+    c = resp->pktq_log.v06.counters[i].pktq;
+
+    for (; n; n--, c++) {
+        phyrate += conv->dtoh64(c->txrate_main);
+        acked += conv->dtoh32(c->acked);
+        retry += conv->dtoh32(c->retry);
+    }
+
+    *tried = acked + retry;
+    if (*tried > 0) {
+        *mbps = (phyrate * 0.1) / *tried;
+        *psr = acked / *tried;
+    }
+
+    return 0;
+#else
+    /* if it reports v6 but headers didn't say it is
+     * supported then somethimg is clearly wrong with the
+     * headers at build time and it needs to be addressed.
+     */
+    WARN_ON(resp->version == 6);
+    return -1;
+#endif
+}
+
+int bcmwl_sta_get_tx_avg_rate_v5(const wl_iov_pktq_log_t *resp,
+                                 int i,
+                                 const struct bcmwl_ioctl_num_conv *conv,
+                                 float *mbps,
+                                 float *psr,
+                                 float *tried)
+{
+    const pktq_log_counters_v05_t *c;
+    float phyrate = 0;
+    float acked = 0;
+    float retry = 0;
+    int n;
+
+    if (resp->version != 5)
+        return -1;
+    if ((resp->params.addr_type[i] & 0x7F) != 'A')
+        return -1;
+
+    n = resp->pktq_log.v05.num_prec[i];
+    c = resp->pktq_log.v05.counters[i];
+
+    for (; n; n--, c++) {
+        phyrate += conv->dtoh32(c->txrate_main);
+        acked += conv->dtoh32(c->acked);
+        retry += conv->dtoh32(c->retry);
+    }
+
+    *tried = acked + retry;
+    if (*tried > 0) {
+        *mbps = (phyrate * 0.5) / *tried;
+        *psr = acked / *tried;
+    }
+
+    return 0;
+}
+
+int bcmwl_sta_get_tx_avg_rate_v4(const wl_iov_pktq_log_t *resp,
+                                 int i,
+                                 const struct bcmwl_ioctl_num_conv *conv,
+                                 float *mbps,
+                                 float *psr,
+                                 float *tried)
+{
+    const pktq_log_counters_v04_t *c;
+    float phyrate = 0;
+    float acked = 0;
+    float retry = 0;
+    int n;
+
+    if (resp->version != 4)
+        return -1;
+    if ((resp->params.addr_type[i] & 0x7F) != 'A')
+        return -1;
+
+    n = resp->pktq_log.v04.num_prec[i];
+    c = resp->pktq_log.v04.counters[i];
+
+    for (; n; n--, c++) {
+        phyrate += conv->dtoh32(c->txrate_main);
+        acked += conv->dtoh32(c->acked);
+        retry += conv->dtoh32(c->retry);
+    }
+
+    *tried = acked + retry;
+    if (*tried > 0) {
+        *mbps = (phyrate * 0.5) / *tried;
+        *psr = acked / *tried;
+    }
+
+    return 0;
+}
+
+int bcmwl_sta_get_tx_avg_rate(const char *ifname,
+                              const char *mac,
+                              float *mbps,
+                              float *psr,
+                              float *tried)
+{
+    const struct bcmwl_ioctl_num_conv *conv;
+    wl_iov_mac_full_params_t req;
+    wl_iov_pktq_log_t resp;
+    unsigned int i;
+
+    if (WARN_ON(!(conv = bcmwl_ioctl_lookup_num_conv(ifname))))
+        return -1;
+
+    req.params.addr_type[0] = 'A';
+    req.extra_params.addr_info[0] = 1 << 31; /* log auto bit, ie. all tids */
+    sscanf(mac, "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
+           &req.params.ea[0].octet[0], &req.params.ea[0].octet[1],
+           &req.params.ea[0].octet[2], &req.params.ea[0].octet[3],
+           &req.params.ea[0].octet[4], &req.params.ea[0].octet[5]);
+    req.params.num_addrs = 1;
+    req.params.num_addrs |= 4 << 8; /* v4 stats */
+    req.params.num_addrs = conv->dtoh32(req.params.num_addrs);
+
+    if (WARN_ON(!bcmwl_GIOV(ifname, "pktq_stats", &req, &resp)))
+        return -1;
+
+    resp.version = conv->dtoh32(resp.version);
+    resp.params.num_addrs = conv->dtoh32(resp.params.num_addrs);
+
+    for (i = 0; i < resp.params.num_addrs; i++) {
+        if (bcmwl_sta_get_tx_avg_rate_v6(&resp, i, conv, mbps, psr, tried) == 0)
+            return 0;
+        if (bcmwl_sta_get_tx_avg_rate_v5(&resp, i, conv, mbps, psr, tried) == 0)
+            return 0;
+        if (bcmwl_sta_get_tx_avg_rate_v4(&resp, i, conv, mbps, psr, tried) == 0)
+            return 0;
+    }
+
+    WARN_ON(1);
+    return -1;
+}
+
+int bcmwl_sta_get_rx_avg_rate(const char *ifname,
+                              void (*iter)(const char *ifname,
+                                           const char *mac_octet,
+                                           float mbps,
+                                           float psr,
+                                           float tried,
+                                           void *arg),
+                              void *arg)
+{
+#ifdef SCB_RX_REPORT_DATA_STRUCT_VERSION
+    const struct bcmwl_ioctl_num_conv *conv;
+    iov_rx_report_counters_t *c;
+    iov_rx_report_record_t *r;
+    union {
+        iov_rx_report_struct_t cmd;
+        char buf[WLC_IOCTL_MAXLEN];
+    } resp;
+    int flags = 0;
+    float mbps;
+    float psr;
+    float phyrate;
+    float mpdu;
+    float retried;
+    size_t tid;
+    int i;
+
+    if (WARN_ON(!(conv = bcmwl_ioctl_lookup_num_conv(ifname))))
+        return -1;
+
+    /* possibly unsupported, so allow it to fail */
+    if (!bcmwl_GIOV(ifname, "rx_report", &flags, &resp))
+        return -1;
+
+    resp.cmd.structure_version = conv->dtoh16(resp.cmd.structure_version);
+    resp.cmd.structure_count = conv->dtoh16(resp.cmd.structure_count);
+
+    /* ABI mismatch, headers might be incorrect */
+    if (WARN_ON(resp.cmd.structure_version != SCB_BS_DATA_STRUCT_VERSION))
+        return -1;
+
+    for (i = 0; i < resp.cmd.structure_count; i++) {
+        r = &resp.cmd.structure_record[i];
+
+        phyrate = 0;
+        mpdu = 0;
+        mbps = 0;
+        psr = 0;
+        retried = 0;
+
+        for (tid = 0; tid < ARRAY_SIZE(r->station_counters); tid++) {
+            c = &r->station_counters[tid];
+
+            if (!(r->station_flags & (1 << tid)))
+                continue;
+
+            phyrate += conv->dtoh64(c->rxphyrate);
+            mpdu += conv->dtoh32(c->rxmpdu);
+            retried += conv->dtoh32(c->rxretried);
+        }
+
+        if (mpdu > 0) {
+            mbps = phyrate;
+            mbps /= 1000;
+            mbps /= mpdu;
+            psr = mpdu / (mpdu + retried);
+        }
+
+        iter(ifname, (const char *)r->station_address.octet, mbps, psr, mpdu + retried, arg);
+    }
+
+    return 0;
+#else
+    return -1;
+#endif
 }

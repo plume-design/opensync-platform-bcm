@@ -37,9 +37,16 @@ enum bcmwl_roam_status {
     BCMWL_ROAM_COMPLETE,
 };
 
-void bcmwl_roam_init(const char *ifname);
+#ifdef CONFIG_BCM_USE_NAS
+void bcmwl_roam_init(const char *ifname, const char *bssid);
 void bcmwl_roam_later(const char *ifname);
 void bcmwl_roam_event_handler(const bcm_event_t *ev);
 enum bcmwl_roam_status bcmwl_roam_get_status(const char *ifname);
+#else
+static inline void bcmwl_roam_init(const char *ifname, const char *bssid) { }
+static inline void bcmwl_roam_later(const char *ifname) { }
+static inline void bcmwl_roam_event_handler(const bcm_event_t *ev) { }
+static inline enum bcmwl_roam_status bcmwl_roam_get_status(const char *ifname) { return BCMWL_ROAM_DISABLED; }
+#endif
 
 #endif /* BCMWL_ROAM_H_INCLUDED */

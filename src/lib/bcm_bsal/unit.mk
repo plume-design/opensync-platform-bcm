@@ -30,4 +30,6 @@ UNIT_CFLAGS := -I$(UNIT_PATH)/inc
 
 UNIT_EXPORT_CFLAGS := $(UNIT_CFLAGS)
 
+include platform/bcm/build/bcm-sdk-wifi.mk
+
 UNIT_DEPS += platform/bcm/src/lib/bcmwl

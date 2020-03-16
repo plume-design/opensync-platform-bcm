@@ -149,6 +149,10 @@ bcmwl_chanspec_table_t* bcmwl_chanspec_get_table(char *ifname)
 {
     bcmwl_chanspec_table_t *t;
     int i;
+    if (!bcmwl_is_phy(ifname)) {
+        LOGE("%s: not a phy: %s", __func__, ifname);
+        return NULL;
+    }
     for (i = 0; i < bcmwl_chanspec_num; i++) {
         t = &bcmwl_chanspec_table[i];
         if (!strcmp(ifname, t->ifname)) {
