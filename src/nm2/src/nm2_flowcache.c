@@ -127,6 +127,16 @@ void nm2_l2uf_init(void)
         goto error;
     }
 
+    /*
+     * We do not want to block forever on receive. A timeout 0 means block
+     * forever, so use 1ms for the timeout.
+     */
+    rc = pcap_set_timeout(l2uf_pcap, 1);
+    if (rc != 0)
+    {
+        LOG(ERR, "l2uf: Error setting buffer timeout.");
+        goto error;
+    }
 
     /* Activate the interface -- apparently we need to do this before installing the BPF filter */
     rc = pcap_activate(l2uf_pcap);

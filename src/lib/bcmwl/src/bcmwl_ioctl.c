@@ -169,19 +169,18 @@ leave:
 
 const struct bcmwl_ioctl_num_conv* bcmwl_ioctl_lookup_num_conv(const char *ifname)
 {
-    int wl_i;
+    int ri;
+    int vi;
 
     bcmwl_ioctl_init();
 
-    /* accept both PHY and VIF */
-    if (!bcmwl_is_phy(ifname) && !bcmwl_is_vif(ifname))
+    if (WARN_ON(!bcmwl_parse_vap(ifname, &ri, &vi)))
         return NULL;
 
-    wl_i = atoi(ifname + 2);
-    if (WARN_ON(wl_i >= NUM_CONV_SIZE))
+    if (WARN_ON(ri >= NUM_CONV_SIZE))
         return NULL;
 
-    return &num_convs[wl_i];
+    return &num_convs[ri];
 }
 
 static bool bcmwl_ioc(struct bcmwl_ioctl_arg *arg, void *buf)
@@ -279,7 +278,7 @@ bool bcmwl_ioctl(struct bcmwl_ioctl_arg *arg)
         return false;
 
     err = ioctl(sock, SIOCDEVPRIVATE, &ifr);
-    LOGT("%s: %s: iovar=%s cmd=%d set=%d dongle=%d plen=%d len=%d err=%d",
+    LOGT("%s: %s: iovar=%s cmd=%d set=%d dongle=%d plen=%zd len=%d err=%d",
          __func__,
          arg->ifname,
          arg->iovar ?: "",

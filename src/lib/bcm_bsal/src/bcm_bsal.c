@@ -711,7 +711,7 @@ static proc_event_res_t process_event_action_frame(
          FMT(os_macaddr_t, client->hwaddr), length);
 
     if (length + sizeof(hdr) > sizeof(event->data.action_frame.data)) {
-        LOGD("%s: action frame length exceed buffer size (%u %u)", client->ifname,
+        LOGD("%s: action frame length exceed buffer size (%zu %zu)", client->ifname,
              length + sizeof(hdr), sizeof(event->data.action_frame.data));
         return PROC_EVENT_NO_BSAL_EVENT;
     }

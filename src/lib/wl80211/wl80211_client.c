@@ -1045,7 +1045,7 @@ static int wl80211_client_mcs_stats_parse(FILE *f, wl80211_client_record_t *clie
         }
 
         LOG(DEBUG, "MCS expected tput: %s (%s): "MAC_ADDRESS_FORMAT
-                   " Computed phy rates: tx=%llu (pkts=%u) rx=%llu (pkts=%u)",
+                   " Computed phy rates: tx=%" PRIu64 " (pkts=%u) rx=%" PRIu64 " (pkts=%u)",
                    client->info.ifname, client->info.essid,
                    MAC_ADDRESS_PRINT(client->info.mac),
                    tx_phyrate, tx_mpdus,

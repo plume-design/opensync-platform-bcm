@@ -924,7 +924,7 @@ static void bcmwl_event_nl_cb(EV_P_ ev_io *io, int events)
     ssize_t n;
 
     n = recv(io->fd, buf, sizeof(buf), MSG_DONTWAIT);
-    LOGD("netlink buffer recv %d bytes errno %d", n, errno);
+    LOGD("netlink buffer recv %zd bytes errno %d", n, errno);
     if (n < 0) {
         if (errno == EAGAIN)
             return;

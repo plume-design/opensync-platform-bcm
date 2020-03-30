@@ -93,7 +93,7 @@ static bool bcmwl_acl_enforce(const char *ifname)
      * Kick connected devices ONLY when WM explicitly blocks (ACL "deny" mode)
      * or don't allow (ACL "allow" mode) to connect.
      */
-    enum bcmwl_acl_policy policy = atoi(BCMWL_ACL_POLICY_GET(ifname, BCMWL_ACL_WM));
+    enum bcmwl_acl_policy policy = atoi(BCMWL_ACL_POLICY_GET(ifname, BCMWL_ACL_WM) ?: "");
     const char *acl = BCMWL_ACL_GET(ifname, BCMWL_ACL_WM) ?: "";
     char *assoc;
     char *mac;
