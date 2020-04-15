@@ -632,6 +632,21 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
             WARN_ON(!WL(vif, "up"));
         }
 
+        if (!strcmp(vconf->mode, "sta")) {
+            /* By default driver roams autonomously to once
+             * configured ssid. This is undesired because
+             * there's no way to explicitly tell it to do
+             * that on a given channel, or to a given bssid.
+             *
+             * The following prevents it from doing all that
+             * and instead waits for either `wl join` or
+             * wpa_supplicant.
+             */
+            WARN_ON(!WL(vif, "assoc_retry_max", "6"));
+            WARN_ON(!WL(vif, "sta_retry_time", "0"));
+            WARN_ON(!WL(vif, "roam_off", "1"));
+        }
+
         WARN_ON(!strexa("ip", "link", "set", vif, "up"));
         /* dhd datapath doesn't work unless phy netdev is also up */
         WARN_ON(!strexa("ip", "link", "set", phy, "up"));

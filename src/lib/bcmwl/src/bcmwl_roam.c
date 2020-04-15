@@ -313,9 +313,6 @@ bcmwl_roam_init(const char *ifname, const char *bssid)
             BCMWL_ROAM_DEBOUNCE_SECS);
     ev_timer_init(&r->timeout, bcmwl_roam_timeout_cb,
             BCMWL_ROAM_TIMEOUT_SECS, 0.0);
-    WARN_ON(!WL(ifname, "assoc_retry_max", "6"));
-    WARN_ON(!WL(ifname, "sta_retry_time", "0"));
-    WARN_ON(!WL(ifname, "roam_off", "1"));
 }
 
 void

@@ -43,4 +43,14 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <wlioctl.h>
 
+// old driver compatibility
+#ifndef WLC_E_IF_BSSCFG_UP
+#define WLC_E_IF_BSSCFG_UP	4	/* bsscfg up */
+#endif
+
+#ifndef WLC_E_IF_BSSCFG_DOWN
+#define WLC_E_IF_BSSCFG_DOWN	5	/* bsscfg down */
+#endif
+
+
 #endif /* BCMWL_PRIV_H_INCLUDED */

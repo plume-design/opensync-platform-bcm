@@ -171,7 +171,7 @@ config BCM_USE_RATE_HISTO
 
 config BCM_USE_RATE_HISTO_TO_EXPECTED_TPUT
     bool "use mcs histograms to compute expected throughput phyrates"
-    default n
+    default y
     depends on BCM_USE_RATE_HISTO
     help
         This makes sense only for 11ac and older devices which

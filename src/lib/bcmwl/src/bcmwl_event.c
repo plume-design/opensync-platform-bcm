@@ -678,8 +678,6 @@ static void bcmwl_event_handle_ap_sta_assoc(const char *ifname,
         bcmwl_ops.op_client(&client, ifname, assoc);
 }
 
-/* See util_csa_war_update_rconf_channel in target_qca.c
- * and CAES-600 for details */
 static void bcmwl_event_war_csa(const char *ifname)
 {
     const char *ovsh = strfmta("%s/../tools/ovsh", target_bin_dir());
@@ -705,7 +703,11 @@ static void bcmwl_event_war_csa(const char *ifname)
                         "-w", strfmta("if_name==%s", phy))) && atoi(rchan) == c)
         return;
 
-    LOGI("%s: applying channel workaround on leaf: overriding radio config (%d -> %d) locally, see CAES-600",
+    /* FIXME: This is a deficiency in the API which is bound to ovsdb
+     * and the ambiguity of Wifi_Radio_Config channel with regard to
+     * possible STA uplink.
+     */
+    LOGI("%s: applying channel workaround on leaf: overriding radio config (%d -> %d) locally",
          phy, rchan ? atoi(rchan) : -1, c);
 
     if (WARN_ON(!(result = strexa(ovsh, "-r", "u", "Wifi_Radio_Config",

@@ -53,7 +53,7 @@ struct eth_hdr
  */
 
 #ifndef TARGET_L2UF_IFNAME
-#define TARGET_L2UF_IFNAME     "br-home.l2uf1"
+#define TARGET_L2UF_IFNAME     "br-home.l2uf"
 #endif
 
 /* BPF syntax for capturing L2UF frames (LLC XID packets) */
@@ -73,7 +73,7 @@ void nm2_l2uf_init(void)
 
     if (l2uf_pcap != NULL) return;
 
-    LOG(INFO, "l2uf: Init, interface: %s", TARGET_L2UF_IFNAME);
+    LOG(DEBUG, "l2uf: Init, interface: %s", TARGET_L2UF_IFNAME);
 
     /*
      * Create a PCAP instance for listening to L2UF frames
@@ -177,7 +177,7 @@ void nm2_l2uf_init(void)
     ev_io_init(&l2uf_watcher, nm2_l2uf_process, rc, EV_READ);
     ev_io_start(EV_DEFAULT, &l2uf_watcher);
 
-    LOG(NOTICE, "l2uf: [WAR ESW-1596] FlowCache client roaming mitigation initialized.");
+    LOG(NOTICE, "l2uf: FlowCache client roaming mitigation initialized.");
 
     return;
 
@@ -221,17 +221,18 @@ void nm2_l2uf_recv(
 {
     (void)self;
     (void)pkt;
-
+    char smac[32];
     int rc;
 
     struct eth_hdr *eth = (void *)packet;
-    LOG(NOTICE, "l2uf: Received L2UF frame from %02X:%02X:%02X:%02X:%02X:%02X",
+    snprintf(smac, sizeof(smac), "%02X:%02X:%02X:%02X:%02X:%02X",
             eth->eth_src[0],
             eth->eth_src[1],
             eth->eth_src[2],
             eth->eth_src[3],
             eth->eth_src[4],
             eth->eth_src[5]);
+    LOG(NOTICE, "l2uf: Received L2UF frame from %s", smac);
 
     /*
      * We're using L3 flowcache acceleration, so there's no way to correlate an IPv4 flow to a MAC address. For the

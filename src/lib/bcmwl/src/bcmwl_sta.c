@@ -544,7 +544,8 @@ int bcmwl_sta_get_tx_avg_rate_v6(const wl_iov_pktq_log_t *resp,
 
     if (resp->version != 6)
         return -1;
-    if ((resp->params.addr_type[i] & 0x7F) != 'A')
+    if ((resp->params.addr_type[i] & 0x7F) != 'A' &&
+        (resp->params.addr_type[i] & 0x7F) != 'N')
         return -1;
 
     n = resp->pktq_log.v06.num_prec[i];
@@ -556,10 +557,14 @@ int bcmwl_sta_get_tx_avg_rate_v6(const wl_iov_pktq_log_t *resp,
         retry += conv->dtoh32(c->retry);
     }
 
-    *tried = acked + retry;
-    if (*tried > 0) {
-        *mbps = (phyrate * 0.1) / *tried;
-        *psr = acked / *tried;
+    *mbps *= *tried;
+    *psr *= *tried;
+    *tried += acked + retry;
+    if (*tried) {
+        *mbps += phyrate * 0.1;
+        *mbps /= *tried;
+        *psr += acked;
+        *psr /= *tried;
     }
 
     return 0;
@@ -588,7 +593,8 @@ int bcmwl_sta_get_tx_avg_rate_v5(const wl_iov_pktq_log_t *resp,
 
     if (resp->version != 5)
         return -1;
-    if ((resp->params.addr_type[i] & 0x7F) != 'A')
+    if ((resp->params.addr_type[i] & 0x7F) != 'A' &&
+        (resp->params.addr_type[i] & 0x7F) != 'N')
         return -1;
 
     n = resp->pktq_log.v05.num_prec[i];
@@ -600,10 +606,14 @@ int bcmwl_sta_get_tx_avg_rate_v5(const wl_iov_pktq_log_t *resp,
         retry += conv->dtoh32(c->retry);
     }
 
-    *tried = acked + retry;
-    if (*tried > 0) {
-        *mbps = (phyrate * 0.5) / *tried;
-        *psr = acked / *tried;
+    *mbps *= *tried;
+    *psr *= *tried;
+    *tried += acked + retry;
+    if (*tried) {
+        *mbps += phyrate * 0.5;
+        *mbps /= *tried;
+        *psr += acked;
+        *psr /= *tried;
     }
 
     return 0;
@@ -624,7 +634,8 @@ int bcmwl_sta_get_tx_avg_rate_v4(const wl_iov_pktq_log_t *resp,
 
     if (resp->version != 4)
         return -1;
-    if ((resp->params.addr_type[i] & 0x7F) != 'A')
+    if ((resp->params.addr_type[i] & 0x7F) != 'A' &&
+        (resp->params.addr_type[i] & 0x7F) != 'N')
         return -1;
 
     n = resp->pktq_log.v04.num_prec[i];
@@ -636,10 +647,14 @@ int bcmwl_sta_get_tx_avg_rate_v4(const wl_iov_pktq_log_t *resp,
         retry += conv->dtoh32(c->retry);
     }
 
-    *tried = acked + retry;
-    if (*tried > 0) {
-        *mbps = (phyrate * 0.5) / *tried;
-        *psr = acked / *tried;
+    *mbps *= *tried;
+    *psr *= *tried;
+    *tried += acked + retry;
+    if (*tried) {
+        *mbps += phyrate * 0.5;
+        *mbps /= *tried;
+        *psr += acked;
+        *psr /= *tried;
     }
 
     return 0;
@@ -660,12 +675,15 @@ int bcmwl_sta_get_tx_avg_rate(const char *ifname,
         return -1;
 
     req.params.addr_type[0] = 'A';
+    req.params.addr_type[1] = 'N';
     req.extra_params.addr_info[0] = 1 << 31; /* log auto bit, ie. all tids */
+    req.extra_params.addr_info[1] = 1 << 31; /* log auto bit, ie. all tids */
     sscanf(mac, "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
            &req.params.ea[0].octet[0], &req.params.ea[0].octet[1],
            &req.params.ea[0].octet[2], &req.params.ea[0].octet[3],
            &req.params.ea[0].octet[4], &req.params.ea[0].octet[5]);
-    req.params.num_addrs = 1;
+    memcpy(&req.params.ea[1], &req.params.ea[0], sizeof(req.params.ea[0]));
+    req.params.num_addrs = 2;
     req.params.num_addrs |= 4 << 8; /* v4 stats */
     req.params.num_addrs = conv->dtoh32(req.params.num_addrs);
 
@@ -675,17 +693,22 @@ int bcmwl_sta_get_tx_avg_rate(const char *ifname,
     resp.version = conv->dtoh32(resp.version);
     resp.params.num_addrs = conv->dtoh32(resp.params.num_addrs);
 
+    *mbps = 0;
+    *psr = 0;
+    *tried = 0;
+
     for (i = 0; i < resp.params.num_addrs; i++) {
         if (bcmwl_sta_get_tx_avg_rate_v6(&resp, i, conv, mbps, psr, tried) == 0)
-            return 0;
+            continue;
         if (bcmwl_sta_get_tx_avg_rate_v5(&resp, i, conv, mbps, psr, tried) == 0)
-            return 0;
+            continue;
         if (bcmwl_sta_get_tx_avg_rate_v4(&resp, i, conv, mbps, psr, tried) == 0)
-            return 0;
+            continue;
+
+        WARN_ON(1);
     }
 
-    WARN_ON(1);
-    return -1;
+    return 0;
 }
 
 int bcmwl_sta_get_rx_avg_rate(const char *ifname,
@@ -725,7 +748,7 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
     resp.cmd.structure_count = conv->dtoh16(resp.cmd.structure_count);
 
     /* ABI mismatch, headers might be incorrect */
-    if (WARN_ON(resp.cmd.structure_version != SCB_BS_DATA_STRUCT_VERSION))
+    if (WARN_ON(resp.cmd.structure_version != SCB_RX_REPORT_DATA_STRUCT_VERSION))
         return -1;
 
     for (i = 0; i < resp.cmd.structure_count; i++) {

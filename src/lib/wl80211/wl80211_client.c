@@ -44,6 +44,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "kconfig.h"
 
 #include "bcmwl.h"
+#include "bcmwl_ioctl.h"
 #include "wl80211.h"
 #include "wl80211_client.h"
 
@@ -1182,6 +1183,16 @@ bool wl80211_client_list_get(
         "Initiating %s command '"WL80211_CLIENT_SSID_GET"'",
         radio_get_name_from_type(radio_cfg->type),
         ifname);
+
+    /* Don't even try `wl assoc` if the bss is down. This
+     * avoids needless kernel log warnings from more recent
+     * driver builds like these:
+     *
+     *   Apr  1 11:47:06 kernel: [ 1424.149337] dhd_prot_ioctl: status ret value is -17
+     *
+     */
+    if (strcmp(WL(ifname, "bss") ?: "", "up"))
+        return true;
 
     wl80211_cmd_exec(
             buf,

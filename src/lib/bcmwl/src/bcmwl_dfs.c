@@ -57,6 +57,7 @@ struct timer_work {
 };
 
 static struct timer_work g_timer_work[4];
+static char g_dfs_fallback_radio[16];
 
 static void bcmwl_dfs_timer_cb(EV_P_ struct ev_timer *w, int revent)
 {
@@ -187,7 +188,7 @@ void bcmwl_radio_fallback_parents_set(const char *cphy, const struct schema_Wifi
 
     /* Set fallback radio for 2.4 */
     if (strstr(rconf->freq_band, "2.4G"))
-        NVS("plume", "dfs_fallback_radio", cphy);
+        STRSCPY_WARN(g_dfs_fallback_radio, cphy);
 
     for (i = 0; i < rconf->fallback_parents_len; i++) {
         LOGI("%s: fallback_parents[%d] %s %d", cphy, i,
@@ -219,7 +220,7 @@ void bcmwl_event_handle_radar(const char *ifname)
     struct fallback_parent parents[8];
     struct fallback_parent *parent;
     int parents_num;
-    const char *fallback_radio = NVG("plume", "dfs_fallback_radio");
+    const char *fallback_radio = g_dfs_fallback_radio;
     const char *ovsh = strfmta("%s/../tools/ovsh", target_bin_dir());
     const char *parentchange = strfmta("%s/parentchange.sh", target_bin_dir());
     const char *rchan;
