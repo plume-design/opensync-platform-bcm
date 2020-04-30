@@ -163,6 +163,9 @@ static const char* bcmwl_radio_get_hwname(const char *dphy)
         "0xd145", "bcm47189",
         "0x6362", "bcm2057",
         "0x4360", "bcm4360",
+        "0x4366", "bcm4366",
+        "0xaaa4", "bcm43684",
+        "0xf6ca", "bcm6755",
         NULL, NULL,
     };
     const char *const*hw;
@@ -500,10 +503,10 @@ bool bcmwl_radio_state(const char *phyname,
         SCHEMA_SET_INT(rstate->bcn_int, atoi(p));
     if ((q = WL(phyname, "txchain")) && (q = strsep(&q, " ")))
         SCHEMA_SET_INT(rstate->tx_chainmask, atoi(q));
-    if ((q = WL(phyname, "txpwr_target_max")) && (p = strrchr(strchomp(q, " "), ' ')))
-        SCHEMA_SET_INT(rstate->tx_power, atoi(p));
     if ((q = WL(phyname, "radar")) && (p = WL(phyname, "keep_ap_up") ?: "1"))
         SCHEMA_SET_INT(rstate->dfs_demo, atoi(q) && atoi(p) ? 0 : 1);
+    if ((q = WL(phyname, "txpwr")) && (q = strsep(&q, " ")))
+        SCHEMA_SET_INT(rstate->tx_power, atoi(q));
 
     // Frequency band
     if (bcmwl_radio_band_get(phyname, band, sizeof(band)))

@@ -53,6 +53,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  * Private
  */
 
+#define BCMWL_VAP_PREALLOC_MAX 8 /* drv hard limit is 16, leave some for wds */
+
 // some platforms use "wl1.1", some "wl1_1"
 // vif index 0 is just "wl1" not "wl1.0"
 bool bcmwl_parse_vap(const char *ifname, int *ri, int *vi)
@@ -469,6 +471,8 @@ void bcmwl_vap_prealloc_all(void)
     while ((p = readdir(d))) {
         if (bcmwl_is_phy(p->d_name)) {
             bssmax = bcmwl_radio_max_vifs(p->d_name);
+            if (bssmax > BCMWL_VAP_PREALLOC_MAX)
+                bssmax = BCMWL_VAP_PREALLOC_MAX;
             bcmwl_vap_prealloc(p->d_name, bssmax - 1, bcmwl_vap_mac_xfrm);
         }
     }

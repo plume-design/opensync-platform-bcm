@@ -392,7 +392,7 @@ static void wl80211_client_tx_rate_stats_get(const char *ifname,
     if (tried == 0.0 || mbps < 0.1)
         return;
 
-    client->stats.tx.last_rate = mbps * 1024;
+    client->stats.tx.last_rate = mbps * 1000;
 
     LOG(DEBUG, "PHY stats: %s: "MAC_ADDRESS_FORMAT": tx mbps=%.0f psr=%1.2f snr=%"PRId32,
         ifname, MAC_ADDRESS_PRINT(mac), mbps, psr, client->stats.rx.snr);
@@ -1035,13 +1035,13 @@ static int wl80211_client_mcs_stats_parse(FILE *f, wl80211_client_record_t *clie
     if (kconfig_enabled(CONFIG_BCM_USE_RATE_HISTO_TO_EXPECTED_TPUT)) {
         if (tx_mpdus) {
             tx_phyrate /= tx_mpdus;
-            tx_phyrate *= 1024;
+            tx_phyrate *= 1000;
             client->stats.tx.last_rate = tx_phyrate;
         }
 
         if (rx_mpdus) {
             rx_phyrate /= rx_mpdus;
-            rx_phyrate *= 1024;
+            rx_phyrate *= 1000;
             client->stats.rx.last_rate = rx_phyrate;
         }
 
@@ -1148,7 +1148,7 @@ static void wl80211_client_rxavgrate_cb(
         if (memcmp(client->info.mac, mac_octet, sizeof(client->info.mac)))
             continue;
 
-        client->stats.rx.last_rate = mbps * 1024;
+        client->stats.rx.last_rate = mbps * 1000;
         LOGD("Setting rx.last_rate to %d for "MAC_ADDRESS_FORMAT" on %s",
              client->stats.rx.last_rate,
              MAC_ADDRESS_PRINT(client->info.mac),
