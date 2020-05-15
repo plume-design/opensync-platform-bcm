@@ -231,6 +231,8 @@ bcmwl_vap_state(const char *ifname,
     if (status.is_sta) {
         if ((p = NVG(ifname, "plume_bss_enabled")))
             SCHEMA_SET_INT(vstate->enabled, atoi(p) == 1);
+        if ((p = WL(ifname, "bss")) && !strcmp(p, "up"))
+            SCHEMA_SET_INT(vstate->enabled, 1);
     } else {
         if ((p = WL(ifname, "bss")))
             SCHEMA_SET_INT(vstate->enabled, !strcmp(p, "up"));
@@ -569,6 +571,7 @@ static void bcmwl_vap_update_rrm(const struct schema_Wifi_Radio_Config *rconf,
     if (WARN_ON(!(word = strsep(&line, "\t "))))
         return;
     rrm = strtol(word, NULL, 16);
+    rrm = (rrm & BCMWL_RRM) ? 1 : 0;
 
     if (rrm == vconf->rrm)
         return;

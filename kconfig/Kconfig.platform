@@ -186,7 +186,7 @@ config BCM_USE_RATE_HISTO_TO_EXPECTED_TPUT
 menuconfig BCM_WPS
     bool "Enable Wireless Protected Setup (WPS)"
     depends on BCM_USE_NAS
-    default y
+    default n
 
 if BCM_WPS
 

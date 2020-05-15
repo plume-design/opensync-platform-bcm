@@ -413,7 +413,6 @@ bool bcmwl_nas_update_security(
      * beacons.
      */
     was_up = !strcmp(WL(vif, "bss") ?: "", "up");
-    bcmwl_nas_update_ft_psk(vconf, rconf, vchanged);
 
     if (vconf->ft_psk_exists && vconf->ft_psk) {
         nv_akm = strfmta("%s psk2ft", nv_akm);
@@ -463,9 +462,11 @@ bool bcmwl_nas_update_security(
     if (strcmp(wl_wpa_auth, wl_wpa_auth_prev)) {
         WARN_ON(!WL(vif, "bss", "down"));
         WARN_ON(!WL(vif, "wpa_auth", wl_wpa_auth));
-        if (was_up)
-            WARN_ON(!WL(vif, "bss", "up"));
     }
+
+    bcmwl_nas_update_ft_psk(vconf, rconf, vchanged);
+    if (was_up)
+        WARN_ON(!WL(vif, "bss", "up"));
 
     bcmwl_nas_update_security_multipsk(vconf, &fast);
 

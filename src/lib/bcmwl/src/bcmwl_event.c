@@ -246,12 +246,67 @@ static char* bcmwl_event_br_get_if(const char *brname)
     return NULL;
 }
 
+static void bcmwl_event_verify_vht_oper(const char *ifname, const char *chanspec)
+{
+    /* Example snippet:
+     *
+     * Tag:191 Len:12 - Unsupported tag
+     * 35 68 8b 0f aa ff 00 00 aa ff 00 20
+     * Tag:192 Len:5 - Unsupported tag
+     * 01 2a 00 00 00
+     */
+    const char *info = WL(ifname, "beacon_info");
+    const char *vht_oper_tag = strstr(info ?: "", "Tag:192");
+    const char *vht_oper_val = strstr(vht_oper_tag ?: "\n00", "\n") + 1;
+    const char *is80mhz = strstr(chanspec ?: "", "/80");
+    const char *is160mhz = strstr(chanspec ?: "", "/160");
+    long int width = strtol(vht_oper_val, NULL, 16);
+
+    if (!info)
+        return;
+
+    if (strlen(info) == 0)
+        return;
+
+    if ((is80mhz || is160mhz) == !!width)
+        return;
+
+    /* Some drivers are known to mishandle bandwidth changes
+     * by not properly updating their VHT Operation IE. As a
+     * result stations associating will use incorrect
+     * bandwidth causing further issues.
+     *
+     * Toggling radio makes sure beacon and probe resp
+     * buffers are properly recalculated.
+     */
+    LOGN("%s: beacon info width %ld mismatch with chanspec %s, toggling radio\n",
+         ifname, width, chanspec);
+
+    WARN_ON(!WL(ifname, "down"));
+    WARN_ON(!WL(ifname, "chanspec", chanspec));
+    WARN_ON(!WL(ifname, "up"));
+}
+
+static void bcmwl_event_refresh_chanspec(const char *ifname)
+{
+    char *chanspec;
+
+    if (WARN_ON(!(chanspec = WL(ifname, "chanspec"))))
+        return;
+    if (WARN_ON(!(chanspec = strsep(&chanspec, " "))))
+        return;
+
+    bcmwl_event_verify_vht_oper(ifname, chanspec);
+    WARN_ON(!WL(ifname, "chanspec", chanspec));
+}
+
 static void bcmwl_event_overrun_recover_ifname(const char *ifname)
 {
     if (!bcmwl_is_vif(ifname) && !bcmwl_is_phy(ifname))
         return;
 
     LOGI("%s: recovering from overrun", ifname);
+    bcmwl_event_refresh_chanspec(ifname);
     evx_debounce_call(bcmwl_vap_state_report, ifname);
     evx_debounce_call(bcmwl_sta_resync, ifname);
     if (bcmwl_is_phy(ifname))
@@ -728,6 +783,7 @@ static void bcmwl_event_handle_csa(const char *ifname)
     if (!(phy = strdupa(ifname)) || !(phy = strsep(&phy, CONFIG_BCMWL_VAP_DELIMITER)))
         return;
 
+    bcmwl_event_refresh_chanspec(ifname);
     bcmwl_event_war_csa(ifname);
     evx_debounce_call(bcmwl_radio_state_report, phy);
 
@@ -848,6 +904,9 @@ bool bcmwl_event_handler(const char *ifname,
             return BCMWL_EVENT_HANDLED;
         case WLC_E_RADIO:
             bcmwl_event_handle_radio(ifname);
+            return BCMWL_EVENT_HANDLED;
+        case WLC_E_ASSOC:
+            bcmwl_event_refresh_chanspec(ifname);
             return BCMWL_EVENT_HANDLED;
         case WLC_E_AUTHORIZED:
         case WLC_E_DEAUTH:

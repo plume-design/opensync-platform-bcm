@@ -123,10 +123,3 @@ target_vif_config_set2(const struct schema_Wifi_VIF_Config *vconf,
 {
     return bcmwl_vap_update2(vconf, rconf, cconfs, vchanged, num_cconfs);
 }
-
-const char *
-target_vif_get_sta_ifname(const char *phy)
-{
-    /* For BCM sta ifname is same as radio */
-    return phy;
-}
