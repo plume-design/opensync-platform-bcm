@@ -52,6 +52,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "bcmwl.h"
 #include "bcmwl_event.h"
 #include "bcmwl_acl.h"
+#include "bcmwl_sta.h"
 
 #include "bcm_bsal.h"
 

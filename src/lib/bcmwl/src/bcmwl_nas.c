@@ -372,6 +372,9 @@ bool bcmwl_nas_update_security(
     int fast = 0;
     int flag;
 
+    if (!strcmp(crypto, "mixed"))
+        crypto = "3";
+
     WARN_ON(strcmp(akm, "WPA-PSK") &&
             strcmp(akm, "OPEN") &&
             strcmp(akm, ""));
@@ -391,7 +394,7 @@ bool bcmwl_nas_update_security(
 
     wl_eap = !strcmp(akm, "WPA-PSK") ? "1" : "0";
     wl_wsec = strfmta("%d", !strcmp(akm, "WPA-PSK")
-                            ? (atoi(crypto) == 1 ? TKIP_ENABLED :
+                            ? (atoi(crypto) == 1 ? TKIP_ENABLED + AES_ENABLED :
                                atoi(crypto) == 2 ? AES_ENABLED :
                                atoi(crypto) == 3 ? TKIP_ENABLED + AES_ENABLED :
                                AES_ENABLED)

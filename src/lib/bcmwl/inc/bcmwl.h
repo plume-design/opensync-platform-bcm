@@ -35,12 +35,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "os_nif.h"
 #include "ds_dlist.h"
 
-/* FIXME: This shouldn't be included here. But fixing all
- * the includers now is a bit of a hassle. This needs to be
- * eventually cleaned up though.
- */
-#include "bcmwl_ioctl.h"
-
 // some platforms use _ as delimiter, but default is .
 #ifndef CONFIG_BCMWL_VAP_DELIMITER
 #define CONFIG_BCMWL_VAP_DELIMITER "."
@@ -130,22 +124,6 @@ bool bcmwl_vap_update_security(const struct schema_Wifi_VIF_Config *vconf,
                                int num_cconfs);
 bool bcmwl_parse_vap(const char *ifname, int *ri, int *vi);
 
-// STA handling
-typedef struct
-{
-    bool is_authorized;
-    uint16_t capabilities;
-    uint64_t rx_total_bytes;
-    uint64_t tx_total_bytes;
-    bool is_btm_supported;
-    uint8_t rrm_caps[DOT11_RRM_CAP_LEN];
-    int rssi;
-    int nf;
-    uint8_t max_chwidth;
-    uint8_t max_streams;
-    uint8_t max_mcs;
-} bcmwl_sta_info_t;
-
 bool bcmwl_sta_deauth(const char *ifame,
                       const os_macaddr_t *mac,
                       int reason);
@@ -163,10 +141,6 @@ bool bcmwl_sta_is_connected(const char *ifname,
 bool bcmwl_sta_get_rssi(const char *ifname,
                         const os_macaddr_t *hwaddr,
                         int *rssi);
-
-bool bcmwl_sta_get_sta_info(const char *ifname,
-                            const os_macaddr_t *hwaddr,
-                            bcmwl_sta_info_t *sta_info);
 
 char* bcmwl_sta_get_authorized_macs(const char *ifname);
 void bcmwl_sta_get_schema(const char *ifname,
@@ -186,6 +160,8 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
                                            float tried,
                                            void *arg),
                               void *arg);
+
+char *bcmwl_wl(const char *ifname, const char *prog, const char *args[]);
 
 #define WL(ifname, ...) strdupafree(strchomp(bcmwl_wl(ifname, "wlctl", (const char *[]) { __VA_ARGS__, NULL }), " \t\r\n"))
 #define WL_VAL(s) (strsep(&s, " ") && (s = strsep(&s, "")))

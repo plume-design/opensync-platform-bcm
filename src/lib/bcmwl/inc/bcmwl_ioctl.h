@@ -59,8 +59,6 @@ bool bcmwl_ioctl_init(void);
 
 bool bcmwl_ioctl(struct bcmwl_ioctl_arg *arg);
 
-char *bcmwl_wl(const char *ifname, const char *prog, const char *args[]);
-
 const struct bcmwl_ioctl_num_conv* bcmwl_ioctl_lookup_num_conv(const char *ifname);
 
 #define bcmwl_GIOC(_ifname, _cmd, _param, _buf) \

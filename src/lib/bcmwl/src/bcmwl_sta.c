@@ -38,6 +38,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "bcmwl_nvram.h"
 #include "bcmwl_debounce.h"
 #include "bcmwl_hostap.h"
+#include "bcmwl_sta.h"
 
 #define FIELD_FITS(_ptr, _field, _len) \
         ((_len) >= (offsetof(typeof(*_ptr), _field) + sizeof(_ptr->_field)))
