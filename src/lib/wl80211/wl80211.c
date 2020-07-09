@@ -79,9 +79,12 @@ static bool g_wl80211_have_wl_escanresults = false;
 
 bool wl80211_init(void)
 {
+    static bool                     inited;
     FILE                           *fp;
     char                           *ptr;
     char                            buf[WL80211_CMD_BUFF_SIZE];
+
+    if (inited) return true;
 
     // NOTE: we may have to consider detecting escanresults per radio in
     // the future. Also "wl -h" may not be reliable for detection and will
@@ -102,11 +105,13 @@ bool wl80211_init(void)
     LOGN("Using \"wl %s\" for neighbor scans...",
          g_wl80211_have_wl_escanresults ? "escanresults" : "scanresults");
 
+    inited = true;
     return true;
 }
 
 bool wl80211_have_wl_escanresults(void)
 {
+    wl80211_init();
     return g_wl80211_have_wl_escanresults;
 }
 

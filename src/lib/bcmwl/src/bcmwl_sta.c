@@ -146,6 +146,9 @@ static int get_ht_mcs_max(const uint8_t *mcsset)
 {
     int i;
 
+    if (!mcsset)
+        return 0;
+
     for (i = (MCSSET_LEN * 8 - 1); i >= 0; i--)
     {
         if (i < 32 && (mcsset[i/8] & (1<<(i%8))))
@@ -161,6 +164,9 @@ static int get_vht_nss_max(
     int max_vht_nss = 0;
     int i;
 
+    if (!mcsset)
+        return 0;
+
     for (i = 0; i < VHT_CAP_MCS_MAP_NSS_MAX; i++)
     {
         if (conv->dtoh16(mcsset[i]))
@@ -175,6 +181,9 @@ static int get_vht_mcs_max(
 {
     int max_vht_mcs = 0;
     int i, j;
+
+    if (!mcsset)
+        return 0;
 
     for (i = 0; i < VHT_CAP_MCS_MAP_NSS_MAX; i++)
     {
@@ -357,8 +366,11 @@ static void bcmwl_sta_get_sta_info_v5(
 {
 #if WL_STA_VER >= 5
     const sta_info_t *v5 = buf;
-    const uint8 *mcs = v5->rateset_adv.mcs;
-    const uint16 *vht_mcs = v5->rateset_adv.vht_mcs;
+    const uint32 flags = conv->dtoh32(v5->flags);
+    const bool ht = flags & WL_STA_N_CAP;
+    const bool vht = flags & WL_STA_VHT_CAP;
+    const uint8 *mcs = ht ? v5->rateset_adv.mcs : NULL;
+    const uint16 *vht_mcs = vht ? v5->rateset_adv.vht_mcs : NULL;
     const uint16 *he_mcs = NULL;
     uint16_t sta_len;
 
@@ -382,9 +394,13 @@ static void bcmwl_sta_get_sta_info_v6(
 {
 #if WL_STA_VER >= 6
     const sta_info_t *v6 = buf;
-    const uint8 *mcs = v6->rateset_adv.mcs;
-    const uint16 *vht_mcs = v6->rateset_adv.vht_mcs;
-    const uint16 *he_mcs = v6->rateset_adv.he_mcs;
+    const uint32 flags = conv->dtoh32(v6->flags);
+    const bool ht = flags & WL_STA_N_CAP;
+    const bool vht = flags & WL_STA_VHT_CAP;
+    const bool he = flags & WL_STA_HE_CAP;
+    const uint8 *mcs = ht ? v6->rateset_adv.mcs : NULL;
+    const uint16 *vht_mcs = vht ? v6->rateset_adv.vht_mcs : NULL;
+    const uint16 *he_mcs = he ? v6->rateset_adv.he_mcs : NULL;
 
     if (conv->dtoh16(v6->ver) < 6)
         return;
