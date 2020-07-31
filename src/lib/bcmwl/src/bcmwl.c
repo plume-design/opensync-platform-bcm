@@ -46,6 +46,26 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <bcmwl_acl.h>
 
 /* local */
+static void bcmwl_keep_ap_up(void)
+{
+    struct dirent *p;
+    DIR *d;
+
+    /* Normally when STA BSS disconnects the local AP will
+     * follow suit unless keep_ap_up is enabled. 1=always
+     * 2=non-dfs. There's also a side-effect that if
+     * keep_ap_up=0 radar=0 then it's impossible to start an
+     * AP on dfs channel if no STA BSS is associated. Not
+     * all drivers support keep_ap_up or require it, so
+     * WARN_ON isn't used here.
+     */
+    for (d = opendir("/sys/class/net"); d && (p = readdir(d)); )
+        if (bcmwl_is_phy(p->d_name))
+            WL(p->d_name, "keep_ap_up", "1");
+    if (!WARN_ON(!d))
+        closedir(d);
+}
+
 static void bcmwl_mpc_disable(void)
 {
     struct dirent *p;
@@ -122,7 +142,9 @@ bool bcmwl_init_wm(void)
     bcmwl_event_enable_all(WLC_E_RADIO);
     bcmwl_event_enable_all(WLC_E_REASSOC_IND);
     bcmwl_event_enable_all(WLC_E_SCAN_COMPLETE);
+    bcmwl_event_enable_all(WLC_E_SET_SSID);
     bcmwl_event_enable_all(WLC_E_IF);
+    bcmwl_keep_ap_up();
     bcmwl_mpc_disable();
     bcmwl_mask_nonstd_11n_2ghz_rates();
     bcmwl_dfs_init();

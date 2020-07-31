@@ -503,8 +503,8 @@ bool bcmwl_radio_state(const char *phyname,
         SCHEMA_SET_INT(rstate->bcn_int, atoi(p));
     if ((q = WL(phyname, "txchain")) && (q = strsep(&q, " ")))
         SCHEMA_SET_INT(rstate->tx_chainmask, atoi(q));
-    if ((q = WL(phyname, "radar")) && (p = WL(phyname, "keep_ap_up") ?: "1"))
-        SCHEMA_SET_INT(rstate->dfs_demo, atoi(q) && atoi(p) ? 0 : 1);
+    if ((q = WL(phyname, "radar")))
+        SCHEMA_SET_INT(rstate->dfs_demo, atoi(q) ? 0 : 1);
     if ((q = WL(phyname, "txpwr")) && (q = strsep(&q, " ")))
         SCHEMA_SET_INT(rstate->tx_power, atoi(q));
 
@@ -628,10 +628,8 @@ bool bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
     if (rchanged->fallback_parents)
         bcmwl_radio_fallback_parents_set(phy, rconf);
 
-    if (rchanged->dfs_demo) {
+    if (rchanged->dfs_demo)
         WARN_ON(!WL(phy, "radar", rconf->dfs_demo ? "0" : "1"));
-        WL(phy, "keep_ap_up", rconf->dfs_demo ? "0" : "1"); /* may fail */
-    }
 
     if (rchanged->zero_wait_dfs && strlen(rconf->zero_wait_dfs))
         NVS(phy, "zero_wait_dfs", rconf->zero_wait_dfs);

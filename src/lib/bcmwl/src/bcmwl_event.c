@@ -773,18 +773,15 @@ static void bcmwl_event_war_csa(const char *ifname)
     NVS(phy, "chanspec", chanspec);
 }
 
-static void bcmwl_event_handle_csa(const char *ifname)
+static void bcmwl_event_report_channel(const char *ifname)
 {
     struct dirent *p;
     char *phy;
     DIR *d;
 
-    LOGI("%s: csa completed (%s)", ifname, WL(ifname, "chanspec") ?: "");
     if (!(phy = strdupa(ifname)) || !(phy = strsep(&phy, CONFIG_BCMWL_VAP_DELIMITER)))
         return;
 
-    bcmwl_event_refresh_chanspec(ifname);
-    bcmwl_event_war_csa(ifname);
     evx_debounce_call(bcmwl_radio_state_report, phy);
 
     if (WARN_ON(!(d = opendir("/sys/class/net"))))
@@ -793,6 +790,15 @@ static void bcmwl_event_handle_csa(const char *ifname)
         if (strstr(p->d_name, phy) == p->d_name)
             evx_debounce_call(bcmwl_vap_state_report, p->d_name);
     closedir(d);
+}
+
+static void bcmwl_event_handle_csa(const char *ifname)
+{
+    LOGI("%s: csa completed (%s)", ifname, WL(ifname, "chanspec") ?: "");
+
+    bcmwl_event_refresh_chanspec(ifname);
+    bcmwl_event_war_csa(ifname);
+    bcmwl_event_report_channel(ifname);
 }
 
 static void bcmwl_event_handle_radio(const char *ifname)
@@ -923,6 +929,22 @@ bool bcmwl_event_handler(const char *ifname,
             return BCMWL_EVENT_HANDLED;
         case WLC_E_AP_CHAN_CHANGE:
             bcmwl_event_handle_ap_chan_change(ifname, ev);
+            return BCMWL_EVENT_HANDLED;
+        case WLC_E_JOIN:
+            /* If sta interface moves to a different channel than
+             * the one which was used prior to `wl join` by local ap
+             * interfaces then the entire radio implicitly switches
+             * over to the new channel. This is performed without
+             * csa on the ap side and therefore doesn't result in
+             * csa completion events.
+             *
+             * Hence this needs extra attention and any sta
+             * interface connectivity event should be considered as
+             * a trigger to re-read and report ap bss states to the
+             * upper (WM) layer to avoid channel desync in
+             * state tables.
+             */
+            bcmwl_event_report_channel(ifname);
             return BCMWL_EVENT_HANDLED;
         case WLC_E_LINK:
             bcmwl_event_handle_link(ev);

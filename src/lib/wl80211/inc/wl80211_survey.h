@@ -32,35 +32,17 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "dppline.h"
 
 #include "wl80211_scan.h"
+#include "bcmwl_cim.h"
 
 #define WL80211_SURVEY_CHANNEL_GET  "wl -i %s chanim_stats"
 #define WL80211_SURVEY_INTERVAL_SET "wl -i %s chanim_sample_period %d"
 
 typedef struct
 {
-    int                             chanspec;
-    int                             tx;
-    int                             inbss;
-    int                             obss;
-    int                             nocat;
-    int                             nopkt;
-    int                             doze;
-    int                             txop;
-    int                             goodtx;
-    int                             badtx;
-    int                             glitch;
-    int                             badplcp;
-    int                             noise;
-    int                             idle;
-    unsigned int                    timestamp;
-} wl80211_survey_t;
-
-typedef struct
-{
     DPP_TARGET_SURVEY_RECORD_COMMON_STRUCT;
 
     /* Target specific survey data */
-    wl80211_survey_t                stats;
+    struct bcmwl_cim stats;
 } wl80211_survey_record_t;
 
 static inline

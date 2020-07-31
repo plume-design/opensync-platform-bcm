@@ -319,11 +319,17 @@ void
 bcmwl_roam_event_handler(const bcm_event_t *ev)
 {
     const char *ifname = ev->event.ifname;
+    struct bcmwl_roam *r = bcmwl_roam_get(ifname);
+    int status = ntohl(ev->event.status);
     int type = ntohl(ev->event.event_type);
+
+    if (r)
+        return;
 
     switch (type) {
         //case WLC_E_SCAN_COMPLETE:
         //case WLC_E_ESCAN_RESULT:
+        case WLC_E_SET_SSID:
         case WLC_E_DEAUTH:
         case WLC_E_DEAUTH_IND:
         case WLC_E_DISASSOC:
@@ -337,6 +343,13 @@ bcmwl_roam_event_handler(const bcm_event_t *ev)
                 return;
 
             LOGD("roam: %s: processing event %d", ifname, type);
+
+            if (type == WLC_E_SET_SSID) {
+                if (status > 0)
+                    LOGI("roam: %s: failed to connect: %d", ifname, status);
+                ev_timer_stop(EV_DEFAULT_ &r->timeout);
+            }
+
             bcmwl_roam_later(ifname);
             evx_debounce_call(bcmwl_vap_state_report, ifname);
             break;

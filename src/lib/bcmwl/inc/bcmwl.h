@@ -177,6 +177,7 @@ typedef struct
 } bcmwl_chanspec_t;
 
 bcmwl_chanspec_t* bcmwl_chanspec_get(char *ifname, int chanspec);
+int bcmwl_chanspec_get_primary(const int cs);
 
 // Miscellaneous
 bool bcmwl_misc_send_action_frame(const char *ifname,

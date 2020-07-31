@@ -44,10 +44,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <linux/types.h>
 
 #include "log.h"
+#include "kconfig.h"
 
+#include "bcmwl.h"
+#include "bcmwl_cim.h"
 #include "wl80211.h"
 #include "wl80211_survey.h"
-#include "bcmwl.h"
 #include "os.h"
 
 #define MODULE_ID LOG_MODULE_ID_WL
@@ -71,154 +73,47 @@ bool wl80211_survey_results_get(
         radio_scan_type_t           scan_type,
         ds_dlist_t                 *survey_list)
 {
-    const char                     *tok;
-    char                           *ptr;
-    char                           *buf = NULL;
-    bool                            result;
-    int                             count = 0;
-    char                          **lines = NULL;
-    radio_type_t                    radio_type;
-    uint32_t                        chan;
-    uint32_t                        chan_index;
-    wl80211_survey_record_t        *survey_record = NULL;
-    char                            chan_str[32];
-    int                             i;
-    bcmwl_chanspec_t               *csinfo;
+    wl80211_survey_record_t *survey_record;
+    struct bcmwl_cim arr[64] = {0};
+    size_t len = ARRAY_SIZE(arr);
+    size_t i;
+    size_t j;
 
-    radio_type = radio_cfg->type;
+    if (WARN_ON(!survey_list)) return false;
+    if (WARN_ON(!chan_list)) return false;
+    if (WARN_ON(!bcmwl_cim_get(radio_cfg->if_name, arr, len))) return false;
 
+    for (i = 0; i < len; i++) {
+        if (!arr[i].channel) continue;
 
-    /* Clear-up the output list just in case: */
-    while ((survey_record = ds_dlist_remove_head(survey_list)))
-    {
-        memset(survey_record, 0, sizeof(*survey_record));
-        wl80211_survey_record_free(survey_record);
-    }
-
-
-    str_join_int(chan_str, sizeof(chan_str), (int*)chan_list, chan_num, ",");
-    TRACE("r:%s c:%d p:%s i:%s t:%s [%s]",
-            radio_get_name_from_type(radio_type),
-            radio_cfg->chan,
-            radio_cfg->phy_name,
-            radio_cfg->if_name,
-            radio_get_scan_name_from_type(scan_type),
-            chan_str);
-
-    #define GET(_name, _fmt, _expr) do { \
-        tok = strsep(&ptr, " \t"); \
-        if (!tok) { \
-            LOG(ERR, \
-                "Processing %s %s survey for chan %u " \
-                " (Failed to get params '%s')", \
-                radio_get_name_from_type(radio_type), \
-                radio_get_scan_name_from_type(scan_type), \
-                chan, \
-                strerror(errno)); \
-            free(survey_record); \
-            goto error; \
-        } \
-        survey_record->stats._name = _expr; \
-        LOG(TRACE, \
-            "Parsed %s %s %u survey %s " _fmt, \
-            radio_get_name_from_type(radio_type), \
-            radio_get_scan_name_from_type(scan_type), \
-            chan, \
-            #_name, survey_record->stats._name); \
-        } while (0)
-
-/* sample output of chanim_stats
-version: 2
-chanspec tx   inbss   obss   nocat   nopkt   doze     txop     goodtx  badtx   glitch   badplcp  knoise  idle  timestamp
-0x1006  10      1       31      27      11      0       3       2       6       4448    34      -81     14      447786260
-*/
-    // note, using if_name here because of issues when
-    // running survey on 5G phy (sta) interface
-    result = os_cmd_exec(&buf, WL80211_SURVEY_CHANNEL_GET, radio_cfg->if_name);
-    if (!result) goto error;
-
-    lines = str_split_lines(buf, &count);
-    if (!lines) goto error;
-
-    for (chan_index = 0; chan_index < chan_num; chan_index++)
-    {
-        chan = chan_list[chan_index];
-
-        // find matching line
-        for (i = 0; i < count; i++) {
-            ptr = lines[i];
-            if (strncmp(ptr, "0x", 2)) continue;
-            int cs = 0;
-            sscanf(ptr, "%i", &cs);
-            if (!cs) continue;
-            csinfo = bcmwl_chanspec_get(radio_cfg->phy_name, cs);
-            if (csinfo && (uint32_t)csinfo->channel == chan) goto found;
-        }
-        continue; // not found
-found:
-        survey_record =
-            wl80211_survey_record_alloc();
-        if (NULL == survey_record) {
-            LOGE("Processing %s %s survey report "
-                 "(Failed to allocate memory)",
-                 radio_get_name_from_type(radio_type),
-                 radio_get_scan_name_from_type(scan_type));
-            goto error;
-        }
-
-        GET(chanspec,   "%x",  strtol(tok,  NULL,  16));
-        GET(tx,         "%d",  atoi(tok));
-        GET(inbss,      "%d",  atoi(tok));
-        GET(obss,       "%d",  atoi(tok));
-        GET(nocat,      "%d",  atoi(tok));
-        GET(nopkt,      "%d",  atoi(tok));
-        GET(doze,       "%d",  atoi(tok));
-        GET(txop,       "%d",  atoi(tok));
-        GET(goodtx,     "%d",  atoi(tok));
-        GET(badtx,      "%d",  atoi(tok));
-        GET(glitch,     "%d",  atoi(tok));
-        GET(badplcp,    "%d",  atoi(tok));
-        GET(noise,      "%d",  atoi(tok));
-        GET(idle,       "%d",  atoi(tok));
-        GET(timestamp,  "%u",  atoi(tok));
-
-#ifdef BCM_BOGUS_SURVEY_WORKAROUND
-        if (radio_type == RADIO_TYPE_5G &&
-                (survey_record->stats.noise  > SURVEY_5G_FLT_NOISE ||
-                 survey_record->stats.glitch > SURVEY_5G_FLT_GLITCH)) {
+        if (kconfig_enabled(BCM_BOGUS_SURVEY_WORKAROUND) &&
+            radio_cfg->type == RADIO_TYPE_5G) {
             /* On some BCM platforms with very old BCM SDK survey output on
              * 5G radio reports bogus information in case there are no clients
              * connected. We try to detect this situation and filter out survey
-             * records. */
-            LOGD("Dropping corrupted 5G survey record! :: knoise=%d glitch=%d",
-                 survey_record->stats.noise,
-                 survey_record->stats.glitch);
-            wl80211_survey_record_free(survey_record);
-            continue;
+             * records.
+             */
+            if (arr[i].nf > SURVEY_5G_FLT_NOISE) continue;
+            if (arr[i].glitch > SURVEY_5G_FLT_GLITCH) continue;
         }
-#endif
-        survey_record->info.chan            = chan;
-        survey_record->info.timestamp_ms    = get_timestamp();
+
+        for (j = 0; j < chan_num; j++)
+            if (chan_list[j] == (uint32_t)arr[i].channel)
+                break;
+
+        if (j == chan_num) continue; /* not requested so don't collect */
+
+        survey_record = wl80211_survey_record_alloc();
+        if (WARN_ON(!survey_record)) continue;
+
+        memcpy(&survey_record->stats, &arr[i], sizeof(survey_record->stats));
+        survey_record->info.chan = arr[i].channel;
+        survey_record->info.timestamp_ms = get_timestamp();
 
         ds_dlist_insert_tail(survey_list, survey_record);
     }
-    #undef GET
-    if (buf) free(buf);
-    if (lines) free(lines);
 
     return true;
-
-error:
-    LOG(ERROR, "survey get r:%s c:%d p:%s i:%s t:%s [%s]",
-            radio_get_name_from_type(radio_type),
-            radio_cfg->chan,
-            radio_cfg->phy_name,
-            radio_cfg->if_name,
-            radio_get_scan_name_from_type(scan_type),
-            chan_str);
-    if (buf) free(buf);
-    if (lines) free(lines);
-    return false;
 }
 
 bool wl80211_survey_results_convert(
@@ -228,34 +123,37 @@ bool wl80211_survey_results_convert(
         wl80211_survey_record_t    *data_old,
         dpp_survey_record_t        *survey_record)
 {
+    if (!data_new) return false;
+    if (!data_old) return false;
+    if (!survey_record) return false;
 
-    if (    (NULL == data_new)
-         || (NULL == data_old)
-         || (NULL == survey_record)
-       ) {
-        return false;
-    }
+    survey_record->chan_busy = data_new->stats.percent.busy;
+    survey_record->chan_tx = data_new->stats.percent.tx;
+    survey_record->chan_rx = data_new->stats.percent.rx;
+    survey_record->chan_self = data_new->stats.percent.rx_self;
 
-    // FIXME: chanim_stats reports percentages from last sample period that it
-    // is doing internally. We should compute the delta ourselves somehow or
-    // accumulate percentages overtime in a temp buffer. Let's hope BCM
-    // delivers this in microseconds - until then let's report _something_.
+    /* The old chanim_stats (without support for usec reports) doesn't
+     * report time spent on off-chan. It doesn't even report time
+     * spent on-chan, but for all intents and purposes it's good
+     * enough. The off-chan dwell time is configurable from the cloud
+     * but in practice it shouldn't greater than 50msec.
+     */
+    if (scan_type == RADIO_SCAN_TYPE_ONCHAN)
+        survey_record->duration_ms = data_new->stats.percent.timestamp - data_old->stats.percent.timestamp;
+    else
+        survey_record->duration_ms = 50;
 
-    // FIXME: These conversions must be really confronted and compared to
-    // Atheros radio side-by-side.
-    survey_record->chan_busy    = 100 - data_new->stats.txop;
-    survey_record->chan_tx      = data_new->stats.tx;
-    survey_record->chan_rx      = (data_new->stats.inbss +
-            data_new->stats.obss +
-            data_new->stats.nocat +
-            data_new->stats.nopkt);
-    survey_record->chan_self    = data_new->stats.inbss;
-    survey_record->chan_busy_ext = 0;  // FIXME
-
-    if (scan_type == RADIO_SCAN_TYPE_ONCHAN) {
-        survey_record->duration_ms   = 10000;
-    } else {
-        survey_record->duration_ms   = 50;
+    if (data_new->stats.usec.total != data_old->stats.usec.total) {
+        LOGT("%s: channel %d: using usec to derive percentage", radio_cfg->if_name, data_new->info.chan);
+        survey_record->chan_busy = (data_new->stats.usec.busy - data_old->stats.usec.busy) * 100;
+        survey_record->chan_busy /= (data_new->stats.usec.total - data_old->stats.usec.total);
+        survey_record->chan_tx = (data_new->stats.usec.tx - data_old->stats.usec.tx) * 100;
+        survey_record->chan_tx /= (data_new->stats.usec.total - data_old->stats.usec.total);
+        survey_record->chan_rx = (data_new->stats.usec.rx - data_old->stats.usec.rx) * 100;
+        survey_record->chan_rx /= (data_new->stats.usec.total - data_old->stats.usec.total);
+        survey_record->chan_self = (data_new->stats.usec.rx_self - data_old->stats.usec.rx_self) * 100;
+        survey_record->chan_self /= (data_new->stats.usec.total - data_old->stats.usec.total);
+        survey_record->duration_ms = (data_new->stats.usec.total - data_old->stats.usec.total) / 1000;
     }
 
     return true;

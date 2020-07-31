@@ -49,6 +49,7 @@ UNIT_SRC  += $(if $(CONFIG_BCM_USE_NAS),src/bcmwl_wps.c,)
 UNIT_SRC  += $(if $(CONFIG_BCM_USE_HOSTAP),src/bcmwl_hostap.c,)
 UNIT_SRC  += src/bcmwl_debounce.c
 UNIT_SRC  += src/bcmwl_dfs.c
+UNIT_SRC  += src/bcmwl_cim.c
 UNIT_SRC  += src/bcmwl.c
 
 UNIT_CFLAGS := -I$(UNIT_PATH)/inc

@@ -33,6 +33,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "log.h"
 #include "os.h"
 #include "bcmwl.h"
+#include "bcmwl_priv.h"
+#include <wlioctl.h>
+#include <dhdioctl.h>
 
 #define MODULE_ID LOG_MODULE_ID_WL
 
@@ -196,3 +199,41 @@ bcmwl_chanspec_t* bcmwl_chanspec_get(char *ifname, int chanspec)
     return NULL;
 }
 
+int bcmwl_chanspec_get_primary(const int cs)
+{
+    int chan = CHSPEC_CHANNEL(cs);
+    int bw = CHSPEC_BW(cs);
+    int sb = CHSPEC_CTL_SB(cs);
+
+    switch (bw) {
+        case WL_CHANSPEC_BW_20: return chan;
+        case WL_CHANSPEC_BW_40:
+            switch (sb) {
+                case WL_CHANSPEC_CTL_SB_L: return chan - 2;
+                case WL_CHANSPEC_CTL_SB_U: return chan + 2;
+            }
+            return -1;
+        case WL_CHANSPEC_BW_80:
+            switch (sb) {
+                case WL_CHANSPEC_CTL_SB_LL: return chan - 6;
+                case WL_CHANSPEC_CTL_SB_LU: return chan - 2;
+                case WL_CHANSPEC_CTL_SB_UL: return chan + 2;
+                case WL_CHANSPEC_CTL_SB_UU: return chan + 6;
+            }
+            return -1;
+        case WL_CHANSPEC_BW_160:
+            switch (sb) {
+                case WL_CHANSPEC_CTL_SB_LLL: return chan - 14;
+                case WL_CHANSPEC_CTL_SB_LLU: return chan - 10;
+                case WL_CHANSPEC_CTL_SB_LUL: return chan - 6;
+                case WL_CHANSPEC_CTL_SB_LUU: return chan - 2;
+                case WL_CHANSPEC_CTL_SB_ULL: return chan + 2;
+                case WL_CHANSPEC_CTL_SB_ULU: return chan + 6;
+                case WL_CHANSPEC_CTL_SB_UUL: return chan + 10;
+                case WL_CHANSPEC_CTL_SB_UUU: return chan + 14;
+            }
+            return -1;
+    }
+
+    return -1;
+}
