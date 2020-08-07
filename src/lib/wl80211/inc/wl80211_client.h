@@ -59,6 +59,8 @@ typedef struct {
     uint32_t                        mcast_pkts;
     uint64_t                        mcast_bytes;
     uint32_t                        last_rate;
+    uint32_t                        rate_capacity;
+    uint32_t                        rate_perceived;
     uint32_t                        errors;
     uint32_t                        retries;
     int32_t                         last_rssi[4];

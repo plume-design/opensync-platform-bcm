@@ -69,23 +69,29 @@ config BCMWL_VAP_DELIMITER
         Default delimiter in VAP interface name is .
         but some platforms use _
 
+choice
+    prompt "WiFi authentication"
+    default BCM_USE_NAS
+
 config BCM_USE_NAS
     bool "Use nas and eapd authentication"
-    default y
     help
         This enables driving userspace daemons that are
         responsible for authenticating clients (AP role)
         and connecting to network (STA role).
-        If you enable this, disable BCM_USE_HOSTAP.
+
+        This is used on older BCM products/driver (11ac).
 
 config BCM_USE_HOSTAP
     bool "Use hostapd and wpa_supplicant authentication"
-    default n
     help
         This enables use of hostap suite (hostapd / wpa_supplicant)
         to authenticate clients (AP role) and connecting
         to network (STA role).
-        If you enable this, disable BCM_USE_NAS.
+
+        This is used on newer BCM products/driver (11ax).
+
+endchoice
 
 choice
     prompt "Type of nvram implementation to use"

@@ -54,8 +54,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 static c_item_t g_map_band[] = {
-    C_ITEM_STR_STR("a",     "5G"),
-    C_ITEM_STR_STR("b",     "2.4G")
+    C_ITEM_STR_STR("a",     SCHEMA_CONSTS_RADIO_TYPE_STR_5G),
+    C_ITEM_STR_STR("b",     SCHEMA_CONSTS_RADIO_TYPE_STR_2G)
 };
 
 static c_item_t g_map_ht_mode[] = {
@@ -80,7 +80,35 @@ const char* bcmwl_radio_band_to_str(char *band)
     }
 
     LOGE("Unsupported band value: %s", band);
-    return "2.4G";
+    return SCHEMA_CONSTS_RADIO_TYPE_STR_2G;
+}
+
+const char* bcmwl_radio_band_type_str(const char *phyname, char *band)
+{
+    const char *band_str = bcmwl_radio_band_to_str(band);
+    if (!strcmp(band_str, SCHEMA_CONSTS_RADIO_TYPE_STR_5G)) {
+        /* identify if it's a 5G, 5GL or 5GU type radio */
+        const char *dis_ch_grp = WL(phyname, "dis_ch_grp");
+        int dis_ch = dis_ch_grp ? atoi(dis_ch_grp) : 0;
+        /* wl dis_ch_grp sample output: "24 (0x18)"
+         * Meaning:
+         * Bit Channels-Disabled Band
+         * 0 ... - 51  UNII-1
+         * 1  52 - 61  UNII-2a
+         * 2  62 - 99  UNII-2b
+         * 3 100 - 148 UNII-2-ext
+         * 4 149 - ... UNII-3, ISM
+         */
+        if (dis_ch > 0) {
+            if (dis_ch & 0x18) {
+                return SCHEMA_CONSTS_RADIO_TYPE_STR_5GL;
+            }
+            if (dis_ch & 0x7) {
+                return SCHEMA_CONSTS_RADIO_TYPE_STR_5GU;
+            }
+        }
+    }
+    return band_str;
 }
 
 int bcmwl_radio_ht_mode_to_int(const char *ht_mode)
@@ -503,15 +531,20 @@ bool bcmwl_radio_state(const char *phyname,
         SCHEMA_SET_INT(rstate->bcn_int, atoi(p));
     if ((q = WL(phyname, "txchain")) && (q = strsep(&q, " ")))
         SCHEMA_SET_INT(rstate->tx_chainmask, atoi(q));
-    if ((q = WL(phyname, "radar")))
-        SCHEMA_SET_INT(rstate->dfs_demo, atoi(q) ? 0 : 1);
     if ((q = WL(phyname, "txpwr")) && (q = strsep(&q, " ")))
         SCHEMA_SET_INT(rstate->tx_power, atoi(q));
+
+    if ((q = WL(phyname, "radar")) && (p = WL(phyname, "dfs_preism"))) {
+        if (atoi(q) == 1 && atoi(p) == -1)
+            SCHEMA_SET_INT(rstate->dfs_demo, 0);
+        if (atoi(q) == 0 && atoi(p) == 0)
+            SCHEMA_SET_INT(rstate->dfs_demo, 1);
+    }
 
     // Frequency band
     if (bcmwl_radio_band_get(phyname, band, sizeof(band)))
     {
-        SCHEMA_SET_STR(rstate->freq_band,   bcmwl_radio_band_to_str(band));
+        SCHEMA_SET_STR(rstate->freq_band, bcmwl_radio_band_type_str(phyname, band));
     }
 
     // Channels
@@ -628,8 +661,10 @@ bool bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
     if (rchanged->fallback_parents)
         bcmwl_radio_fallback_parents_set(phy, rconf);
 
-    if (rchanged->dfs_demo)
+    if (rchanged->dfs_demo) {
         WARN_ON(!WL(phy, "radar", rconf->dfs_demo ? "0" : "1"));
+        WARN_ON(!WL(phy, "dfs_preism", rconf->dfs_demo ? "0" : "-1"));
+    }
 
     if (rchanged->zero_wait_dfs && strlen(rconf->zero_wait_dfs))
         NVS(phy, "zero_wait_dfs", rconf->zero_wait_dfs);

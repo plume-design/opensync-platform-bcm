@@ -702,6 +702,10 @@ bcmwl_wl_cmd_wpa(const char *ifname, const struct bcmwl_wl *wl, const char *argv
         csnprintf(&p, &len, " WPA-PSK");
     if (atoi(in) & 128)
         csnprintf(&p, &len, " WPA2-PSK");
+    if (atoi(in) & 2)
+        csnprintf(&p, &len, " WPA-802.1x");
+    if (atoi(in) & 64)
+        csnprintf(&p, &len, " WPA2-802.1x");
 
     free(in);
     return strdup(tmp);

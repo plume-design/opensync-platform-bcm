@@ -360,6 +360,10 @@ bool bcmwl_nas_update_security(
     const char *br = vconf->bridge_exists && strlen(vconf->bridge) ? vconf->bridge : vif;
     const char *nv_akm;
     const char *nv_crypto;
+    const char *nv_auth_mode;
+    const char *nv_radius_ipaddr;
+    const char *nv_radius_port;
+    const char *nv_radius_key;
     const char *wl_eap;
     const char *wl_wsec;
     const char *wl_wsec_restrict;
@@ -376,36 +380,63 @@ bool bcmwl_nas_update_security(
         crypto = "3";
 
     WARN_ON(strcmp(akm, "WPA-PSK") &&
+            strcmp(akm, "WPA-EAP") &&
             strcmp(akm, "OPEN") &&
             strcmp(akm, ""));
 
-    nv_akm = !strcmp(akm, "WPA-PSK")
-             ? (atoi(crypto) == 1 ? "psk" :
-                atoi(crypto) == 2 ? "psk2" :
-                atoi(crypto) == 3 ? "psk psk2" :
-                "psk2")
-             : "";
-    nv_crypto = !strcmp(akm, "WPA-PSK")
-                ?  atoi(crypto) == 1 ? "tkip+aes" :
-                   atoi(crypto) == 2 ? "aes" :
-                   atoi(crypto) == 3 ? "tkip+aes" :
-                   "aes"
-                : "";
-
-    wl_eap = !strcmp(akm, "WPA-PSK") ? "1" : "0";
-    wl_wsec = strfmta("%d", !strcmp(akm, "WPA-PSK")
-                            ? (atoi(crypto) == 1 ? TKIP_ENABLED + AES_ENABLED :
-                               atoi(crypto) == 2 ? AES_ENABLED :
-                               atoi(crypto) == 3 ? TKIP_ENABLED + AES_ENABLED :
-                               AES_ENABLED)
-                            : 0);
-    wl_wsec_restrict = !strcmp(akm, "WPA-PSK") ? "1" : "0";
-    wl_crypto = !strcmp(akm, "WPA-PSK")
-                ? (atoi(crypto) == 1 ? WPA_AUTH_PSK :
+    if (strcmp(akm, "WPA-PSK") == 0) {
+        nv_akm = atoi(crypto) == 1 ? "psk" :
+                 atoi(crypto) == 2 ? "psk2" :
+                 atoi(crypto) == 3 ? "psk psk2" :
+                 "psk2";
+        nv_crypto = atoi(crypto) == 1 ? "tkip+aes" :
+                    atoi(crypto) == 2 ? "aes" :
+                    atoi(crypto) == 3 ? "tkip+aes" :
+                    "aes";
+        nv_auth_mode = "";
+        nv_radius_ipaddr = "";
+        nv_radius_port = "";
+        nv_radius_key = "";
+        wl_eap = "1";
+        wl_wsec = strfmta("%d", atoi(crypto) == 1 ? TKIP_ENABLED + AES_ENABLED :
+                                 atoi(crypto) == 2 ? AES_ENABLED :
+                                 atoi(crypto) == 3 ? TKIP_ENABLED + AES_ENABLED :
+                                 AES_ENABLED);
+        wl_wsec_restrict = "1";
+        wl_crypto = atoi(crypto) == 1 ? WPA_AUTH_PSK :
                     atoi(crypto) == 2 ? WPA2_AUTH_PSK :
                     atoi(crypto) == 3 ? WPA_AUTH_PSK | WPA2_AUTH_PSK :
-                    WPA2_AUTH_PSK)
-                : 0;
+                    WPA2_AUTH_PSK;
+    }
+    else if (strcmp(akm, "WPA-EAP") == 0) {
+        /* WPA-EAP support solely WPA2 */
+        nv_akm = "wpa2";
+        nv_crypto = "aes";
+        nv_auth_mode = "radius";
+        nv_radius_ipaddr = SCHEMA_KEY_VAL(vconf->security, "radius_server_ip");
+        nv_radius_port = SCHEMA_KEY_VAL(vconf->security, "radius_server_port");
+        nv_radius_key = SCHEMA_KEY_VAL(vconf->security, "radius_server_secret");
+        wl_eap = "1";
+        wl_wsec = strfmta("%d", AES_ENABLED);
+        wl_wsec_restrict = "1";
+        wl_crypto = WPA2_AUTH_UNSPECIFIED;
+    }
+    else if (strcmp(akm, "OPEN") == 0) {
+        nv_akm = "";
+        nv_crypto = "";
+        nv_auth_mode = "";
+        nv_radius_ipaddr = "";
+        nv_radius_port = "";
+        nv_radius_key = "";
+        wl_eap = "0";
+        wl_wsec = "0";
+        wl_wsec_restrict = "0";
+        wl_crypto = 0;
+    }
+    else {
+        LOGW("%s: AKM '%s' not supported", vif, akm);
+        return false;
+    }
 
     /*
      * We have to save bss up/down state here, because
@@ -433,6 +464,10 @@ bool bcmwl_nas_update_security(
          |  strcmp(NVG(vif, "plume_oftag") ?: "", oftag)
          |  strcmp(NVG(vif, "akm") ?: "", nv_akm)
          |  strcmp(NVG(vif, "crypto") ?: "", nv_crypto)
+         |  strcmp(NVG(vif, "auth_mode") ?: "", nv_auth_mode)
+         |  strcmp(NVG(vif, "radius_ipaddr") ?: "", nv_radius_ipaddr)
+         |  strcmp(NVG(vif, "radius_port") ?: "", nv_radius_port)
+         |  strcmp(NVG(vif, "radius_key") ?: "", nv_radius_key)
          |  strcmp(WL(vif, "eap") ?: "", wl_eap)
          |  strcmp(WL(vif, "wsec_restrict") ?: "", wl_wsec_restrict)
          |  strcmp(wl_wpa_auth_prev, wl_wpa_auth)
@@ -451,6 +486,10 @@ bool bcmwl_nas_update_security(
     WARN_ON(!NVS(vif, "plume_oftag", strlen(oftag) ? oftag : NULL));
     WARN_ON(!NVS(vif, "akm", nv_akm));
     WARN_ON(!NVS(vif, "crypto", nv_crypto));
+    WARN_ON(!NVS(vif, "auth_mode", nv_auth_mode));
+    WARN_ON(!NVS(vif, "radius_ipaddr", nv_radius_ipaddr));
+    WARN_ON(!NVS(vif, "radius_port", nv_radius_port));
+    WARN_ON(!NVS(vif, "radius_key", nv_radius_key));
     WARN_ON(!NVS(vif, "ssid", vconf->ssid));
     WARN_ON(!NVS(vif, "wpa_psk", strlen(key) ? key : NULL));
     WARN_ON(!NVS(vif, "plume_wpa_mode", atoi(crypto) ? "true" : "false"));
@@ -524,6 +563,14 @@ bool bcmwl_nas_get_security(
             SCHEMA_KEY_VAL_APPEND(vstate->security, keyid, key);
             SCHEMA_KEY_VAL_APPEND(vstate->security, strfmta("oftag-%s", keyid), oftag);
         }
+    } else if ((p = WL(ifname, "wpa_auth")) && strstr(p, "WPA2-802.1x")) {
+        SCHEMA_KEY_VAL_APPEND(vstate->security, "encryption", "WPA-EAP");
+        if ((p = NVG(ifname, "radius_ipaddr")))
+            SCHEMA_KEY_VAL_APPEND(vstate->security, "radius_server_ip", p);
+        if ((p = NVG(ifname, "radius_port")))
+            SCHEMA_KEY_VAL_APPEND(vstate->security, "radius_server_port", p);
+        if ((p = NVG(ifname, "radius_key")))
+            SCHEMA_KEY_VAL_APPEND(vstate->security, "radius_server_secret", p);
     } else {
         if ((p = WL(ifname, "wpa_auth")) && strstr(p, "Disabled"))
             SCHEMA_KEY_VAL_APPEND(vstate->security, "encryption", "OPEN");

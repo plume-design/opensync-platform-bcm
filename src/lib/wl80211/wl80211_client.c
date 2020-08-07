@@ -318,12 +318,19 @@ static bool wl80211_client_stats_calculate(
         client_result->stats.rate_tx = new_stats->tx.last_rate;
         client_result->stats.rate_tx /= 1000;
 
+        if (new_stats->tx.rate_capacity)
+            client_result->stats.rate_tx = new_stats->tx.rate_capacity;
+
+        if (new_stats->tx.rate_perceived)
+            client_result->stats.rate_tx_perceived = new_stats->tx.rate_perceived;
+
         LOG(TRACE,
             "Calculated %s client delta stats for "
-            MAC_ADDRESS_FORMAT" rate_tx=%0.2f",
+            MAC_ADDRESS_FORMAT" rate_tx=%0.2f/%0.2f",
             radio_get_name_from_type(radio_type),
             MAC_ADDRESS_PRINT(data_new->info.mac),
-            client_result->stats.rate_tx);
+            client_result->stats.rate_tx,
+            client_result->stats.rate_tx_perceived);
     }
 
     if (new_stats->rx.last_rate)
@@ -331,12 +338,19 @@ static bool wl80211_client_stats_calculate(
         client_result->stats.rate_rx = new_stats->rx.last_rate;
         client_result->stats.rate_rx /= 1000;
 
+        if (new_stats->rx.rate_capacity)
+            client_result->stats.rate_rx = new_stats->rx.rate_capacity;
+
+        if (new_stats->rx.rate_perceived)
+            client_result->stats.rate_rx_perceived = new_stats->rx.rate_perceived;
+
         LOG(TRACE,
             "Calculated %s client delta stats for "
-            MAC_ADDRESS_FORMAT" rate_rx=%0.2f",
+            MAC_ADDRESS_FORMAT" rate_rx=%0.2f/%0.2f",
             radio_get_name_from_type(radio_type),
             MAC_ADDRESS_PRINT(data_new->info.mac),
-            client_result->stats.rate_rx);
+            client_result->stats.rate_rx,
+            client_result->stats.rate_rx_perceived);
     }
 
 
@@ -376,26 +390,18 @@ static void wl80211_client_tx_rate_stats_get(const char *ifname,
 {
     const uint8_t *mac = client->info.mac;
     const char *macstr = strfmta(MAC_ADDRESS_FORMAT, MAC_ADDRESS_PRINT(mac));
-    float mbps;
-    float psr;
-    float tried;
+    struct bcmwl_sta_rate rate;
 
-    if (WARN_ON(bcmwl_sta_get_tx_avg_rate(ifname, macstr, &mbps, &psr, &tried) < 0))
+    if (WARN_ON(bcmwl_sta_get_tx_avg_rate(ifname, macstr, &rate) < 0))
         return;
 
-    /* the mbps is known to be buggy in some corner cases.
-     * its better to not override the not-so-accurate
-     * sta_info derived rx.last_rate with a completely bogus
-     * value. moreover, if there was no traffic then its
-     * better to report last used rate too instead of 0.
-     */
-    if (tried == 0.0 || mbps < 0.1)
-        return;
+    client->stats.tx.rate_capacity = rate.mbps_capacity;
+    client->stats.tx.rate_perceived = rate.mbps_perceived;
 
-    client->stats.tx.last_rate = mbps * 1000;
-
-    LOG(DEBUG, "PHY stats: %s: "MAC_ADDRESS_FORMAT": tx mbps=%.0f psr=%1.2f snr=%"PRId32,
-        ifname, MAC_ADDRESS_PRINT(mac), mbps, psr, client->stats.rx.snr);
+    LOG(DEBUG, "PHY stats: %s: "MAC_ADDRESS_FORMAT": tx mbps=%.0f/%.0f psr=%1.2f snr=%"PRId32,
+        ifname, MAC_ADDRESS_PRINT(mac),
+        rate.mbps_capacity, rate.mbps_perceived,
+        rate.psr, client->stats.rx.snr);
 }
 
 static int wl80211_client_sta_info_parse(
@@ -1035,14 +1041,14 @@ static int wl80211_client_mcs_stats_parse(FILE *f, wl80211_client_record_t *clie
     if (kconfig_enabled(CONFIG_BCM_USE_RATE_HISTO_TO_EXPECTED_TPUT)) {
         if (tx_mpdus) {
             tx_phyrate /= tx_mpdus;
-            tx_phyrate *= 1000;
-            client->stats.tx.last_rate = tx_phyrate;
+            client->stats.tx.rate_capacity = tx_phyrate;
+            client->stats.tx.rate_perceived = tx_phyrate;
         }
 
         if (rx_mpdus) {
             rx_phyrate /= rx_mpdus;
-            rx_phyrate *= 1000;
-            client->stats.rx.last_rate = rx_phyrate;
+            client->stats.rx.rate_capacity = rx_phyrate;
+            client->stats.rx.rate_perceived = rx_phyrate;
         }
 
         LOG(DEBUG, "MCS expected tput: %s (%s): "MAC_ADDRESS_FORMAT
@@ -1123,24 +1129,13 @@ static void wl80211_client_assoclist_parse(
 }
 
 static void wl80211_client_rxavgrate_cb(
-        const char                 *ifname,
-        const char                 *mac_octet,
-        float                       mbps,
-        float                       psr,
-        float                       tried,
-        void                       *arg)
+        const char                  *ifname,
+        const char                  *mac_octet,
+        const struct bcmwl_sta_rate *rate,
+        void                        *arg)
 {
     wl80211_client_ctx_t *ctx = arg;
     wl80211_client_record_t *client;
-
-    /* the mbps is known to be buggy in some corner cases.
-     * its better to not override the not-so-accurate
-     * sta_info derived rx.last_rate with a completely bogus
-     * value. moreover, if there was no traffic then its
-     * better to report last used rate too instead of 0.
-     */
-    if (tried == 0.0 || mbps < 0.1)
-        return;
 
     ds_dlist_foreach(ctx->list, client) {
         if (strcmp(client->info.ifname, ifname))
@@ -1148,11 +1143,13 @@ static void wl80211_client_rxavgrate_cb(
         if (memcmp(client->info.mac, mac_octet, sizeof(client->info.mac)))
             continue;
 
-        client->stats.rx.last_rate = mbps * 1000;
-        LOGD("Setting rx.last_rate to %d for "MAC_ADDRESS_FORMAT" on %s",
-             client->stats.rx.last_rate,
-             MAC_ADDRESS_PRINT(client->info.mac),
-             ifname);
+        client->stats.rx.rate_capacity = rate->mbps_capacity;
+        client->stats.rx.rate_perceived = rate->mbps_perceived;
+
+        LOGD("PHY stats: %s: "MAC_ADDRESS_FORMAT": tx mbps=%.0f/%.0f psr=%1.2f",
+             ifname, MAC_ADDRESS_PRINT(client->info.mac),
+             rate->mbps_capacity, rate->mbps_perceived,
+             rate->psr);
         return;
     }
 }

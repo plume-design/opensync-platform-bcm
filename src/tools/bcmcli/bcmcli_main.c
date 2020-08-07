@@ -523,11 +523,9 @@ static bool cmd_detect_max_lan_ifnames(int argc, char *argv[])
 
 static bool cmd_tx_avg_rate(int argc, char *argv[])
 {
+    struct bcmwl_sta_rate rate;
     const char *ifname;
     const char *macstr;
-    float mbps;
-    float psr;
-    float tried;
 
     if (WARN_ON(argc < 2))
         return false;
@@ -535,13 +533,14 @@ static bool cmd_tx_avg_rate(int argc, char *argv[])
     bcmwl_ioctl_init();
     ifname = *argv++;
     macstr = *argv++;
-    if (bcmwl_sta_get_tx_avg_rate(ifname, macstr, &mbps, &psr, &tried) < 0)
+    if (bcmwl_sta_get_tx_avg_rate(ifname, macstr, &rate) < 0)
         return false;
 
-    printf("%s: %s: tx mbps %f psr %f tried %f expected %f\n",
-           ifname, macstr, mbps, psr, tried,
+    printf("%s: %s: tx mbps %f/%f psr %f tried %f expected %f/%f\n",
+           ifname, macstr, rate.mbps_perceived, rate.mbps_capacity, rate.psr, rate.tried,
            /* rule of thumb: 10% mac overhead, 15% tcp ack/collisions */
-           mbps * psr * 0.9 * 0.85);
+           rate.mbps_perceived * rate.psr * 0.9 * 0.85,
+           rate.mbps_capacity * rate.psr * 0.9 * 0.85);
     return true;
 }
 

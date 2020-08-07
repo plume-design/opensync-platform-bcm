@@ -545,18 +545,91 @@ void bcmwl_sta_resync(const char *ifname)
     free(clients);
 }
 
+struct bcmwl_sta_pktq_stats {
+    unsigned long long phyrate;
+    unsigned long long acked;
+    unsigned long long retry;
+    unsigned long long bw;
+    unsigned long long nss[4];
+    unsigned long long tones;
+    unsigned long long mumimo;
+    unsigned long long muofdma;
+};
+
+static inline unsigned long
+bcmwl_sta_arr_sub(unsigned long long *arr, size_t arr_len, unsigned long long budget)
+{
+    unsigned long sub;
+    size_t i;
+    for (i = 0; i < arr_len; i++) {
+        sub = arr[i] > budget ? budget : arr[i];
+        arr[i] -= sub;
+        budget -= sub;
+    }
+    return budget;
+}
+
+static inline unsigned int
+bcmwl_sta_pktq_version(void)
+{
+#ifdef PKTQ_LOG_V06_HEADINGS_SIZE
+    return 6;
+#else
+    return 4;
+#endif
+}
+
+int bcmwl_sta_get_tx_avg_rate_v6_mu(const wl_iov_pktq_log_t *resp,
+                                    int i,
+                                    const struct bcmwl_ioctl_num_conv *conv,
+                                    struct bcmwl_sta_pktq_stats *stats)
+{
+#ifdef PKTQ_LOG_V06_HEADINGS_SIZE
+    const mac_log_mu_counters_v06_t *c;
+    int n;
+
+    if (resp->version != 6)
+        return -1;
+    if ((resp->params.addr_type[i] & 0x7F) != 'M')
+        return -1;
+
+    n = resp->pktq_log.v06.num_prec[i];
+    c = resp->pktq_log.v06.counters[i].mu;
+
+    for (; n; n--, c++) {
+        stats->mumimo += conv->dtoh32(c->count[MAC_LOG_MU_VHTMU]);
+        stats->mumimo += conv->dtoh32(c->count[MAC_LOG_MU_HEMMU]);
+        stats->mumimo += conv->dtoh32(c->count[MAC_LOG_MU_HEMOM]);
+        stats->muofdma += conv->dtoh32(c->count[MAC_LOG_MU_HEMOM]);
+        stats->muofdma += conv->dtoh32(c->count[MAC_LOG_MU_HEOMU]);
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_26]) * 26;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_52]) * 52;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_106]) * 106;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_242]) * 242;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_484]) * 484;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_996]) * 996;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_2x996]) * 996 * 2;
+    }
+
+    LOGT("%s: %llu/%llu/%llu", __func__, stats->mumimo, stats->muofdma, stats->tones);
+    return 0;
+#else
+    /* if it reports v6 but headers didn't say it is
+     * supported then somethimg is clearly wrong with the
+     * headers at build time and it needs to be addressed.
+     */
+    WARN_ON(resp->version == 6);
+    return -1;
+#endif
+}
+
 int bcmwl_sta_get_tx_avg_rate_v6(const wl_iov_pktq_log_t *resp,
                                  int i,
                                  const struct bcmwl_ioctl_num_conv *conv,
-                                 float *mbps,
-                                 float *psr,
-                                 float *tried)
+                                 struct bcmwl_sta_pktq_stats *stats)
 {
 #ifdef PKTQ_LOG_V06_HEADINGS_SIZE
     const pktq_log_counters_v06_t *c;
-    float phyrate = 0;
-    float acked = 0;
-    float retry = 0;
     int n;
 
     if (resp->version != 6)
@@ -569,21 +642,17 @@ int bcmwl_sta_get_tx_avg_rate_v6(const wl_iov_pktq_log_t *resp,
     c = resp->pktq_log.v06.counters[i].pktq;
 
     for (; n; n--, c++) {
-        phyrate += conv->dtoh64(c->txrate_main);
-        acked += conv->dtoh32(c->acked);
-        retry += conv->dtoh32(c->retry);
+        stats->phyrate += conv->dtoh64(c->txrate_main) / 10;
+        stats->acked += conv->dtoh32(c->acked);
+        stats->retry += conv->dtoh32(c->retry);
+        stats->bw += conv->dtoh64(c->bandwidth);
+        stats->nss[0] += conv->dtoh32(c->nss[0]);
+        stats->nss[1] += conv->dtoh32(c->nss[1]);
+        stats->nss[2] += conv->dtoh32(c->nss[2]);
+        stats->nss[3] += conv->dtoh32(c->nss[3]);
     }
 
-    *mbps *= *tried;
-    *psr *= *tried;
-    *tried += acked + retry;
-    if (*tried) {
-        *mbps += phyrate * 0.1;
-        *mbps /= *tried;
-        *psr += acked;
-        *psr /= *tried;
-    }
-
+    LOGT("%s: %llu/%llu/%llu/%llu/%llu.%llu.%llu.%.llu", __func__, stats->phyrate, stats->acked, stats->retry, stats->bw, stats->nss[0], stats->nss[1], stats->nss[2], stats->nss[3]);
     return 0;
 #else
     /* if it reports v6 but headers didn't say it is
@@ -598,14 +667,9 @@ int bcmwl_sta_get_tx_avg_rate_v6(const wl_iov_pktq_log_t *resp,
 int bcmwl_sta_get_tx_avg_rate_v5(const wl_iov_pktq_log_t *resp,
                                  int i,
                                  const struct bcmwl_ioctl_num_conv *conv,
-                                 float *mbps,
-                                 float *psr,
-                                 float *tried)
+                                 struct bcmwl_sta_pktq_stats *stats)
 {
     const pktq_log_counters_v05_t *c;
-    float phyrate = 0;
-    float acked = 0;
-    float retry = 0;
     int n;
 
     if (resp->version != 5)
@@ -618,35 +682,21 @@ int bcmwl_sta_get_tx_avg_rate_v5(const wl_iov_pktq_log_t *resp,
     c = resp->pktq_log.v05.counters[i];
 
     for (; n; n--, c++) {
-        phyrate += conv->dtoh32(c->txrate_main);
-        acked += conv->dtoh32(c->acked);
-        retry += conv->dtoh32(c->retry);
+        stats->phyrate += conv->dtoh32(c->txrate_main) / 2;
+        stats->acked += conv->dtoh32(c->acked);
+        stats->retry += conv->dtoh32(c->retry);
     }
 
-    *mbps *= *tried;
-    *psr *= *tried;
-    *tried += acked + retry;
-    if (*tried) {
-        *mbps += phyrate * 0.5;
-        *mbps /= *tried;
-        *psr += acked;
-        *psr /= *tried;
-    }
-
+    LOGT("%s: %llu/%llu/%llu", __func__, stats->phyrate, stats->acked, stats->retry);
     return 0;
 }
 
 int bcmwl_sta_get_tx_avg_rate_v4(const wl_iov_pktq_log_t *resp,
                                  int i,
                                  const struct bcmwl_ioctl_num_conv *conv,
-                                 float *mbps,
-                                 float *psr,
-                                 float *tried)
+                                 struct bcmwl_sta_pktq_stats *stats)
 {
     const pktq_log_counters_v04_t *c;
-    float phyrate = 0;
-    float acked = 0;
-    float retry = 0;
     int n;
 
     if (resp->version != 4)
@@ -659,50 +709,61 @@ int bcmwl_sta_get_tx_avg_rate_v4(const wl_iov_pktq_log_t *resp,
     c = resp->pktq_log.v04.counters[i];
 
     for (; n; n--, c++) {
-        phyrate += conv->dtoh32(c->txrate_main);
-        acked += conv->dtoh32(c->acked);
-        retry += conv->dtoh32(c->retry);
+        stats->phyrate += conv->dtoh32(c->txrate_main) / 2;
+        stats->acked += conv->dtoh32(c->acked);
+        stats->retry += conv->dtoh32(c->retry);
     }
 
-    *mbps *= *tried;
-    *psr *= *tried;
-    *tried += acked + retry;
-    if (*tried) {
-        *mbps += phyrate * 0.5;
-        *mbps /= *tried;
-        *psr += acked;
-        *psr /= *tried;
-    }
-
+    LOGT("%s: %llu/%llu/%llu", __func__, stats->phyrate, stats->acked, stats->retry);
     return 0;
 }
 
 int bcmwl_sta_get_tx_avg_rate(const char *ifname,
                               const char *mac,
-                              float *mbps,
-                              float *psr,
-                              float *tried)
+                              struct bcmwl_sta_rate *rate)
 {
     const struct bcmwl_ioctl_num_conv *conv;
+    struct bcmwl_sta_pktq_stats stats = {0};
     wl_iov_mac_full_params_t req;
     wl_iov_pktq_log_t resp;
+    unsigned long long sum_nss_su = 0;
+    unsigned long long sum_nss;
+    unsigned long max_nss;
+    unsigned int pktq_ver = bcmwl_sta_pktq_version();
     unsigned int i;
+    float mbps;
+    float avg_nss_su = 0;
+    float avg_nss = 0;
+    float nss_ratio = 0;
+    float tones = 0;
+    float bw;
+    float bw_cnt_su;
+    float bw_cnt_mu;
+    float bw_avg;
+    float bw_ratio = 0;
 
     if (WARN_ON(!(conv = bcmwl_ioctl_lookup_num_conv(ifname))))
         return -1;
 
     req.params.addr_type[0] = 'A';
     req.params.addr_type[1] = 'N';
+    req.params.addr_type[2] = 'M';
     req.extra_params.addr_info[0] = 1 << 31; /* log auto bit, ie. all tids */
     req.extra_params.addr_info[1] = 1 << 31; /* log auto bit, ie. all tids */
+    req.extra_params.addr_info[2] = 1 << 31; /* log auto bit, ie. all tids */
     sscanf(mac, "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
            &req.params.ea[0].octet[0], &req.params.ea[0].octet[1],
            &req.params.ea[0].octet[2], &req.params.ea[0].octet[3],
            &req.params.ea[0].octet[4], &req.params.ea[0].octet[5]);
     memcpy(&req.params.ea[1], &req.params.ea[0], sizeof(req.params.ea[0]));
+    memcpy(&req.params.ea[2], &req.params.ea[0], sizeof(req.params.ea[0]));
     req.params.num_addrs = 2;
-    req.params.num_addrs |= 4 << 8; /* v4 stats */
+    req.params.num_addrs += pktq_ver >= 6 ? 1 : 0;
+    req.params.num_addrs |= pktq_ver << 8;
     req.params.num_addrs = conv->dtoh32(req.params.num_addrs);
+
+    LOGT("%s: %s: pktq_stats addr=0x%08x\n",
+         ifname, mac, conv->dtoh32(req.params.num_addrs));
 
     if (WARN_ON(!bcmwl_GIOV(ifname, "pktq_stats", &req, &resp)))
         return -1;
@@ -710,20 +771,110 @@ int bcmwl_sta_get_tx_avg_rate(const char *ifname,
     resp.version = conv->dtoh32(resp.version);
     resp.params.num_addrs = conv->dtoh32(resp.params.num_addrs);
 
-    *mbps = 0;
-    *psr = 0;
-    *tried = 0;
-
     for (i = 0; i < resp.params.num_addrs; i++) {
-        if (bcmwl_sta_get_tx_avg_rate_v6(&resp, i, conv, mbps, psr, tried) == 0)
+        if (bcmwl_sta_get_tx_avg_rate_v6_mu(&resp, i, conv, &stats) == 0)
             continue;
-        if (bcmwl_sta_get_tx_avg_rate_v5(&resp, i, conv, mbps, psr, tried) == 0)
+        if (bcmwl_sta_get_tx_avg_rate_v6(&resp, i, conv, &stats) == 0)
             continue;
-        if (bcmwl_sta_get_tx_avg_rate_v4(&resp, i, conv, mbps, psr, tried) == 0)
+        if (bcmwl_sta_get_tx_avg_rate_v5(&resp, i, conv, &stats) == 0)
+            continue;
+        if (bcmwl_sta_get_tx_avg_rate_v4(&resp, i, conv, &stats) == 0)
             continue;
 
         WARN_ON(1);
     }
+
+    sum_nss = stats.nss[0] +
+              stats.nss[1] +
+              stats.nss[2] +
+              stats.nss[3];
+
+    bw = stats.bw;
+    bw /= sum_nss ?: stats.acked;
+
+    if (stats.muofdma > 0) {
+        tones = stats.tones;
+        tones /= stats.muofdma;
+    }
+
+    if (sum_nss > stats.mumimo)
+        sum_nss_su = sum_nss - stats.mumimo;
+
+    max_nss = stats.nss[3] ? 4 :
+              stats.nss[2] ? 3 :
+              stats.nss[1] ? 2 :
+              stats.nss[0] ? 1 : 0;
+
+    if (sum_nss > 0) {
+        avg_nss = (1 * stats.nss[0]) +
+                  (2 * stats.nss[1]) +
+                  (3 * stats.nss[2]) +
+                  (4 * stats.nss[3]);
+        avg_nss /= sum_nss;
+    }
+
+    if (max_nss > 0)
+        nss_ratio = avg_nss / max_nss;
+
+    if (sum_nss_su > 0) {
+        bcmwl_sta_arr_sub(stats.nss, ARRAY_SIZE(stats.nss), stats.mumimo);
+
+        avg_nss_su = (1 * stats.nss[0]) +
+                     (2 * stats.nss[1]) +
+                     (3 * stats.nss[2]) +
+                     (4 * stats.nss[3]);
+        avg_nss_su /= sum_nss_su;
+    }
+
+    memset(rate, 0, sizeof(*rate));
+    rate->tried = stats.acked + stats.retry;
+    mbps = stats.phyrate;
+    mbps /= rate->tried;
+
+    if (rate->tried > 0) {
+        /* The reported phyrate does not factor in MU-OFDMA
+         * tx RU reduction, but does implicitly have its nss
+         * constituent reduced by MU-MIMO tx. Therefore both
+         * capacity and perceived values need to be
+         * recovered.
+         *
+         * Capacity recovery assumes MU-MIMO will be
+         * exclusively responsible for nss
+         * degradation prioritizing nss=1 and up
+         * and therefore will result over-reported
+         * phyrates.
+         *
+         * Perceived recovery will under-report phyrates
+         * because RU tone do not scale linearly with BW.
+         */
+
+        rate->mbps_capacity = mbps;
+        if (max_nss > 0 && nss_ratio > 0 && avg_nss_su > 0) {
+            rate->mbps_capacity /= nss_ratio;
+            rate->mbps_capacity *= avg_nss_su;
+            rate->mbps_capacity /= max_nss;
+        }
+
+        rate->mbps_perceived = mbps;
+        if (bw > 0) {
+            bw_cnt_su = bw * ((sum_nss ?: stats.acked) - stats.muofdma);
+            bw_cnt_mu = tones * 0.078125 * 1.05 * stats.muofdma;
+            bw_avg = (bw_cnt_su + bw_cnt_mu) / (sum_nss ?: stats.acked);
+            bw_ratio = bw_avg / bw;
+            rate->mbps_perceived *= bw_ratio;
+        }
+
+        rate->psr = stats.acked;
+        rate->psr /= rate->tried;
+    }
+
+    LOGT("%s: %s: tones=%f bw=%f/%f nss=%lu/%f/%f tried=%f(%llu,%llu,%llu) mbps=%f/%f/%f psr=%f",
+          ifname, mac,
+          tones, bw, bw_ratio,
+          max_nss, avg_nss, avg_nss_su,
+          rate->tried, stats.acked, stats.retry, sum_nss,
+          mbps, rate->mbps_capacity, rate->mbps_perceived,
+          rate->psr);
 
     return 0;
 }
@@ -731,14 +882,13 @@ int bcmwl_sta_get_tx_avg_rate(const char *ifname,
 int bcmwl_sta_get_rx_avg_rate(const char *ifname,
                               void (*iter)(const char *ifname,
                                            const char *mac_octet,
-                                           float mbps,
-                                           float psr,
-                                           float tried,
+                                           const struct bcmwl_sta_rate *rate,
                                            void *arg),
                               void *arg)
 {
 #ifdef SCB_RX_REPORT_DATA_STRUCT_VERSION
     const struct bcmwl_ioctl_num_conv *conv;
+    struct bcmwl_sta_rate rate;
     iov_rx_report_counters_t *c;
     iov_rx_report_record_t *r;
     union {
@@ -750,6 +900,14 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
     float psr;
     float phyrate;
     float mpdu;
+    float ampdu;
+    float ampdu_ofdma;
+    float bw;
+    float bw_cnt_su;
+    float bw_cnt_mu;
+    float bw_avg;
+    float bw_ratio;
+    float tones;
     float retried;
     size_t tid;
     int i;
@@ -773,9 +931,14 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
 
         phyrate = 0;
         mpdu = 0;
+        ampdu = 0;
+        ampdu_ofdma = 0;
         mbps = 0;
         psr = 0;
         retried = 0;
+        bw = 0;
+        bw_ratio = 1;
+        tones = 0;
 
         for (tid = 0; tid < ARRAY_SIZE(r->station_counters); tid++) {
             c = &r->station_counters[tid];
@@ -785,17 +948,64 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
 
             phyrate += conv->dtoh64(c->rxphyrate);
             mpdu += conv->dtoh32(c->rxmpdu);
+            ampdu += conv->dtoh32(c->rxampdu);
             retried += conv->dtoh32(c->rxretried);
+            bw += conv->dtoh32(c->rxbw);
+#if SCB_RX_REPORT_DATA_STRUCT_VERSION >= 2
+            ampdu_ofdma += conv->dtoh32(c->rxampdu_ofdma);
+            tones += conv->dtoh32(c->rxtones);
+#endif
         }
 
         if (mpdu > 0) {
-            mbps = phyrate;
-            mbps /= 1000;
-            mbps /= mpdu;
             psr = mpdu / (mpdu + retried);
         }
 
-        iter(ifname, (const char *)r->station_address.octet, mbps, psr, mpdu + retried, arg);
+        if (ampdu > 0) {
+            mbps = phyrate;
+            mbps /= 1000;
+            mbps /= ampdu;
+            tones /= ampdu_ofdma ?: 1;
+            bw /= ampdu;
+
+            if (bw > 0) {
+               /* Reported phyrate is decreased by MU RU rx
+                * so the SU capacity needs to be recovered.
+                * It's not perfect because RU tone count
+                * does not scale linearly with bandwidth.
+                * The 5% is to roughly account for that.
+                */
+
+                bw_cnt_su = bw * (ampdu - ampdu_ofdma);
+                bw_cnt_mu = tones * 0.078125 * 1.05 * ampdu_ofdma;
+                bw_avg = (bw_cnt_su + bw_cnt_mu) / ampdu;
+                bw_ratio = bw_avg / bw;
+            }
+        }
+
+        rate.tried = mpdu + retried;
+        rate.mbps_capacity = mbps / bw_ratio;
+        rate.mbps_perceived = mbps;
+        rate.psr = psr;
+
+        LOGT("%s: %02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx: "
+             "bw=%f/%f tones=%f ampdu=%f/%f tried=%f mbps=%f/%f psr=%f",
+             ifname,
+             r->station_address.octet[0],
+             r->station_address.octet[1],
+             r->station_address.octet[2],
+             r->station_address.octet[3],
+             r->station_address.octet[4],
+             r->station_address.octet[5],
+             bw, bw_ratio,
+             tones,
+             ampdu_ofdma, ampdu,
+             rate.tried,
+             rate.mbps_capacity,
+             rate.mbps_perceived,
+             rate.psr);
+
+        iter(ifname, (const char *)r->station_address.octet, &rate, arg);
     }
 
     return 0;

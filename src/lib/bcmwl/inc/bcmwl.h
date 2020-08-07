@@ -147,17 +147,21 @@ void bcmwl_sta_get_schema(const char *ifname,
                           const char *mac,
                           struct schema_Wifi_Associated_Clients *c);
 void bcmwl_sta_resync(const char *ifname);
+
+struct bcmwl_sta_rate {
+    float tried;
+    float mbps_capacity; /* normalizes towards SU */
+    float mbps_perceived; /* includes both SU+MU */
+    float psr;
+};
+
 int bcmwl_sta_get_tx_avg_rate(const char *ifname,
                               const char *mac,
-                              float *mbps,
-                              float *psr,
-                              float *tried);
+                              struct bcmwl_sta_rate *rate);
 int bcmwl_sta_get_rx_avg_rate(const char *ifname,
                               void (*iter)(const char *ifname,
                                            const char *mac_octet,
-                                           float mbps,
-                                           float psr,
-                                           float tried,
+                                           const struct bcmwl_sta_rate *rate,
                                            void *arg),
                               void *arg);
 

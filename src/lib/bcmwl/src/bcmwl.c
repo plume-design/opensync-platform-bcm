@@ -46,6 +46,30 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <bcmwl_acl.h>
 
 /* local */
+static void bcmwl_radar_onsta(void)
+{
+    struct dirent *p;
+    DIR *d;
+
+    /* Stock driver behavior would exempt regular APSTA
+     * operation from radar detection assuming the AP
+     * (master) will merely send a CSA when it detects a
+     * radar. The driver is already running (as expected)
+     * radar detection on MAP-based APSTA though. Since
+     * we're using GRE (and still will be for a while) the
+     * regular APSTA needs to respect radars too. The driver
+     * has been patched by BCM to expose this business
+     * policy as an iovar in recent drivers. Tweak it on
+     * best-effort basis so older drivers still work to the
+     * best of their ability.
+     */
+    for (d = opendir("/sys/class/net"); d && (p = readdir(d)); )
+        if (bcmwl_is_phy(p->d_name))
+            WL(p->d_name, "dfs_handle_radar_onsta", "1");
+    if (!WARN_ON(!d))
+        closedir(d);
+}
+
 static void bcmwl_keep_ap_up(void)
 {
     struct dirent *p;
@@ -144,6 +168,7 @@ bool bcmwl_init_wm(void)
     bcmwl_event_enable_all(WLC_E_SCAN_COMPLETE);
     bcmwl_event_enable_all(WLC_E_SET_SSID);
     bcmwl_event_enable_all(WLC_E_IF);
+    bcmwl_radar_onsta();
     bcmwl_keep_ap_up();
     bcmwl_mpc_disable();
     bcmwl_mask_nonstd_11n_2ghz_rates();

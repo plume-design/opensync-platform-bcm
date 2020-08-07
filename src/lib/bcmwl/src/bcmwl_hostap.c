@@ -296,6 +296,12 @@ bcmwl_hostap_bss_apply(const struct schema_Wifi_VIF_Config *vconf,
         return;
 
     if (hapd) {
+        /* The driver doesn't really care but this is
+         * necessary to make hostapd work with dfs channels
+         * and dfs offload on broadcom wl/dhd.
+         */
+        STRSCPY_WARN(hapd->country, "00");
+
         WARN_ON(hapd_conf_gen(hapd, rconf, vconf) < 0);
         WARN_ON(hapd_conf_apply(hapd) < 0);
     }

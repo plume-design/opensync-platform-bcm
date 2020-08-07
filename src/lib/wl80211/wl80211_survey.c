@@ -127,6 +127,7 @@ bool wl80211_survey_results_convert(
     if (!data_old) return false;
     if (!survey_record) return false;
 
+    survey_record->chan_noise = data_new->stats.nf;
     survey_record->chan_busy = data_new->stats.percent.busy;
     survey_record->chan_tx = data_new->stats.percent.tx;
     survey_record->chan_rx = data_new->stats.percent.rx;

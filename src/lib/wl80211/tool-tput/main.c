@@ -54,29 +54,37 @@ struct ctx {
 static void
 sta_cb(const char *ifname,
        const char *mac_octet,
-       float rxmbps,
-       float rxpsr,
-       float rxtried,
+       const struct bcmwl_sta_rate *rxrate,
        void *arg)
 {
     struct ctx *ctx = arg;
-    float txmbps;
-    float txpsr;
-    float txtried;
+    struct bcmwl_sta_rate txrate;
     char macaddr[18];
 
     snprintf(macaddr, sizeof(macaddr), "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
             mac_octet[0], mac_octet[1], mac_octet[2],
             mac_octet[3], mac_octet[4], mac_octet[5]);
 
-    if (bcmwl_sta_get_tx_avg_rate(ifname, macaddr, &txmbps, &txpsr, &txtried) < 0)
+    if (bcmwl_sta_get_tx_avg_rate(ifname, macaddr, &txrate) < 0)
         return;
 
-    fprintf(stdout, "%8s %16s rx %4.0f tx %4.0f rxpsr %.2f txpsr %.2f txpkts %6.0f rxpkts %6.0f rxbusy %3lu%% txbusy %3lu%% -> rxudp %4.0f rxtcp %4.0f txudp %4.0f txtcp %4.0f\n",
+    fprintf(stdout, "%8s %16s rx %4.0f/%4.0f tx %4.0f/%4.0f rxpsr %.2f txpsr %.2f txpkts %6.0f rxpkts %6.0f rxbusy %3lu%% txbusy %3lu%% -> rxudp %4.0f/%4.0f rxtcp %4.0f/%4.0f txudp %4.0f/%4.0f txtcp %4.0f/%4.0f\n",
             ifname, macaddr,
-            rxmbps, txmbps, rxpsr, txpsr, txtried, rxtried, ctx->rx, ctx->tx,
-            UDP(rxmbps, ctx->rx, rxpsr), TCP(rxmbps, ctx->rx, rxpsr),
-            UDP(txmbps, ctx->tx, txpsr), TCP(txmbps, ctx->tx, txpsr));
+            rxrate->mbps_perceived,
+            rxrate->mbps_capacity,
+            txrate.mbps_perceived,
+            txrate.mbps_capacity,
+            rxrate->psr, txrate.psr,
+            txrate.tried, rxrate->tried,
+            ctx->rx, ctx->tx,
+            UDP(rxrate->mbps_perceived, ctx->rx, rxrate->psr),
+            UDP(rxrate->mbps_capacity, ctx->rx, rxrate->psr),
+            TCP(rxrate->mbps_perceived, ctx->rx, rxrate->psr),
+            TCP(rxrate->mbps_capacity, ctx->rx, rxrate->psr),
+            UDP(txrate.mbps_perceived, ctx->tx, txrate.psr),
+            UDP(txrate.mbps_capacity, ctx->tx, txrate.psr),
+            TCP(txrate.mbps_perceived, ctx->tx, txrate.psr),
+            TCP(txrate.mbps_capacity, ctx->tx, txrate.psr));
 
     ctx->n++;
 }
@@ -93,6 +101,7 @@ mac2buf(const char *str)
 int
 main(int argc, const char **argv)
 {
+    const struct bcmwl_sta_rate zerorxrate = {0};
     struct ctx ctx;
     const char *macaddr;
     struct dirent *d;
@@ -133,7 +142,7 @@ main(int argc, const char **argv)
 
             while ((macaddr = strsep(&assoc, "\r\n\t ")))
                 if (strstr(macaddr, ":")) /* naive but sufficient */
-                    sta_cb(d->d_name, mac2buf(macaddr), 0, 0, 0, &ctx);
+                    sta_cb(d->d_name, mac2buf(macaddr), &zerorxrate, &ctx);
         }
         closedir(dir);
         sleep(1);
