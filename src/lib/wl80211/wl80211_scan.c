@@ -149,16 +149,10 @@ static bool wl80211_scan_results_convert(
 
         entry->type         = radio_cfg->type;
         entry->lastseen     = record->lastseen;
+        entry->sig          = record->rssi - record->noise;
 
-        #if(0)
-            entry->sig      = record->rssi - record->noise;
-            LOG(TRACE, "RSSI on node: %s,rssi: %d noise, %d before conversion: %d",
-                record->bssid, record->rssi, record->noise, entry->sig);
-        #else
-            entry->sig      = record->rssi - WL80211_DEFAULT_BEACON_NOISE_FLOOR;
-            LOG(TRACE, "signal/noise on node: %s, rssi: %d noise (const), %d before conversion: %d",
-                record->bssid, record->rssi, WL80211_DEFAULT_BEACON_NOISE_FLOOR, entry->sig);
-        #endif
+        LOG(TRACE, "RSSI on node: %s, rssi: %d noise %d snr: %d",
+            record->bssid, record->rssi, record->noise, entry->sig);
 
         /* Prevent sending negative values */
         if (entry->sig < 0) {
@@ -320,11 +314,6 @@ static bool wl80211_scan_results_parse(
                 rssi = strtok(NULL, " ");
                 if (rssi) {
                     entry->rssi = atoi(rssi);
-
-                    LOG(TRACE,
-                        "Parsed %s signal %d, adjusted for floor noise: %d",
-                        radio_get_name_from_type(radio_type),
-                        entry->rssi, entry->rssi - WL80211_DEFAULT_BEACON_NOISE_FLOOR);
                 }
 
                 if (rssi == 0)

@@ -65,6 +65,9 @@ DEFINES      += -Wno-clobbered
 # Do not treat #warning as errors
 DEFINES      += -Wno-error=cpp
 #DEFINES      += -Os
+LDFLAGS      += -Wl,-rpath-link=$(BCM_FSBUILD_DIR)/lib
+LDFLAGS      += -Wl,-rpath-link=$(BCM_FSBUILD_DIR)/public/lib
+LDFLAGS      += -Wl,-rpath-link=$(BCM_FSBUILD_DIR)/gpl/lib
 LDFLAGS      += -L$(BCM_FSBUILD_DIR)/lib
 LDFLAGS      += -L$(BCM_FSBUILD_DIR)/public/lib
 LDFLAGS      += -L$(BCM_FSBUILD_DIR)/gpl/lib

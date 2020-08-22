@@ -35,9 +35,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 /* TODO: move this into dpp */
 #define STATS_DELTA(n, o) ((n) < (o) ? (n) : (n) - (o))
 #define STATS_PERCENT(v1, v2) (v2 > 0 ? ((v1)*100/(v2)) : 0)
-
-#define WL80211_DEFAULT_BEACON_NOISE_FLOOR   (-95)
-
 #define WL80211_CMD_BUFF_SIZE       4096
 
 bool wl80211_init(void);

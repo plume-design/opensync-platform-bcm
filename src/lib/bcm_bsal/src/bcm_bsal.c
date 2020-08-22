@@ -1230,6 +1230,7 @@ static void probe_req_filter_timer_callback(
         ev_timer *watcher,
         int revents)
 {
+    bool propagate_probe_req = true;
     bsal_event_t event;
     bsal_ev_probe_req_t *prob_req_ev;
     client_t *client;
@@ -1263,6 +1264,11 @@ static void probe_req_filter_timer_callback(
              FMT(os_macaddr_t, client->hwaddr), probe->snr, client->snr_hwm);
 
         if (probe->snr <= client->snr_hwm) {
+            /*
+             * Drop probe reqs with SNR < HWM to prevent (false)
+             * BAND_STEERING_ATTEMPT in bsReports.
+             */
+            propagate_probe_req = false;
             client_acl_unblock(client);
         } else {
             client_acl_block(client);
@@ -1270,7 +1276,10 @@ static void probe_req_filter_timer_callback(
     }
 
     probe_clean(client);
-    _bsal_event_callback(&event);
+
+    if (propagate_probe_req) {
+        _bsal_event_callback(&event);
+    }
 }
 
 
