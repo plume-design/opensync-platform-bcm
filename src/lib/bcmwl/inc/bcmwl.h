@@ -207,6 +207,12 @@ enum bcmwl_chan_state
     BCMWL_CHAN_STATE_NOP_FINISHED,
 };
 
+typedef struct
+{
+    uint16_t wlc_ver_major;
+    uint16_t wlc_ver_minor;
+} bcmwl_wlc_ver_t;
+
 void bcmwl_dfs_init(void);
 void bcmwl_event_handle_radar(const char *ifname);
 void bcmwl_event_handle_ap_chan_change(const char *ifname, void *ev);
@@ -221,12 +227,13 @@ void bcmwl_radio_fallback_parents_get(const char *phyname, struct schema_Wifi_Ra
 
 bool bcmwl_misc_set_neighbor(const char *ifname, const char *bssid, const char *bssid_info,
                              const char *regulatory, const char *channel, const char *phytype,
-                             const char *prefer);
+                             const char *prefer, const char *ssid);
 bool bcmwl_misc_remove_neighbor(const char *ifname, const char *bssid);
 int bcmwl_system_start_closefd(const char *command);
 bool bcmwl_radio_is_dfs_channel(const char *phy, uint8_t chan, const char *ht_mode);
 bool bcmwl_dfs_bgcac_active(const char *phy, uint8_t chan, const char *ht_mode);
 void bcmwl_dfs_bgcac_deactivate(const char *phy);
 void bcmwl_dfs_bgcac_recalc(const char *phy);
+bool bcmwl_wlc_ver(const char *ifname, bcmwl_wlc_ver_t *ver);
 
 #endif /* BCMWL_H_INCLUDED */

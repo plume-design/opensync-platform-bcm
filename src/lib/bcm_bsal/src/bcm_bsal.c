@@ -1829,6 +1829,10 @@ bool bcm_bsal_rrm_set_neighbor(
         const char *ifname,
         const bsal_neigh_info_t *nr)
 {
+    struct wl_status status;
+
+    bcmwl_vap_get_status(ifname, &status);
+
     return bcmwl_misc_set_neighbor(ifname,
                                    strfmta("%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
                                            nr->bssid[0], nr->bssid[1], nr->bssid[2],
@@ -1844,7 +1848,8 @@ bool bcm_bsal_rrm_set_neighbor(
                                     * For unsolicited BSS TM request we build own action frame,
                                     * so not using driver Neighbor Report list.
                                     */
-                                   NEIGH_BTM_PREFERENCE);
+                                   NEIGH_BTM_PREFERENCE,
+                                   status.ssid);
 }
 
 bool bcm_bsal_rrm_remove_neighbor(

@@ -129,12 +129,33 @@ bool bcmwl_get_noise(const char *ifname, int *noise)
 bool
 bcmwl_misc_set_neighbor(const char *ifname, const char *bssid, const char *bssid_info,
                         const char *regulatory, const char *channel, const char *phytype,
-                        const char *prefer)
+                        const char *prefer, const char *ssid)
 {
+    bcmwl_wlc_ver_t wlc_ver;
     const char *output;
 
-    output = WL(ifname, "rrm_nbr_add_nbr", bssid, bssid_info, regulatory, channel, phytype, prefer);
-    WARN_ON(!output);
+    if (!bcmwl_wlc_ver(ifname, &wlc_ver))
+    {
+        /* Cyrus is known to lack "wl wlc_ver" support */
+        output = WL(ifname, "rrm_nbr_add_nbr", bssid, bssid_info, regulatory, channel, phytype, prefer);
+        WARN_ON(!output);
+        return true;
+    }
+
+    if (wlc_ver.wlc_ver_major == 9)
+    {
+        /* Augustus */
+        const char *chanspec = "0";
+        output = WL(ifname, "rrm_nbr_add_nbr", bssid, bssid_info, regulatory, channel, phytype, ssid,
+                    chanspec, prefer);
+        WARN_ON(!output);
+    }
+    else
+    {
+        LOGW("Failed to add Neigbor due to unknown wlc version: %d.%d",
+             wlc_ver.wlc_ver_major, wlc_ver.wlc_ver_minor);
+        return false;
+    }
 
     return !!output;
 }
@@ -148,4 +169,23 @@ bcmwl_misc_remove_neighbor(const char *ifname, const char *bssid)
     WARN_ON(!output);
 
     return !!output;
+}
+
+bool
+bcmwl_wlc_ver(const char *ifname, bcmwl_wlc_ver_t *ver)
+{
+    const struct bcmwl_ioctl_num_conv *conv;
+    wl_wlc_version_t val;
+
+    if (WARN_ON(!(conv = bcmwl_ioctl_lookup_num_conv(ifname))))
+        return false;
+
+    memset(&val, 0, sizeof(val));
+    if (!bcmwl_GIOV(ifname, "wlc_ver", NULL, &val))
+        return false;
+
+    ver->wlc_ver_major = conv->dtoh16(val.wlc_ver_major);
+    ver->wlc_ver_minor = conv->dtoh16(val.wlc_ver_minor);
+
+    return true;
 }

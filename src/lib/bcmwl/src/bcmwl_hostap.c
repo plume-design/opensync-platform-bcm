@@ -296,13 +296,25 @@ bcmwl_hostap_bss_apply(const struct schema_Wifi_VIF_Config *vconf,
         return;
 
     if (hapd) {
+        struct schema_Wifi_VIF_Config tmp_vconf;
+
         /* The driver doesn't really care but this is
          * necessary to make hostapd work with dfs channels
          * and dfs offload on broadcom wl/dhd.
          */
         STRSCPY_WARN(hapd->country, "00");
 
-        WARN_ON(hapd_conf_gen(hapd, rconf, vconf) < 0);
+        memcpy(&tmp_vconf, vconf, sizeof(tmp_vconf));
+        if (tmp_vconf.rrm) {
+            /* Disable hostapd rrm_neighbor_report, let driver handle Neighbor
+             * Request. Otherwise device will send two inconsistent Neighbor
+             * Reports on each Neighbor Request (one sent by hostapd and
+             * second by driver).
+             */
+            tmp_vconf.rrm = 0;
+        }
+
+        WARN_ON(hapd_conf_gen(hapd, rconf, &tmp_vconf) < 0);
         WARN_ON(hapd_conf_apply(hapd) < 0);
     }
 
