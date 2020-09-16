@@ -1265,10 +1265,12 @@ static void probe_req_filter_timer_callback(
 
         if (probe->snr <= client->snr_hwm) {
             /*
-             * Drop probe reqs with SNR < HWM to prevent (false)
-             * BAND_STEERING_ATTEMPT in bsReports.
+             * Drop probe reqs with SNR < HWM received from blacklisted STA.
+             * This prevents BM from generating (false) BAND_STEERING_ATTEMPT
+             * in bsReports.
              */
-            propagate_probe_req = false;
+            propagate_probe_req = !client->is_blacklisted;
+
             client_acl_unblock(client);
         } else {
             client_acl_block(client);
