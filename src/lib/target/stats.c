@@ -36,6 +36,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "wl80211_client.h"
 #include "wl80211_survey.h"
+#include "wl80211_device.h"
 
 #include "target.h"
 #include "bcmwl.h"
@@ -300,6 +301,21 @@ bool target_stats_scan_get(
 /******************************************************************************
  *  DEVICE definitions
  *****************************************************************************/
+
+bool target_stats_device_temp_get(radio_entry_t *radio_cfg,
+                                  dpp_device_temp_t *temp_entry)
+{
+    temp_entry->type = radio_cfg->type;
+    return wl80211_device_temp_results_get(radio_cfg->phy_name, &temp_entry->value);
+}
+
+bool target_stats_device_txchainmask_get(
+        radio_entry_t              *radio_cfg,
+        dpp_device_txchainmask_t   *txchainmask_entry)
+{
+    txchainmask_entry->type = radio_cfg->type;
+    return wl80211_device_txchainmask_get(radio_cfg->phy_name, &txchainmask_entry->value);
+}
 
 /******************************************************************************
  *  CAPACITY definitions

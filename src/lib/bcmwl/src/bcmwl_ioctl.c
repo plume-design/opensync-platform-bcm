@@ -759,6 +759,8 @@ static const struct bcmwl_wl g_bcmwl_wl[] = {
     { "bssid", false, WLC_GET_BSSID, -1, bcmwl_wl_mac, NULL },
     { "wds_remote_mac", false, WLC_WDS_GET_REMOTE_HWADDR, WLC_WDS_GET_REMOTE_HWADDR, bcmwl_wl_mac, NULL },
     { "autho_sta_list", false, WLC_GET_VAR, WLC_SET_VAR, bcmwl_wl_maclist, bcmwl_wl_cmd_prefix },
+    { "phy_tempsense", false, WLC_GET_VAR, -1, bcmwl_wl_int, NULL },
+    { "txchain", false, WLC_GET_VAR, WLC_SET_VAR, bcmwl_wl_int, NULL },
     { NULL },
 };
 

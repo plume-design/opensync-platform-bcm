@@ -902,6 +902,9 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
     float mpdu;
     float ampdu;
     float ampdu_ofdma;
+    float mpdu_ofdma;
+    float phyrate_pkts = 0;
+    float phyrate_pkts_ofdma = 0;
     float bw;
     float bw_cnt_su;
     float bw_cnt_mu;
@@ -933,6 +936,7 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
         mpdu = 0;
         ampdu = 0;
         ampdu_ofdma = 0;
+        mpdu_ofdma = 0;
         mbps = 0;
         psr = 0;
         retried = 0;
@@ -951,8 +955,13 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
             ampdu += conv->dtoh32(c->rxampdu);
             retried += conv->dtoh32(c->rxretried);
             bw += conv->dtoh32(c->rxbw);
-#if SCB_RX_REPORT_DATA_STRUCT_VERSION >= 2
+#if SCB_RX_REPORT_DATA_STRUCT_VERSION == 2
             ampdu_ofdma += conv->dtoh32(c->rxampdu_ofdma);
+#endif
+#if SCB_RX_REPORT_DATA_STRUCT_VERSION == 3
+            mpdu_ofdma += conv->dtoh32(c->rxmpdu_ofdma);
+#endif
+#if SCB_RX_REPORT_DATA_STRUCT_VERSION >= 2
             tones += conv->dtoh32(c->rxtones);
 #endif
         }
@@ -961,12 +970,23 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
             psr = mpdu / (mpdu + retried);
         }
 
-        if (ampdu > 0) {
+        phyrate_pkts = ampdu;
+        phyrate_pkts_ofdma = ampdu_ofdma;
+
+#if SCB_RX_REPORT_DATA_STRUCT_VERSION >= 3
+        /* The rxphyrate accumulation was switched over from
+         * per-ampdu to per-mpdu in v3.
+         */
+        phyrate_pkts = mpdu;
+        phyrate_pkts_ofdma = mpdu_ofdma;
+#endif
+
+        if (phyrate_pkts > 0) {
             mbps = phyrate;
             mbps /= 1000;
-            mbps /= ampdu;
-            tones /= ampdu_ofdma ?: 1;
-            bw /= ampdu;
+            mbps /= phyrate_pkts;
+            tones /= phyrate_pkts_ofdma ?: 1;
+            bw /= phyrate_pkts;
 
             if (bw > 0) {
                /* Reported phyrate is decreased by MU RU rx
@@ -976,9 +996,9 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
                 * The 5% is to roughly account for that.
                 */
 
-                bw_cnt_su = bw * (ampdu - ampdu_ofdma);
-                bw_cnt_mu = tones * 0.078125 * 1.05 * ampdu_ofdma;
-                bw_avg = (bw_cnt_su + bw_cnt_mu) / ampdu;
+                bw_cnt_su = bw * (phyrate_pkts - phyrate_pkts_ofdma);
+                bw_cnt_mu = tones * 0.078125 * 1.05 * phyrate_pkts_ofdma;
+                bw_avg = (bw_cnt_su + bw_cnt_mu) / phyrate_pkts;
                 bw_ratio = bw_avg / bw;
             }
         }
@@ -989,7 +1009,7 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
         rate.psr = psr;
 
         LOGT("%s: %02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx: "
-             "bw=%f/%f tones=%f ampdu=%f/%f tried=%f mbps=%f/%f psr=%f",
+             "bw=%f/%f tones=%f ampdu=%f/%f mpdu=%f/%f tried=%f mbps=%f/%f psr=%f",
              ifname,
              r->station_address.octet[0],
              r->station_address.octet[1],
@@ -1000,6 +1020,7 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
              bw, bw_ratio,
              tones,
              ampdu_ofdma, ampdu,
+             mpdu_ofdma, mpdu,
              rate.tried,
              rate.mbps_capacity,
              rate.mbps_perceived,

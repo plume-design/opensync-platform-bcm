@@ -35,6 +35,7 @@ UNIT_SRC    := wl80211.c
 UNIT_SRC    += wl80211_client.c
 UNIT_SRC    += wl80211_scan.c
 UNIT_SRC    += wl80211_survey.c
+UNIT_SRC    += wl80211_device.c
 
 UNIT_CFLAGS := -I$(UNIT_PATH)/inc
 
