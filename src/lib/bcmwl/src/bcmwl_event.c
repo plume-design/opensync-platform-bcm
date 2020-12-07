@@ -913,7 +913,7 @@ bool bcmwl_event_handler(const char *ifname,
             return BCMWL_EVENT_HANDLED;
         case WLC_E_ASSOC:
             bcmwl_event_refresh_chanspec(ifname);
-            return BCMWL_EVENT_HANDLED;
+            /* passthrough */
         case WLC_E_AUTHORIZED:
         case WLC_E_DEAUTH:
         case WLC_E_DEAUTH_IND:

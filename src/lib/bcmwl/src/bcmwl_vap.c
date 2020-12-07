@@ -597,6 +597,7 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
 {
     const char *vif = vconf->if_name;
     const char *phy = rconf->if_name;
+    struct wlc_ssid ssid = {0};
     int i, j;
 
     TRACE("%s, %s", phy ?: "", vif ?: "");
@@ -716,8 +717,13 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
     if (vchanged->uapsd_enable)
         WARN_ON(!bcmwl_vap_update_uapsd(vconf, rconf, vchanged));
 
-    if (vchanged->ssid && !strcmp(vconf->mode, "ap"))
-        WARN_ON(!WL(vif, "ssid", vconf->ssid));
+    if (vchanged->ssid && !strcmp(vconf->mode, "ap")) {
+        ssid.SSID_len = strlen(vconf->ssid);
+        if (WARN_ON(ssid.SSID_len > sizeof(ssid.SSID)))
+            ssid.SSID_len = sizeof(ssid.SSID);
+        memcpy(ssid.SSID, vconf->ssid, ssid.SSID_len);
+        WARN_ON(!bcmwl_SIOC(vif, WLC_SET_SSID, &ssid));
+    }
 
     if (vchanged->enabled || vchanged->mode) {
         if (!strcmp(vconf->mode, "ap")) {
