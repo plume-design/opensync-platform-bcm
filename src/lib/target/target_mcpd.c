@@ -50,18 +50,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 bool target_set_igmp_mcproxy_params(target_mcproxy_params_t *mcparams)
 {
-    if (mcpd_util_init() == false)
-        return false;
-
     // Store the config
-    if (mcpd_update_proxy_params(mcparams) == false)
+    if (mcpd_util_update_proxy_params(mcparams) == false)
         return false;
 
-    // Write the config and restart the daemon
-    if (mcpd_util_apply() == false)
-        return false;
-
-    return true;
+    return mcpd_util_apply();
 }
 
 bool target_set_igmp_mcproxy_sys_params(struct schema_IGMP_Config *iccfg)
@@ -70,26 +63,16 @@ bool target_set_igmp_mcproxy_sys_params(struct schema_IGMP_Config *iccfg)
     if (mcpd_util_update_igmp_sys_params(iccfg) == false)
         return false;
 
-    // Write the config and reload the daemon
-    mcpd_util_apply();
-
-    return true;
+    return mcpd_util_apply();
 }
 
 bool target_set_mld_mcproxy_params(target_mcproxy_params_t *mcparams)
 {
-    if (mcpd_util_init() == false)
-        return false;
-
     // Store the config
-    if (mcpd_update_proxy_params(mcparams) == false)
+    if (mcpd_util_update_proxy_params(mcparams) == false)
         return false;
 
-    // Write the config and reload the daemon
-    if (mcpd_util_apply() == false)
-        return false;
-
-    return true;
+    return mcpd_util_apply();
 }
 
 bool target_set_mld_mcproxy_sys_params(struct schema_MLD_Config *mlcfg)
@@ -97,8 +80,23 @@ bool target_set_mld_mcproxy_sys_params(struct schema_MLD_Config *mlcfg)
     if (mcpd_util_update_mld_sys_params(mlcfg) == false)
         return false;
 
-    // Write the config and reload the daemon
-    mcpd_util_apply();
+    return mcpd_util_apply();
+}
 
-    return true;
+bool target_set_mcast_uplink(const char *ifname, bool enable, bool is_wan, const char *bridge)
+{
+    // Store the config
+    if (mcpd_util_update_uplink(ifname, enable, bridge) == false)
+        return false;
+
+    return mcpd_util_apply();
+}
+
+bool target_set_igmp_snooping(const char *ifname, bool enable)
+{
+    // Store the config
+    if (mcpd_util_update_snooping(ifname, enable) == false)
+        return false;
+
+    return mcpd_util_apply();
 }

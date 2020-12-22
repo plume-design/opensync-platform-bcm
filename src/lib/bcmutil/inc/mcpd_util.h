@@ -27,33 +27,15 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef MCPD_UTIL_H_INCLUDED
 #define MCPD_UTIL_H_INCLUDED
 
-#include "target.h"
-#include "ds_tree.h"
 #include "schema.h"
-#include "daemon.h"
-
-struct mcpd_mgr
-{
-    daemon_t                  mcpd_dmn_hdl;
-    bool                      initialized;
-    target_mcproxy_params_t   igmp_param;
-    target_mcproxy_params_t   mld_param;
-    struct schema_IGMP_Config iccfg;
-    struct schema_MLD_Config  mlcfg;
-};
-
-/*
- * Initialize the mcpd params and daemon.
- * @return true if initialized
- */
-bool mcpd_util_init(void);
+#include "target.h"
 
 /*
  * Update mcpd basic params.
  * @param proxy_param Proxy configuration
  * @return true if configured
  */
-bool mcpd_update_proxy_params(const target_mcproxy_params_t *proxy_param);
+bool mcpd_util_update_proxy_params(const target_mcproxy_params_t *proxy_param);
 
 /*
  * Update the igmp sys params.
@@ -72,15 +54,26 @@ bool mcpd_util_update_igmp_sys_params(const struct schema_IGMP_Config *iccfg);
 bool mcpd_util_update_mld_sys_params(const struct schema_MLD_Config *mlcfg);
 
 /*
- * Write config file for mcpd daemon.
- * return true if successful
- */
-bool mcpd_util_write_config(void);
-
-/*
  * Write the config and trigger a reload.
  * @return true if applied
  */
 bool mcpd_util_apply(void);
+
+/*
+ * Update the list of uplink interfaces for mcast daemon
+ * @param ifname uplink interface name
+ * @param enable add or remove interface
+ * @param bridge parent bridge interface or NULL if none
+ * @return true if updated
+ */
+bool mcpd_util_update_uplink(const char *ifname, bool enable, const char *bridge);
+
+/*
+ * Update the list of snooping interfaces for mcast daemon
+ * @param ifname igmp snooping interface name
+ * @param enable add or remove interface
+ * @return true if updated
+ */
+bool mcpd_util_update_snooping(const char *ifname, bool enable);
 
 #endif /* MCPD_UTIL_H_INCLUDED */
