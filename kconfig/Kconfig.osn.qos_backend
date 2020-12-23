@@ -1,0 +1,5 @@
+#
+# BCM QoS implementation
+#
+orsource "../src/lib/osn/kconfig/Kconfig.osn.qos_backend"
+

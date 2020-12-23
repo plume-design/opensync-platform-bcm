@@ -22,6 +22,14 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# parse driver impl version
+ifeq ($(DRIVER_VERSION),)
+ifneq ($(PROFILE_DIR),)
+DRIVER_VERSION                  := impl$(shell grep BCM_WLIMPL= $(PROFILE_DIR)/$(shell basename $(PROFILE_DIR)) | cut -d= -f2)
+else
+DRIVER_VERSION                  := impl0
+endif
+endif
 
 # This is example of include paths for different wl
 # implementations for wlioctl_defs.h:
@@ -88,6 +96,7 @@ $(info TARGET=$(TARGET))
 $(info INCLUDES=$(INCLUDES))
 $(info DEFINES=$(DEFINES))
 $(info SDK_ROOTFS=$(SDK_ROOTFS))
+$(info DRIVER_VERSION=$(DRIVER_VERSION))
 $(info BRCMDRIVERS_DIR=$(BRCMDRIVERS_DIR))
 $(info -----------------)
 endif

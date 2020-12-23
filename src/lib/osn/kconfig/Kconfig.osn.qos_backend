@@ -1,0 +1,9 @@
+config OSN_BACKEND_QOS_BCM_ARCHER
+    bool "Broadcom Archer"
+
+    select OSN_LINUX_ENABLED
+    help
+        Use the Broadcom Archer propriatery QoS implementation.
+
+        Requires BCM SDK support for Service Queues feature and a matching
+        license.
