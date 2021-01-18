@@ -367,6 +367,18 @@ bool bcmwl_cim_get(const char *phy,
         return false;
 
     memset(&arg, 0, sizeof(arg));
+    arg.count = conv->dtoh32(WL_CHANIM_COUNT_ONE);
+    arg.buflen = sizeof(buf);
+    arg.buflen -= WL_CHANIM_STATS_FIXED_LEN;
+    arg.buflen = conv->dtoh32(arg.buflen);
+
+    if (WARN_ON(!bcmwl_GIOV(phy, "chanim_stats", &arg, &buf)))
+        return false;
+
+    if (WARN_ON(!(bcmwl_cim_parse(arr, len, buf, ver, conv))))
+        return false;
+
+    memset(&arg, 0, sizeof(arg));
     arg.count = conv->dtoh32(WL_CHANIM_COUNT_US_ALL);
     arg.buflen = sizeof(buf);
     arg.buflen -= WL_CHANIM_STATS_US_FIXED_LEN;

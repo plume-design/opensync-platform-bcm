@@ -24,8 +24,12 @@
 
 # parse driver impl version
 ifeq ($(DRIVER_VERSION),)
-ifneq ($(PROFILE_DIR),)
-DRIVER_VERSION                  := impl$(shell grep BCM_WLIMPL= $(PROFILE_DIR)/$(shell basename $(PROFILE_DIR)) | cut -d= -f2)
+ifneq ($(BCM_WLIMPL),)
+DRIVER_VERSION                  := impl$(BCM_WLIMPL)
+else ifneq ($(PROFILE_PATH),)
+DRIVER_VERSION                  := impl$(shell grep BCM_WLIMPL= $(PROFILE_PATH) | cut -d= -f2 | tail -1)
+else ifneq ($(PROFILE_DIR),)
+DRIVER_VERSION                  := impl$(shell grep BCM_WLIMPL= $(PROFILE_DIR)/$(shell basename $(PROFILE_DIR)) | cut -d= -f2 | tail -1)
 else
 DRIVER_VERSION                  := impl0
 endif

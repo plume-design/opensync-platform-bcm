@@ -325,7 +325,7 @@ static char* bcmwl_radio_chanspec_prep(const char *phy, int channel, const char 
 
     switch (bw) {
         default:
-            /* fall through */
+            /* FALLTHROUGH */
         case 20:
             return strfmt("%d", channel);
         case 2040:
@@ -335,7 +335,7 @@ static char* bcmwl_radio_chanspec_prep(const char *phy, int channel, const char 
              * bandwidth should be used here.
              */
             bw = 40;
-            /* fall through */
+            /* FALLTHROUGH */
         case 40:
             for (p = WL(phy, "chanspecs"); (i = strsep(&p, "\r\n")); )
                 if ((i = strsep(&i, " ")))

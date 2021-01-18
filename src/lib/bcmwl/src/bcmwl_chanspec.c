@@ -78,6 +78,7 @@ bool bcmwl_chanspec_parse(char *str, bcmwl_chanspec_t *cs)
         case ' ':
             cs->bandwidth = 20;
             cs->sideband = 0;
+            break;
         case 'l':
             cs->bandwidth = 40;
             cs->sideband = -1;

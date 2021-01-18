@@ -676,6 +676,7 @@ static proc_event_res_t process_event_prune_ind(
 
     switch (ntohl(wl_event->reason))
     {
+        case WLC_E_PRUNE_MAC_DENY:
         case WLC_E_PRUNE_AUTH_RESP_MAC:
             break;
         default:

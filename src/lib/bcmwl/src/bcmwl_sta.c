@@ -889,6 +889,7 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
 #ifdef SCB_RX_REPORT_DATA_STRUCT_VERSION
     const struct bcmwl_ioctl_num_conv *conv;
     struct bcmwl_sta_rate rate;
+    iov_rx_report_counters_t c_buf;
     iov_rx_report_counters_t *c;
     iov_rx_report_record_t *r;
     union {
@@ -945,7 +946,12 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
         tones = 0;
 
         for (tid = 0; tid < ARRAY_SIZE(r->station_counters); tid++) {
-            c = &r->station_counters[tid];
+            // c = &r->station_counters[tid];
+            // copy to c_buf because of gcc9 compile error:
+            // error: taking address of packed member of 'struct <anonymous>'
+            // may result in an unaligned pointer value [-Werror=address-of-packed-member]
+            memcpy(&c_buf, &r->station_counters[tid], sizeof(c_buf));
+            c = &c_buf;
 
             if (!(r->station_flags & (1 << tid)))
                 continue;

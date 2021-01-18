@@ -282,6 +282,7 @@ void bcmwl_event_handle_ap_chan_change(const char *ifname, void *_ev)
 {
     bcm_event_t *ev = _ev;
     wl_event_change_chan_t *event;
+    char *phy;
     unsigned int length;
 
     event = (wl_event_change_chan_t *)(ev + 1);
@@ -296,7 +297,12 @@ void bcmwl_event_handle_ap_chan_change(const char *ifname, void *_ev)
              event->target_chanspec);
     }
 
-    evx_debounce_call(bcmwl_radio_state_report, ifname);
+    if (WARN_ON(!(phy = strdupa(ifname))))
+        return;
+    if (WARN_ON(!(phy = strsep(&phy, CONFIG_BCMWL_VAP_DELIMITER))))
+        return;
+
+    evx_debounce_call(bcmwl_radio_state_report, phy);
 }
 
 void bcmwl_radio_radar_get(const char *phyname, struct schema_Wifi_Radio_State *rstate)

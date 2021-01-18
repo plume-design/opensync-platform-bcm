@@ -49,9 +49,19 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 /* local */
 #define MODULE_ID LOG_MODULE_ID_TARGET
+#define BCMWL_HOSTAP_MAX_PHY 4
+#define BCMWL_HOSTAP_DFS_SCAN_FAILURES 3
+
+struct bcmwl_hostap_parent {
+    int channel;
+    char ssid[32+1];
+    char bssid[18];
+};
 
 static ev_async g_nl_async;
 static ev_io g_nl_io;
+static struct bcmwl_hostap_parent g_parents[BCMWL_HOSTAP_MAX_PHY];
+static int g_scan_failures;
 
 /* helpers */
 static void
@@ -68,6 +78,66 @@ bcmwl_hostap_bss_report(const char *bss)
     evx_debounce_call(bcmwl_vap_state_report, bss);
     evx_debounce_call(bcmwl_radio_state_report, phy);
 }
+
+static struct bcmwl_hostap_parent *
+bcmwl_hostap_parent_get(const char *bss)
+{
+    int r;
+    int v;
+
+    if (WARN_ON(!bcmwl_parse_vap(bss, &r, &v)))
+        return NULL;
+
+    if (WARN_ON((size_t)r >= ARRAY_SIZE(g_parents)))
+        return NULL;
+
+    return &g_parents[r];
+}
+
+static void
+bcmwl_hostap_parent_store(struct wpas *wpas,
+                          const struct schema_Wifi_Radio_Config *rconf,
+                          const struct schema_Wifi_VIF_Config *vconf)
+{
+    struct bcmwl_hostap_parent *parent = bcmwl_hostap_parent_get(wpas->ctrl.bss);
+
+    if (WARN_ON(!parent)) return;
+
+    parent->channel = rconf->channel;
+    STRSCPY_WARN(parent->ssid, vconf->ssid);
+    STRSCPY_WARN(parent->bssid, vconf->parent);
+}
+
+static void
+bcmwl_hostap_parent_force_join_maybe(struct wpas *wpas)
+{
+    struct bcmwl_hostap_parent *parent = bcmwl_hostap_parent_get(wpas->ctrl.bss);
+
+    if (g_scan_failures < BCMWL_HOSTAP_DFS_SCAN_FAILURES) return;
+    if (WARN_ON(!parent)) return;
+    if (parent->channel == 0) return;
+    if (strlen(parent->ssid) == 0) return;
+    if (strlen(parent->bssid) == 0) return;
+
+    /* This is intended for DFS cases. Sometimes driver can move from ISM to
+     * PRE-ISM state when roaming or enabling STA link. Once that happens
+     * driver will reject external scans. Consequently wpa_s won't be able to
+     * connect or roam and possibly inheriting ISM from parent AP on DFS
+     * channels. Without this the STA link may end up taking 60s or more to
+     * establish and the entire system may enter recovery mode long before that
+     * gets a chance to finish.
+     *
+     * As such attempt to join through iovar which can virtually guide wpa_s to
+     * connect eventually.
+     */
+    LOGI("%s: trying to force-join to %s (%s) on channel %d (scan failures=%d)",
+         wpas->ctrl.bss, parent->ssid, parent->bssid, parent->channel,
+         g_scan_failures);
+    WARN_ON(!WL(wpas->ctrl.bss, "join", parent->ssid,
+                "-c", strfmta("%d", parent->channel),
+                "-b", parent->bssid));
+}
+
 
 /* hapd */
 static void
@@ -146,6 +216,19 @@ bcmwl_hostap_wpas_ctrl_disconnected(struct wpas *wpas, const char *bssid, int re
     bcmwl_hostap_bss_report(wpas->ctrl.bss);
 }
 
+static void
+bcmwl_hostap_wpas_scan_results(struct wpas *wpas)
+{
+    g_scan_failures = 0;
+}
+
+static void
+bcmwl_hostap_wpas_scan_failed(struct wpas *wpas, int status)
+{
+    g_scan_failures++;
+    bcmwl_hostap_parent_force_join_maybe(wpas);
+}
+
 /* helpers */
 static void
 bcmwl_hostap_fill_freqlist(struct wpas *wpas)
@@ -204,6 +287,8 @@ bcmwl_hostap_init_bss(const char *bss)
         wpas->ctrl.overrun = bcmwl_hostap_wpas_ctrl_overrun;
         wpas->connected = bcmwl_hostap_wpas_ctrl_connected;
         wpas->disconnected = bcmwl_hostap_wpas_ctrl_disconnected;
+        wpas->scan_failed = bcmwl_hostap_wpas_scan_failed;
+        wpas->scan_results = bcmwl_hostap_wpas_scan_results;
         ctrl_enable(&wpas->ctrl);
         wpas = NULL;
     }
@@ -321,6 +406,7 @@ bcmwl_hostap_bss_apply(const struct schema_Wifi_VIF_Config *vconf,
     if (wpas) {
         WARN_ON(wpas_conf_gen(wpas, rconf, vconf, cconf, n_cconf) < 0);
         WARN_ON(wpas_conf_apply(wpas) < 0);
+        bcmwl_hostap_parent_store(wpas, rconf, vconf);
     }
 }
 

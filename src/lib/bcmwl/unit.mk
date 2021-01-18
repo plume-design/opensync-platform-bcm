@@ -59,6 +59,14 @@ UNIT_LDFLAGS += $(if $(CONFIG_BCM_NVRAM_LIB),-L$(INSTALL_DIR)/lib -lwlcsm,)
 UNIT_EXPORT_CFLAGS := $(UNIT_CFLAGS)
 UNIT_EXPORT_LDFLAGS := $(UNIT_LDFLAGS)
 
+# CMN_WLAN_FLAGS includes -DWL_DEFAULT_NUM_SSID=$(BRCM_DEFAULT_NUM_MBSS)
+# which is required when using headers from SDK 5.4.2:
+#   bcmwl_nvram_lib.c:#include <wlcsm_lib_api.h>
+#   libs/wlcsm/include/wl_common_defs.h:55:2: error: #error WL_DEFAULT_NUM_SSID is not defined!!!!!
+# adding to UNIT_CFLAGS post UNIT_EXPORT_CFLAGS because it is only needed
+# by this unit, not by any other unit that depends on this
+UNIT_CFLAGS += $(CMN_WLAN_FLAGS)
+
 UNIT_DEPS := src/lib/ds
 UNIT_DEPS += src/lib/schema
 UNIT_DEPS += src/lib/common
