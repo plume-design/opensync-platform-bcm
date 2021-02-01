@@ -1,3 +1,5 @@
+#!/bin/sh
+
 # Copyright (c) 2017, Plume Design Inc. All rights reserved.
 # 
 # Redistribution and use in source and binary forms, with or without
@@ -22,21 +24,24 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#
-# Override file for OSN
-#
+ifname=$1
 
-# Add BCM QoS Implementation
-ifdef CONFIG_OSN_BACKEND_QOS_BCM_ARCHER
+if ! wl -i "$ifname" bss >/dev/null 2>/dev/null
+then
+    # Possibly handled by different driver.
+    exit 1
+fi
 
-UNIT_SRC_TOP += $(OVERRIDE_DIR)/src/osn_qos_bcm_archer.c
+if ! wl -i "$ifname" bss | grep -q up
+then
+    log_warn "$ifname: bss is not up"
+    exit 1
+fi
 
-# Add BCMSDK include paths that are required for archer.h, archer_api.h and
-# skb_defines.h
-UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/bcmdrivers/opensource/include/bcm963xx
-UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/userspace/private/include
+if wl -i "$ifname" bssid | grep -q '00:00:00:00:00:00'
+then
+    log_warn "$ifname: bss up, but not associated"
+    exit 1
+fi
 
-# The final binary must be linked with -larcher
-UNIT_EXPORT_LDFLAGS += -larcher
-
-endif
+exit 0

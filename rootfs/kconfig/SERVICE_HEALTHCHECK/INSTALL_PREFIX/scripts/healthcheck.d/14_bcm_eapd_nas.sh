@@ -1,3 +1,5 @@
+#!/bin/sh
+
 # Copyright (c) 2017, Plume Design Inc. All rights reserved.
 # 
 # Redistribution and use in source and binary forms, with or without
@@ -22,21 +24,20 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# Checks if authorization (wpa psk handling) processes are
+# still running. Without them no leaf or client will be able
+# to connect.
 #
-# Override file for OSN
+# WM2/target is expected to supervise and restart these.
+# However if the failure is neither transient nor one-off
+# we need to reboot the unit to recover.
 #
+# This is especially important for units in GW role.
 
-# Add BCM QoS Implementation
-ifdef CONFIG_OSN_BACKEND_QOS_BCM_ARCHER
-
-UNIT_SRC_TOP += $(OVERRIDE_DIR)/src/osn_qos_bcm_archer.c
-
-# Add BCMSDK include paths that are required for archer.h, archer_api.h and
-# skb_defines.h
-UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/bcmdrivers/opensource/include/bcm963xx
-UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/userspace/private/include
-
-# The final binary must be linked with -larcher
-UNIT_EXPORT_LDFLAGS += -larcher
-
-endif
+die() { log_warn "$*"; Healthcheck_Fail; }
+set -e
+pidof nas | grep -q .
+pidof eapd | grep -q .
+! test -e /tmp/.nas_ping_supported || rm /tmp/.nas_ping || die nas ping failed
+! test -e /tmp/.eapd_ping_supported || rm /tmp/.eapd_ping || die eapd ping failed
+Healthcheck_Pass

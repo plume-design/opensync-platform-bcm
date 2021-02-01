@@ -13,3 +13,7 @@ REL_SRC_DIR="$(realpath "$INSTALL_PREFIX" --relative-to="$DEST_LIB_DIR")"
 mkdir -p "$ROOTFS$DEST_LIB_DIR"
 ln -sf "$REL_SRC_DIR/lib" "$ROOTFS$DEST_LIB_DIR/$(basename "$INSTALL_PREFIX")"
 
+# healthcheck
+test "$CONFIG_BCM_USE_NAS" = y || rm -vf "$ROOTFS${INSTALL_PREFIX}/scripts/healthcheck.d/"*nas*
+test "$CONFIG_BCM_USE_HOSTAP" = y || rm -vf "$ROOTFS${INSTALL_PREFIX}/scripts/healthcheck.d/"*hostap*
+

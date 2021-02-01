@@ -202,6 +202,19 @@ bool bcmwl_vap_ready(const char *ifname)
     return (exists && running);
 }
 
+static const char *bcmwl_vap_map_int2str(int map)
+{
+    switch (map) {
+        case 0: return "none";
+        case 1: return "fronthaul_bss";
+        case 2: return "backhaul_bss";
+        case 3: return "fronthaul_backhaul_bss";
+        case 4: return "backhaul_sta";
+        default: LOGW("unknown map value: %d", map); break;
+    }
+    return "none";
+}
+
 bool
 bcmwl_vap_state(const char *ifname,
                 struct schema_Wifi_VIF_State *vstate)
@@ -298,12 +311,7 @@ bcmwl_vap_state(const char *ifname,
     if ((p = WL(ifname, "map")))
         if ((p = strsep(&p, ":")))
             SCHEMA_SET_STR(vstate->multi_ap,
-                           strtol(p, NULL, 16) == 0 ? "none" :
-                           strtol(p, NULL, 16) == 1 ? "fronthaul_bss" :
-                           strtol(p, NULL, 16) == 2 ? "backhaul_bss" :
-                           strtol(p, NULL, 16) == 3 ? "fronthaul_backhaul_bss" :
-                           strtol(p, NULL, 16) == 4 ? "backhaul_sta" :
-                           strfmta("unknown=%s", p));
+                           bcmwl_vap_map_int2str(strtol(p, NULL, 16)));
     if ((p = WL(ifname, "wds_remote_mac"))) {
         SCHEMA_SET_STR(vstate->mode, "ap_vlan");
         SCHEMA_SET_STR(vstate->ap_vlan_sta_addr, str_tolower(p));
@@ -598,6 +606,8 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
     const char *vif = vconf->if_name;
     const char *phy = rconf->if_name;
     struct wlc_ssid ssid = {0};
+    char *p;
+    bool skip_map = false;
     int i, j;
 
     TRACE("%s, %s", phy ?: "", vif ?: "");
@@ -727,9 +737,9 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
 
     if (vchanged->enabled || vchanged->mode) {
         if (!strcmp(vconf->mode, "ap")) {
-            WARN_ON(!WL(vif, "bss", "up"));
             if (rconf->channel_exists && rconf->ht_mode_exists)
                 WARN_ON(!bcmwl_radio_channel_set(phy, rconf->channel, rconf->ht_mode));
+            WARN_ON(!WL(vif, "bss", "up"));
         }
     }
 
@@ -739,7 +749,23 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
     if (vchanged->rrm)
         bcmwl_vap_update_rrm(rconf, vconf);
 
-    if (vchanged->multi_ap) {
+    /* Due to intricacies of WM in its current state (it
+     * pre-creates VIF_State for VIF_Config with empty
+     * columns to avoid some corner cases) it'll often mark
+     * multi_ap as changed, even though it isn't.  This has
+     * a nasty side effect of pulling down phy and losing
+     * ISM states. This in turn can lead to races and other
+     * bugs. As such prevent that for good measure.
+     */
+    if ((p = WL(vif, "map")) && (p = strsep(&p, ":"))) {
+        const char *str = bcmwl_vap_map_int2str(strtol(p, NULL, 16));
+        if (strcmp(str, vconf->multi_ap) == 0) {
+            LOGI("%s: skipping multi-ap reconfig to avoid hiccups", vif);
+            skip_map = true;
+        }
+    }
+
+    if (vchanged->multi_ap && !skip_map) {
         WL(phy, "down");
         WARN_ON(!WL(vif, "map",
                     !strcmp(vconf->multi_ap, "none") ? "0" :

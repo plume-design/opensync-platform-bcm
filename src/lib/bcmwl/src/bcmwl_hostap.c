@@ -50,7 +50,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 /* local */
 #define MODULE_ID LOG_MODULE_ID_TARGET
 #define BCMWL_HOSTAP_MAX_PHY 4
-#define BCMWL_HOSTAP_DFS_SCAN_FAILURES 3
+#define BCMWL_HOSTAP_DFS_SCAN_FAILURES_JOIN 3
+#define BCMWL_HOSTAP_DFS_SCAN_FAILURES_KEEPAPUP 5
 
 struct bcmwl_hostap_parent {
     int channel;
@@ -113,7 +114,7 @@ bcmwl_hostap_parent_force_join_maybe(struct wpas *wpas)
 {
     struct bcmwl_hostap_parent *parent = bcmwl_hostap_parent_get(wpas->ctrl.bss);
 
-    if (g_scan_failures < BCMWL_HOSTAP_DFS_SCAN_FAILURES) return;
+    if (g_scan_failures < BCMWL_HOSTAP_DFS_SCAN_FAILURES_JOIN) return;
     if (WARN_ON(!parent)) return;
     if (parent->channel == 0) return;
     if (strlen(parent->ssid) == 0) return;
@@ -138,6 +139,16 @@ bcmwl_hostap_parent_force_join_maybe(struct wpas *wpas)
                 "-b", parent->bssid));
 }
 
+static void
+bcmwl_hostap_disable_keep_ap_up_maybe(struct wpas *wpas)
+{
+    if (g_scan_failures < BCMWL_HOSTAP_DFS_SCAN_FAILURES_KEEPAPUP) return;
+
+    LOGI("%s: trying to disable keep_ap_up (scan failures=%d)",
+         wpas->ctrl.bss, g_scan_failures);
+
+    WARN_ON(!WL(wpas->ctrl.bss, "keep_ap_up", "0"));
+}
 
 /* hapd */
 static void
@@ -196,6 +207,7 @@ static void
 bcmwl_hostap_wpas_ctrl_closed(struct ctrl *ctrl)
 {
     bcmwl_hostap_bss_report(ctrl->bss);
+    WARN_ON(!WL(ctrl->bss, "keep_ap_up", "1"));
 }
 
 static void
@@ -208,6 +220,7 @@ static void
 bcmwl_hostap_wpas_ctrl_connected(struct wpas *wpas, const char *bssid, int id, const char *id_str)
 {
     bcmwl_hostap_bss_report(wpas->ctrl.bss);
+    WARN_ON(!WL(wpas->ctrl.bss, "keep_ap_up", "1"));
 }
 
 static void
@@ -226,6 +239,7 @@ static void
 bcmwl_hostap_wpas_scan_failed(struct wpas *wpas, int status)
 {
     g_scan_failures++;
+    bcmwl_hostap_disable_keep_ap_up_maybe(wpas);
     bcmwl_hostap_parent_force_join_maybe(wpas);
 }
 

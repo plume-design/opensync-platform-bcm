@@ -217,9 +217,47 @@ static bool mcpd_util_write_section(FILE *f, const target_mcproxy_params_t *prox
     fprintf(f, "%s-default-version %c\n", prt_key, prtcl);
 
     if (proxy_param->protocol == DISABLE_IGMP || proxy_param->protocol == DISABLE_MLD)
+    {
         fprintf(f, "%s-proxy-interfaces \n", prt_key);
+
+        fprintf(f, "%s-mcast-interfaces", prt_key);
+        ds_tree_foreach(&g_mcpd_hdl.uplink_ifs, node)
+        {
+            if (node->bridge[0] == '\0')
+            {
+                fprintf(f, " %s", node->ifname);
+            }
+            else
+            {
+                /*
+                * TODO: mcpd always require the physical interface for proper
+                * operation. In case a GRE backhaul tunnel is define as the
+                * interfice, strip the "g-" prefix to map the GRE interface name to
+                * the physical name.
+                */
+                char *nif = node->ifname;
+                if (strncmp(nif, "g-wl", strlen("g-wl")) == 0)
+                {
+                    nif += strlen("g-");
+                }
+
+                fprintf(f, " %s/%s", node->bridge, nif);
+            }
+        }
+        fprintf(f,"\n");
+    }
     else
+    {
+        /* Proxy is ON -> gateway WAN configuration */
+
+        /* List of uplink interfaces in g_mcpd_hdl.uplink_ifs is not properly populated
+         * via Connection_Manager_Uplink table when uplink interface is ETH VLAN type
+         * This fix uses directly passed uplink interface name for mcast-interface,
+         * therefore only single mcast uplink interface is supported for now. */
+
         fprintf(f, "%s-proxy-interfaces %s\n", prt_key, proxy_param->upstrm_if);
+        fprintf(f, "%s-mcast-interfaces %s\n", prt_key, proxy_param->upstrm_if);
+    }
 
     fprintf(f, "%s-snooping-interfaces", prt_key);
     ds_tree_foreach(&g_mcpd_hdl.snooping_ifs, node)
@@ -228,32 +266,6 @@ static bool mcpd_util_write_section(FILE *f, const target_mcproxy_params_t *prox
     }
     fprintf(f,"\n");
     node = NULL;
-
-    fprintf(f, "%s-mcast-interfaces", prt_key);
-    ds_tree_foreach(&g_mcpd_hdl.uplink_ifs, node)
-    {
-        if (node->bridge[0] == '\0')
-        {
-            fprintf(f, " %s", node->ifname);
-        }
-        else
-        {
-            /*
-             * TODO: mcpd always require the physical interface for proper
-             * operation. In case a GRE backhaul tunnel is define as the
-             * interfice, strip the "g-" prefix to map the GRE interface name to
-             * the physical name.
-             */
-            char *nif = node->ifname;
-            if (strncmp(nif, "g-wl", strlen("g-wl")) == 0)
-            {
-                nif += strlen("g-");
-            }
-
-            fprintf(f, " %s/%s", node->bridge, nif);
-        }
-    }
-    fprintf(f,"\n");
 
     if (!strncmp(prt_key, "igmp", 4))
         mcpd_util_write_igmp_sys_params(f, &g_mcpd_hdl.iccfg);

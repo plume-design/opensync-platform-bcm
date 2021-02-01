@@ -1,3 +1,5 @@
+#!/bin/sh
+
 # Copyright (c) 2017, Plume Design Inc. All rights reserved.
 # 
 # Redistribution and use in source and binary forms, with or without
@@ -22,21 +24,23 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# Checks if driver is still responding in a meaningful way.
 #
-# Override file for OSN
+# If the driver doesn't respond to basic commands it's
+# likely no working properly anymore and links (if any) are
+# likely dead too because wpa re-keying needs to talk to
+# driver via ioctls.
 #
+# If this is neither a transient nor one-off failure
+# we need to reboot the unit to recover.
+#
+# This is especially important for units in GW role.
 
-# Add BCM QoS Implementation
-ifdef CONFIG_OSN_BACKEND_QOS_BCM_ARCHER
-
-UNIT_SRC_TOP += $(OVERRIDE_DIR)/src/osn_qos_bcm_archer.c
-
-# Add BCMSDK include paths that are required for archer.h, archer_api.h and
-# skb_defines.h
-UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/bcmdrivers/opensource/include/bcm963xx
-UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/userspace/private/include
-
-# The final binary must be linked with -larcher
-UNIT_EXPORT_LDFLAGS += -larcher
-
-endif
+die() { log_warn "$*"; Healthcheck_Fail; }
+set -e
+cd /sys/class/net
+for i in wl?
+do
+	wl -i $i event_msgs_ext | grep -q . || die $i not responsive
+done
+Healthcheck_Pass
