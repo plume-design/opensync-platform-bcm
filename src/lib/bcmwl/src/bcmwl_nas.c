@@ -470,7 +470,7 @@ bool bcmwl_nas_update_security(
          |  strcmp(NVG(vif, "radius_key") ?: "", nv_radius_key)
          |  strcmp(WL(vif, "eap") ?: "", wl_eap)
          |  strcmp(WL(vif, "wsec_restrict") ?: "", wl_wsec_restrict)
-         |  strcmp(wl_wpa_auth_prev, wl_wpa_auth)
+         |  (atoi(wl_wpa_auth_prev) != atoi(wl_wpa_auth))
          |  (drv_wsec != atoi(wl_wsec))
          ;
     fast |= strcmp(NVG(vif, "ssid") ?: "", vconf->ssid)

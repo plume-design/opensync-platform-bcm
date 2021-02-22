@@ -428,15 +428,20 @@ bool bcmwl_radio_channel_set(const char *phy, int channel, const char *ht_mode)
         }
     } else {
         LOGI("%s: no ap vifs: skipping csa, will set chanspec only", phy);
-        if (WARN_ON(!(d = opendir("/sys/class/net"))))
-            return false;
-        while ((p = readdir(d))) {
-            if (strstr(p->d_name, phy) != p->d_name)
-                continue;
-            WARN_ON(!WL(p->d_name, "chanspec", chanspec));
-        }
-        closedir(d);
+        /* chanspec needs to be set always anyway so that in case
+         * radio goes down/up it goes back to the intended channel.
+         * This is done below.
+         */
     }
+
+    if (WARN_ON(!(d = opendir("/sys/class/net"))))
+        return false;
+    while ((p = readdir(d))) {
+        if (strstr(p->d_name, phy) != p->d_name)
+            continue;
+        WARN_ON(!WL(p->d_name, "chanspec", chanspec));
+    }
+    closedir(d);
 
     LOGI("%s: %s to channel %s", move ? "moving" : "switching", phy, chanspec);
     return true;

@@ -697,7 +697,7 @@ bcmwl_wl_cmd_wpa(const char *ifname, const struct bcmwl_wl *wl, const char *argv
     char *p = tmp;
     size_t len = sizeof(tmp);
 
-    csnprintf(&p, &len, "0x%04x", atoi(in));
+    csnprintf(&p, &len, "0x%02x", atoi(in));
     if (atoi(in) & 4)
         csnprintf(&p, &len, " WPA-PSK");
     if (atoi(in) & 128)
