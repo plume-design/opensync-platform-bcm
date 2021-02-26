@@ -24,23 +24,44 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# Checks if driver is still responding in a meaningful way.
-#
-# If the driver doesn't respond to basic commands it's
-# likely not working properly anymore, and links (if any)
-# are likely dead too, because wpa re-keying needs to talk
-# to the driver via ioctls.
-#
-# If this is neither a transient nor one-off failure
-# we need to reboot the unit to recover.
-#
-# This is especially important for units in GW role.
 
-die() { log_warn "$*"; Healthcheck_Fail; }
-set -e
-cd /sys/class/net
-for i in wl?
-do
-    wl -i $i event_msgs_ext | grep -q . || die $i not responsive
-done
-Healthcheck_Pass
+vlan_log()
+{
+    logger -st vlan "$@"
+}
+
+vlan_ifname()
+{
+    echo "$1.$2"
+}
+
+vlan_add()
+{
+    [ -d "/sys/class/net/$1.$2" ] && return 0
+
+    if [ -d "/sys/class/net/$1.vc" ]
+    then
+        vlan_log "Adding VLAN interface $1.$2 usig vlanctl"
+        vlanctl --mcast --if-create-name $1.vc $1.$2
+        vlanctl --if $1.vc --rx --tags 1 --filter-vid $2 0 --pop-tag --set-rxif $1.$2 --rule-append
+        vlanctl --if $1.vc --tx --tags 0 --filter-txif $1.$2 --push-tag --set-vid $2 0 --rule-append
+        vlanctl --if $1.vc --set-if-mode-rg
+    else
+        vlan_log "Adding VLAN interface $1.$2 usig vconfig"
+        vconfig add "$1" "$2"
+    fi
+}
+
+vlan_del()
+{
+    [ ! -d "/sys/class/net/$1.$2" ] && return 0
+
+    if [ -d "/sys/class/net/$1.vc" ]
+    then
+        vlan_log "Removing VLAN interface $1.$2 using vlanctl"
+        vlanctl --if-delete "$1.$2"
+    else
+        vlan_log "Removing VLAN interface $1.$2 using vconfig"
+        vconfig rem "$1.$2"
+    fi
+}

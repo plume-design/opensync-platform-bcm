@@ -1,0 +1,7 @@
+#
+# BCM VLAN implementation
+#
+if PLATFORM_IS_BCM
+orsource "../src/lib/osn/kconfig/Kconfig.osn.vlan_backend"
+endif
+

@@ -143,8 +143,10 @@ collect_flowmgr()
 collect_platform_bcm()
 {
     collect_bcmwl
-    collect_flowcache
-    collect_archer
+# Currently disabled since it can trigger kernel panic
+# when collecting flowcache or archer status
+#    collect_flowcache
+#    collect_archer
     collect_flowmgr
 }
 

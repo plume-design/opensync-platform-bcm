@@ -35,6 +35,14 @@ DRIVER_VERSION                  := impl0
 endif
 endif
 
+# SDK version
+-include $(BRCMDRIVERS_DIR)/../version.make
+DEFINES += -DBRCM_VERSION=$(BRCM_VERSION)
+DEFINES += -DBRCM_RELEASE=$(BRCM_RELEASE)
+DEFINES += -DBRCM_EXTRAVERSION=$(BRCM_EXTRAVERSION)
+DEFINES += -DBCM_SDK_VERSION=$(shell expr $(BRCM_VERSION) \* 65536 + $(BRCM_RELEASE) \* 256 + $(shell echo $(BRCM_EXTRAVERSION) | sed 's/^\([[:digit:]]*\).*/\1/') 2>/dev/null)
+DEFINES += -DBCM_WLIMPL=$(BCM_WLIMPL)
+
 # This is example of include paths for different wl
 # implementations for wlioctl_defs.h:
 #

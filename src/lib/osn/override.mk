@@ -40,3 +40,5 @@ UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/userspace/private/include
 UNIT_EXPORT_LDFLAGS += -larcher
 
 endif
+
+UNIT_SRC_TOP += $(if $(CONFIG_OSN_BACKEND_VLAN_BCM_VLANCTL),$(OVERRIDE_DIR)/src/osn_vlan_bcm_vlanctl.c,)

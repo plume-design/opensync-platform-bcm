@@ -830,6 +830,25 @@ static void bcmwl_event_handle_if(const bcm_event_t *ev)
 
 static void bcmwl_event_print(const bcm_event_t *ev)
 {
+    int e = ntohl(ev->event.event_type);
+    const char *evname;
+
+#define CASE2STR(x, msg) case x: evname = msg; break
+
+    switch(e)
+    {
+    CASE2STR(WLC_E_AUTH, "auth");
+    CASE2STR(WLC_E_AUTH_IND, "auth indication");
+    CASE2STR(WLC_E_AUTHORIZED, "authorized");
+    CASE2STR(WLC_E_DEAUTH, "deauth");
+    CASE2STR(WLC_E_DEAUTH_IND, "deauth indication");
+    CASE2STR(WLC_E_ASSOC, "assoc");
+    CASE2STR(WLC_E_ASSOC_IND, "assoc indication");
+    CASE2STR(WLC_E_DISASSOC, "disassoc");
+    CASE2STR(WLC_E_DISASSOC_IND, "disassoc indication");
+    default: /* too verbose */ return;
+    }
+
     const char *ifname = ev->event.ifname;
     const char *mac = strfmta("%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
                               ev->event.addr.octet[0],
@@ -840,20 +859,8 @@ static void bcmwl_event_print(const bcm_event_t *ev)
                               ev->event.addr.octet[5]);
     int reason = ntohl(ev->event.reason);
     int status = ntohl(ev->event.status);
-    int e = ntohl(ev->event.event_type);
 
-    if (e == WLC_E_DEAUTH_IND)
-        LOGI("%s: %s: deauth indication status %d reason %d", ifname, mac, status, reason);
-    if (e == WLC_E_DISASSOC_IND)
-        LOGI("%s: %s: disassoc indication status %d reason %d", ifname, mac, status, reason);
-    if (e == WLC_E_AUTH)
-        LOGI("%s: %s: auth status %d reason %d", ifname, mac, status, reason);
-    if (e == WLC_E_ASSOC)
-        LOGI("%s: %s: assoc status %d reason %d", ifname, mac, status, reason);
-    if (e == WLC_E_DEAUTH)
-        LOGI("%s: %s: deauth status %d reason %d", ifname, mac, status, reason);
-    if (e == WLC_E_DISASSOC)
-        LOGI("%s: %s: disassoc status %d reason %d", ifname, mac, status, reason);
+    LOGI("%s: %s: %s status %d reason %d", ifname, mac, evname, status, reason);
 }
 
 static void bcmwl_event_handle_link(const bcm_event_t *ev)
@@ -914,6 +921,9 @@ bool bcmwl_event_handler(const char *ifname,
         case WLC_E_ASSOC:
             bcmwl_event_refresh_chanspec(ifname);
             /* FALLTHROUGH */
+        case WLC_E_ASSOC_IND:
+        case WLC_E_AUTH:
+        case WLC_E_AUTH_IND:
         case WLC_E_AUTHORIZED:
         case WLC_E_DEAUTH:
         case WLC_E_DEAUTH_IND:

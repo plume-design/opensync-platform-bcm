@@ -230,18 +230,22 @@ static bool mcpd_util_write_section(FILE *f, const target_mcproxy_params_t *prox
             else
             {
                 /*
-                * TODO: mcpd always require the physical interface for proper
-                * operation. In case a GRE backhaul tunnel is define as the
-                * interfice, strip the "g-" prefix to map the GRE interface name to
-                * the physical name.
-                */
+                 * TODO: mcpd always requires the physical interface for proper
+                 * operation. In case a GRE backhaul tunnel is defined as the
+                 * interface, strip the "g-" prefix to map the GRE interface
+                 * name to the physical name.
+                 */
                 char *nif = node->ifname;
                 if (strncmp(nif, "g-wl", strlen("g-wl")) == 0)
                 {
                     nif += strlen("g-");
                 }
 
-                fprintf(f, " %s/%s", node->bridge, nif);
+                if (BCM_SDK_VERSION >= 0x50402) {
+                    fprintf(f, " %s", nif);
+                } else {
+                    fprintf(f, " %s/%s", node->bridge, nif);
+                }
             }
         }
         fprintf(f,"\n");
@@ -251,9 +255,9 @@ static bool mcpd_util_write_section(FILE *f, const target_mcproxy_params_t *prox
         /* Proxy is ON -> gateway WAN configuration */
 
         /* List of uplink interfaces in g_mcpd_hdl.uplink_ifs is not properly populated
-         * via Connection_Manager_Uplink table when uplink interface is ETH VLAN type
+         * via Connection_Manager_Uplink table when uplink interface is ETH VLAN type.
          * This fix uses directly passed uplink interface name for mcast-interface,
-         * therefore only single mcast uplink interface is supported for now. */
+         * therefore only a single mcast uplink interface is supported for now. */
 
         fprintf(f, "%s-proxy-interfaces %s\n", prt_key, proxy_param->upstrm_if);
         fprintf(f, "%s-mcast-interfaces %s\n", prt_key, proxy_param->upstrm_if);
