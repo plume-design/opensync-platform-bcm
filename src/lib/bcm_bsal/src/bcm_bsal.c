@@ -284,6 +284,18 @@ static int rssi_to_snr(const char *ifname, int rssi)
     return rssi - noise;
 }
 
+static int normalize_snr(const char *ifname,
+                         const os_macaddr_t *hwaddr,
+                         int snr)
+{
+    if (snr >= 0) return snr;
+
+    LOGD(LOG_PREFIX"%s: Negative snr=%d computed for hwaddr="PRI(os_macaddr_t)", " \
+         "defaulting to snr=0", ifname, snr, FMT(os_macaddr_t, *hwaddr));
+
+    return 0;
+}
+
 static bool tlv_find_element(
         const uint8_t *data,
         size_t data_size,
@@ -540,17 +552,7 @@ static proc_event_res_t process_event_deauth_ind(
     disconn_ev = &event->data.disconnect;
     memcpy(&disconn_ev->client_addr, &client->hwaddr.addr, sizeof(disconn_ev->client_addr));
     disconn_ev->reason = ntohl(event_raw->event.reason);
-
-    // FIXME: Is it enough to determine source?
-    if (ntohl(event_raw->event.reason) == DOT11_RC_DEAUTH_LEAVING)
-    {
-        disconn_ev->source = BSAL_DISC_SOURCE_REMOTE;
-    }
-    else
-    {
-        disconn_ev->source = BSAL_DISC_SOURCE_LOCAL;
-    }
-
+    disconn_ev->source = BSAL_DISC_SOURCE_REMOTE;
     disconn_ev->type = BSAL_DISC_TYPE_DEAUTH;
 
     client_reset(client);
@@ -612,14 +614,7 @@ static proc_event_res_t process_event_disassoc_ind(
     disconn_ev = &event->data.disconnect;
     memcpy(&disconn_ev->client_addr, &client->hwaddr.addr, sizeof(disconn_ev->client_addr));
     disconn_ev->reason = ntohl(event_raw->event.reason);
-
-    // FIXME: Is it enough to determine source?
-    if (ntohl(event_raw->event.reason) == DOT11_RC_DISASSOC_LEAVING)   {
-        disconn_ev->source = BSAL_DISC_SOURCE_REMOTE;
-    } else {
-        disconn_ev->source = BSAL_DISC_SOURCE_LOCAL;
-    }
-
+    disconn_ev->source = BSAL_DISC_SOURCE_REMOTE;
     disconn_ev->type = BSAL_DISC_TYPE_DISASSOC;
 
     client_reset(client);
@@ -1189,6 +1184,7 @@ static void client_sta_info_update_callback(
         memset(&event, 0, sizeof(event));
         STRSCPY(event.ifname, client->ifname);
         snr = sta_info.rssi - sta_info.nf;
+        snr = normalize_snr(client->ifname, &client->hwaddr, snr);
 
         if ((activity_changed = client_update_activity_event(client, &sta_info, &event)))
         {
@@ -1638,6 +1634,7 @@ bool bcm_bsal_client_info(
     info->connected = sta_info.is_authorized;
     info->is_BTM_supported = sta_info.is_btm_supported;
     info->snr = sta_info.rssi - sta_info.nf;
+    info->snr = normalize_snr(ifname, &hwaddr, info->snr);
 
     /* TODO check how we can get RRM caps from driver */
 

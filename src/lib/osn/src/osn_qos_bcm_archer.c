@@ -32,6 +32,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "const.h"
 #include "log.h"
 #include "osn_qos.h"
+#include "memutil.h"
 
 #define BCM_QOS_RATE_DEFAULT    1000000     /**< Default rate in kbit/s, used to reset queue speeds */
 #define BCM_QOS_ID_BASE         0x44000000
@@ -43,20 +44,28 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #define BCM_QOS_MAX_QUEUES  31      /**< Maximum number of queues available */
 
+struct osn_qos
+{
+    int     *q_id;              /* Array of IDs used by this object */
+    int     *q_id_e;            /* End of array */
+};
+
 struct bcm_qos_queue
 {
-    intptr_t        qq_qos_id;      /**< QoS object associated with queue or 0 if free */
     int             qq_min_rate;    /**< Queue min rate in kbit/s */
     int             qq_max_rate;    /**< Queue max rate in kbit/s */
+    char           *qq_tag;         /**< Queue tag */
+    int             qq_refcnt;      /**< Queue reference count, 0 if unused */
 };
+
+static struct bcm_qos_queue bcm_qos_queue_list[BCM_QOS_MAX_QUEUES];
 
 static bool bcm_qos_check_license(void);
 static bool bcm_qos_global_init(void);
 static bool bcm_qos_queue_reset(int queue_id);
 static bool bcm_qos_queue_set(int queue_id, int min_rate, int max_rate);
-
-static intptr_t bcm_qos_id = 0;
-struct bcm_qos_queue bcm_qos_queue_list[BCM_QOS_MAX_QUEUES];
+static int bcm_qos_id_get(const char *tag);
+static void bcm_qos_id_put(int id);
 
 /*
  * ===========================================================================
@@ -65,13 +74,13 @@ struct bcm_qos_queue bcm_qos_queue_list[BCM_QOS_MAX_QUEUES];
  */
 osn_qos_t* osn_qos_new(const char *ifname)
 {
+    osn_qos_t *self;
+
     /*
      * BCM queues do not have a notion of network interfaces, so we can ignore
      * the name
      */
     (void)ifname;
-
-    intptr_t qos_id;
 
     static bool global_init = false;
 
@@ -85,52 +94,37 @@ osn_qos_t* osn_qos_new(const char *ifname)
         global_init = true;
     }
 
-    /* Generate a semi-unique ID */
-    qos_id = bcm_qos_id++;
-    qos_id &= BCM_QOS_ID_MASK;
-    qos_id |= BCM_QOS_ID_BASE;
-
-    return (void *)qos_id;
+    self = calloc(1, sizeof(*self));
+    return self;
 }
 
 void osn_qos_del(osn_qos_t *self)
 {
-    int qi;
+    int *qp;
 
-    intptr_t qos_id = (intptr_t)self;
-
-    /* Free up queues */
-    for (qi = 0; qi < ARRAY_LEN(bcm_qos_queue_list); qi++)
+    for (qp = self->q_id; qp < self->q_id_e; qp++)
     {
-        if (bcm_qos_queue_list[qi].qq_qos_id != qos_id) continue;
-
-        LOG(INFO, "bcm_qos: Freeing queue %d.", qi);
-
-        bcm_qos_queue_list[qi].qq_qos_id = 0;
-        /* Reset queue to default settings */
-        bcm_qos_queue_reset(qi);
+        bcm_qos_id_put(*qp);
     }
+
+    free(self->q_id);
 }
 
 bool osn_qos_apply(osn_qos_t *self)
 {
-    int qi;
-
-    intptr_t qos_id = (intptr_t)self;
+    int *qp;
 
     bool retval = true;
 
     /*
      * Apply QoS configuration to system
      */
-    for (qi = 0; qi < ARRAY_LEN(bcm_qos_queue_list); qi++)
+    for (qp = self->q_id; qp < self->q_id_e; qp++)
     {
-        if (bcm_qos_queue_list[qi].qq_qos_id != qos_id) continue;
-
         if (!bcm_qos_queue_set(
-                qi,
-                bcm_qos_queue_list[qi].qq_min_rate,
-                bcm_qos_queue_list[qi].qq_max_rate))
+                *qp,
+                bcm_qos_queue_list[*qp].qq_min_rate,
+                bcm_qos_queue_list[*qp].qq_max_rate))
         {
             /* bcm_qos_queue_set() reported the error already */
             retval = false;
@@ -159,38 +153,34 @@ bool osn_qos_queue_begin(
         osn_qos_t *self,
         int priority,
         int bandwidth,
+        const char *tag,
         const struct osn_qos_other_config *other_config,
         struct osn_qos_queue_status *qqs)
 {
     (void)priority;
     (void)other_config;
 
-    int qi;
-
-    intptr_t qos_id = (intptr_t)self;
+    int qid;
+    int *qp;
 
     memset(qqs, 0, sizeof(*qqs));
 
-    /*
-     * Scan the QoS queues and find the first empty slot
-     */
-    for (qi = 0; qi < ARRAY_LEN(bcm_qos_queue_list); qi++)
-    {
-        if (bcm_qos_queue_list[qi].qq_qos_id == 0) break;
-    }
-
-    if (qi >= ARRAY_LEN(bcm_qos_queue_list))
+    qid = bcm_qos_id_get(tag);
+    if (qid < 0)
     {
         LOG(ERR, "bcm_qos: All queues are full.");
         return false;
     }
 
-    bcm_qos_queue_list[qi].qq_qos_id = qos_id;
-    bcm_qos_queue_list[qi].qq_max_rate = bandwidth;
-    bcm_qos_queue_list[qi].qq_min_rate = 0;
+    /* Append the queue id to the list for this object */
+    qp = MEM_APPEND(&self->q_id, &self->q_id_e, sizeof(*qp));
+    *qp = qid;
+
+    bcm_qos_queue_list[qid].qq_max_rate = bandwidth;
+    bcm_qos_queue_list[qid].qq_min_rate = 0;
 
     /* Calculate the MARK for this DPI */
-    qqs->qqs_fwmark = SKBMARK_SET_DPIQ_MARK(0, qi);
+    qqs->qqs_fwmark = SKBMARK_SET_DPIQ_MARK(0, qid);
     qqs->qqs_fwmark = SKBMARK_SET_SQ_MARK(qqs->qqs_fwmark, 1);
 
     return true;
@@ -298,5 +288,67 @@ bool bcm_qos_queue_set(int queue_id, int min_rate, int max_rate)
 bool bcm_qos_queue_reset(int queue_id)
 {
     return bcm_qos_queue_set(queue_id, 0, BCM_QOS_RATE_DEFAULT);
+}
+
+int bcm_qos_id_get(const char *tag)
+{
+    int qid;
+
+    /* Check if there's a queue with a matching tag */
+    if (tag != NULL)
+    {
+        for (qid = 0; qid < BCM_QOS_MAX_QUEUES; qid++)
+        {
+            if (bcm_qos_queue_list[qid].qq_tag != NULL &&
+                    strcmp(bcm_qos_queue_list[qid].qq_tag, tag) == 0)
+            {
+                break;
+            }
+        }
+
+        if (qid < BCM_QOS_MAX_QUEUES)
+        {
+            /* The tag was found return this index */
+            bcm_qos_queue_list[qid].qq_refcnt++;
+            return qid;
+        }
+    }
+
+    /* Find first empty queue */
+    for (qid = 0; qid < BCM_QOS_MAX_QUEUES; qid++)
+    {
+        if (bcm_qos_queue_list[qid].qq_refcnt == 0) break;
+    }
+
+    if (qid >= BCM_QOS_MAX_QUEUES)
+    {
+        return -1;
+    }
+
+    bcm_qos_queue_list[qid].qq_refcnt = 1;
+    if (tag != NULL)
+    {
+        bcm_qos_queue_list[qid].qq_tag = strdup(tag);
+    }
+
+    return qid;
+}
+
+void bcm_qos_id_put(int qid)
+{
+    if (qid >= BCM_QOS_MAX_QUEUES) return;
+
+    if (bcm_qos_queue_list[qid].qq_refcnt-- > 1)
+    {
+        return;
+    }
+
+    if (!bcm_qos_queue_reset(qid))
+    {
+        LOG(WARN, "bcm_qos: Unable to reset queue %d.", qid);
+    }
+
+    free(bcm_qos_queue_list[qid].qq_tag);
+    bcm_qos_queue_list[qid].qq_tag = NULL;
 }
 

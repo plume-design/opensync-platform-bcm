@@ -250,7 +250,11 @@ static bool mcpd_util_write_section(FILE *f, const target_mcproxy_params_t *prox
                 nif += strlen("g-");
             }
 
-            fprintf(f, " %s/%s", node->bridge, nif);
+            if (BCM_SDK_VERSION >= 0x50402) {
+                fprintf(f, " %s", nif);
+            } else {
+                fprintf(f, " %s/%s", node->bridge, nif);
+            }
         }
     }
     fprintf(f,"\n");

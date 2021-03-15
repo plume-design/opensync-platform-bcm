@@ -889,8 +889,6 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
 #ifdef SCB_RX_REPORT_DATA_STRUCT_VERSION
     const struct bcmwl_ioctl_num_conv *conv;
     struct bcmwl_sta_rate rate;
-    iov_rx_report_counters_t c_buf;
-    iov_rx_report_counters_t *c;
     iov_rx_report_record_t *r;
     union {
         iov_rx_report_struct_t cmd;
@@ -946,29 +944,22 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
         tones = 0;
 
         for (tid = 0; tid < ARRAY_SIZE(r->station_counters); tid++) {
-            // c = &r->station_counters[tid];
-            // copy to c_buf because of gcc9 compile error:
-            // error: taking address of packed member of 'struct <anonymous>'
-            // may result in an unaligned pointer value [-Werror=address-of-packed-member]
-            memcpy(&c_buf, &r->station_counters[tid], sizeof(c_buf));
-            c = &c_buf;
-
             if (!(r->station_flags & (1 << tid)))
                 continue;
 
-            phyrate += conv->dtoh64(c->rxphyrate);
-            mpdu += conv->dtoh32(c->rxmpdu);
-            ampdu += conv->dtoh32(c->rxampdu);
-            retried += conv->dtoh32(c->rxretried);
-            bw += conv->dtoh32(c->rxbw);
+            phyrate += conv->dtoh64(r->station_counters[tid].rxphyrate);
+            mpdu += conv->dtoh32(r->station_counters[tid].rxmpdu);
+            ampdu += conv->dtoh32(r->station_counters[tid].rxampdu);
+            retried += conv->dtoh32(r->station_counters[tid].rxretried);
+            bw += conv->dtoh32(r->station_counters[tid].rxbw);
 #if SCB_RX_REPORT_DATA_STRUCT_VERSION == 2
-            ampdu_ofdma += conv->dtoh32(c->rxampdu_ofdma);
+            ampdu_ofdma += conv->dtoh32(r->station_counters[tid].rxampdu_ofdma);
 #endif
 #if SCB_RX_REPORT_DATA_STRUCT_VERSION == 3
-            mpdu_ofdma += conv->dtoh32(c->rxmpdu_ofdma);
+            mpdu_ofdma += conv->dtoh32(r->station_counters[tid].rxmpdu_ofdma);
 #endif
 #if SCB_RX_REPORT_DATA_STRUCT_VERSION >= 2
-            tones += conv->dtoh32(c->rxtones);
+            tones += conv->dtoh32(r->station_counters[tid].rxtones);
 #endif
         }
 
