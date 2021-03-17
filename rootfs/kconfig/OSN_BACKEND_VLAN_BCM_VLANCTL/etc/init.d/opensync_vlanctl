@@ -1,0 +1,42 @@
+#!/bin/sh
+
+# Interfaces that will be subject to vlan swapping
+INTERFACES="eth0 eth1"
+
+# Once vlanctl functionality is enabled the original interface becomes a dud.
+# Therefore we need to rename the original interface and create a new interface
+# with VLAN tagging disabled
+vlanctl_init()
+{
+    [ -d "/sys/class/net/$1.vc" ] && return 0
+
+    UP="$(ip link show "$1" up)"
+    # Interfaces can be renamed only when they are down
+    [ -n "$UP" ] && ip link set "$1" down
+
+    # Rename interface from ethX to ethX.vc
+    # vlanctl requires that the interface is up
+    ip link set "$1" name "$1.vc" up
+
+    # Create a new interface with the original name for untagged data
+    vlanctl --if-create-name "$1.vc" "$1"
+    vlanctl --if "$1.vc" --rx --tags 0 --set-rxif "$1" --rule-append
+    vlanctl --if "$1.vc" --tx --tags 0 --filter-txif "$1" --rule-append
+    vlanctl --if "$1.vc" --set-if-mode-rg
+
+    # Restore interface status
+    [ -n "$UP" ] && ip link set "$1" up
+}
+
+[ "$1" != "start" ] && exit 0
+
+for IF in $INTERFACES
+do
+    if vlanctl_init "$IF"
+    then
+        logger -t vlanctl Enabled vlanctl on "$IF"
+    else
+        logger -t vlanctl Error enabling vlanctl on "$IF"
+    fi
+done
+

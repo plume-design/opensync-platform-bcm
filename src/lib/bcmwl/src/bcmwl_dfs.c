@@ -271,6 +271,14 @@ const char* bcmwl_event_ap_chan_change_reason(wl_chan_change_reason_t reason)
         return "MOVE SUCCESS";
     case WL_CHAN_REASON_DFS_AP_MOVE_STUNT:
         return "MOVE STUNT";
+#if BCM_WLIMPL >= 63
+    case WL_CHAN_REASON_DFS_AP_MOVE_STUNT_SUCCESS:
+        return "MOVE STUNT SUCCESS";
+    case WL_CHAN_REASON_CSA_TO_DFS_CHAN_FOR_CAC_ONLY:
+        return "CSA_DFS_CAC_ONLY";
+    case WL_CHAN_REASON_ANY:
+        return "ANY";
+#endif
     default:
         break;
     }
@@ -291,9 +299,10 @@ void bcmwl_event_handle_ap_chan_change(const char *ifname, void *_ev)
     if (length < sizeof(*event)) {
         LOGI("%s: ap chan change incorrect length %d, skip parsing", ifname, length);
     } else {
-        LOGI("%s: ap chan change reason %s target_chanspec 0x%04x",
+        LOGI("%s: ap chan change reason %s (%d) target_chanspec 0x%04x",
              ifname,
              bcmwl_event_ap_chan_change_reason(event->reason),
+             event->reason,
              event->target_chanspec);
     }
 
@@ -303,6 +312,7 @@ void bcmwl_event_handle_ap_chan_change(const char *ifname, void *_ev)
         return;
 
     evx_debounce_call(bcmwl_radio_state_report, phy);
+    evx_debounce_call(bcmwl_vap_state_report, ifname);
 }
 
 void bcmwl_radio_radar_get(const char *phyname, struct schema_Wifi_Radio_State *rstate)

@@ -1,0 +1,10 @@
+config OSN_BACKEND_VLAN_BCM_VLANCTL
+    bool "BCM vlanctl"
+    select OSN_LINUX_ENABLED
+    select OSN_LINUX_VLAN
+    help
+        Use the Broadcom `vlanctl` utility for managing VLANs.
+
+        Vlanctl is needed for HW acceleration and integration with other BCM
+        daemons like mcpd.
+

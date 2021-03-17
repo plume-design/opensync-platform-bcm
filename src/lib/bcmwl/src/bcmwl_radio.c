@@ -674,8 +674,12 @@ bool bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
         if (!(p = WL(phy, "bi", strfmta("%d", rconf->bcn_int))) || strlen(p))
             LOGW("%s: failed to set beacn interval: %s", phy, p ?: strerror(errno));
 
-    if (rchanged->country)
+    if (rchanged->country) {
+        WARN_ON(!WL(phy, "down"));
         WARN_ON(!WL(phy, "country", rconf->country));
+        if (rconf->enabled)
+            WARN_ON(!WL(phy, "up"));
+    }
 
     if (rchanged->fallback_parents)
         bcmwl_radio_fallback_parents_set(phy, rconf);

@@ -1,3 +1,5 @@
+#!/bin/sh
+
 # Copyright (c) 2017, Plume Design Inc. All rights reserved.
 # 
 # Redistribution and use in source and binary forms, with or without
@@ -22,23 +24,44 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#
-# Override file for OSN
-#
 
-# Add BCM QoS Implementation
-ifdef CONFIG_OSN_BACKEND_QOS_BCM_ARCHER
+vlan_log()
+{
+    logger -st vlan "$@"
+}
 
-UNIT_SRC_TOP += $(OVERRIDE_DIR)/src/osn_qos_bcm_archer.c
+vlan_ifname()
+{
+    echo "$1.$2"
+}
 
-# Add BCMSDK include paths that are required for archer.h, archer_api.h and
-# skb_defines.h
-UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/bcmdrivers/opensource/include/bcm963xx
-UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/userspace/private/include
+vlan_add()
+{
+    [ -d "/sys/class/net/$1.$2" ] && return 0
 
-# The final binary must be linked with -larcher
-UNIT_EXPORT_LDFLAGS += -larcher
+    if [ -d "/sys/class/net/$1.vc" ]
+    then
+        vlan_log "Adding VLAN interface $1.$2 usig vlanctl"
+        vlanctl --mcast --if-create-name $1.vc $1.$2
+        vlanctl --if $1.vc --rx --tags 1 --filter-vid $2 0 --pop-tag --set-rxif $1.$2 --rule-append
+        vlanctl --if $1.vc --tx --tags 0 --filter-txif $1.$2 --push-tag --set-vid $2 0 --rule-append
+        vlanctl --if $1.vc --set-if-mode-rg
+    else
+        vlan_log "Adding VLAN interface $1.$2 usig vconfig"
+        vconfig add "$1" "$2"
+    fi
+}
 
-endif
+vlan_del()
+{
+    [ ! -d "/sys/class/net/$1.$2" ] && return 0
 
-UNIT_SRC_TOP += $(if $(CONFIG_OSN_BACKEND_VLAN_BCM_VLANCTL),$(OVERRIDE_DIR)/src/osn_vlan_bcm_vlanctl.c,)
+    if [ -d "/sys/class/net/$1.vc" ]
+    then
+        vlan_log "Removing VLAN interface $1.$2 using vlanctl"
+        vlanctl --if-delete "$1.$2"
+    else
+        vlan_log "Removing VLAN interface $1.$2 using vconfig"
+        vconfig rem "$1.$2"
+    fi
+}

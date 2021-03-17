@@ -27,10 +27,6 @@ UNIT_CFLAGS += -DTARGET_H='"target_bcm.h"'
 UNIT_CFLAGS += -I$(OVERRIDE_DIR)/inc
 
 
-ifeq ($(TARGET),BCM_947189GW)
-UNIT_SRC_TOP += $(OVERRIDE_DIR)/stats.c
-endif
-
 UNIT_DEPS   += $(LAYER_DIR)/src/lib/wl80211
 UNIT_DEPS   += $(LAYER_DIR)/src/lib/bcmutil
 
@@ -45,7 +41,3 @@ UNIT_SRC_TOP += $(OVERRIDE_DIR)/target_mcpd.c
 UNIT_SRC := $(TARGET_COMMON_SRC)
 UNIT_SRC_PLATFORM := $(OVERRIDE_DIR)
 UNIT_SRC_TARGET := $(UNIT_SRC_PLATFORM)/$(TARGET)
-
-ifeq ($(TARGET),BCM_947189GW)
-UNIT_SRC_TOP += $(UNIT_SRC_TARGET)/managers.c
-endif
