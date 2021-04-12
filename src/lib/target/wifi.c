@@ -35,6 +35,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <bcmwl.h>
 #include <bcmwl_nas.h>
 #include <bcmwl_wps.h>
+#include <bcmwl_hostap.h>
+#include <kconfig.h>
 
 #define MODULE_ID LOG_MODULE_ID_TARGET
 
@@ -122,4 +124,16 @@ target_vif_config_set2(const struct schema_Wifi_VIF_Config *vconf,
                        int num_cconfs)
 {
     return bcmwl_vap_update2(vconf, rconf, cconfs, vchanged, num_cconfs);
+}
+
+bool
+target_dpp_supported(void)
+{
+    return kconfig_enabled(CONFIG_BCM_USE_DPP);
+}
+
+bool
+target_dpp_config_set(const struct schema_DPP_Config *config)
+{
+    return bcmwl_hostap_dpp_set(config);
 }

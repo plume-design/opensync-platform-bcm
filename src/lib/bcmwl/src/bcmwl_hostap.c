@@ -44,24 +44,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <opensync-ctrl.h>
 #include <opensync-wpas.h>
 #include <opensync-hapd.h>
+#include <opensync-ctrl-dpp.h>
 #include <bcmwl.h>
 #include <bcmwl_hostap.h>
 
 /* local */
 #define MODULE_ID LOG_MODULE_ID_TARGET
-#define BCMWL_HOSTAP_MAX_PHY 4
-#define BCMWL_HOSTAP_DFS_SCAN_FAILURES_JOIN 3
-#define BCMWL_HOSTAP_DFS_SCAN_FAILURES_KEEPAPUP 5
-
-struct bcmwl_hostap_parent {
-    int channel;
-    char ssid[32+1];
-    char bssid[18];
-};
+#define BCMWL_HOSTAP_DFS_SCAN_FAILURES_KEEPAPUP 3
 
 static ev_async g_nl_async;
 static ev_io g_nl_io;
-static struct bcmwl_hostap_parent g_parents[BCMWL_HOSTAP_MAX_PHY];
 static int g_scan_failures;
 
 /* helpers */
@@ -78,65 +70,6 @@ bcmwl_hostap_bss_report(const char *bss)
     phy = strfmta("wl%d", r);
     evx_debounce_call(bcmwl_vap_state_report, bss);
     evx_debounce_call(bcmwl_radio_state_report, phy);
-}
-
-static struct bcmwl_hostap_parent *
-bcmwl_hostap_parent_get(const char *bss)
-{
-    int r;
-    int v;
-
-    if (WARN_ON(!bcmwl_parse_vap(bss, &r, &v)))
-        return NULL;
-
-    if (WARN_ON((size_t)r >= ARRAY_SIZE(g_parents)))
-        return NULL;
-
-    return &g_parents[r];
-}
-
-static void
-bcmwl_hostap_parent_store(struct wpas *wpas,
-                          const struct schema_Wifi_Radio_Config *rconf,
-                          const struct schema_Wifi_VIF_Config *vconf)
-{
-    struct bcmwl_hostap_parent *parent = bcmwl_hostap_parent_get(wpas->ctrl.bss);
-
-    if (WARN_ON(!parent)) return;
-
-    parent->channel = rconf->channel;
-    STRSCPY_WARN(parent->ssid, vconf->ssid);
-    STRSCPY_WARN(parent->bssid, vconf->parent);
-}
-
-static void
-bcmwl_hostap_parent_force_join_maybe(struct wpas *wpas)
-{
-    struct bcmwl_hostap_parent *parent = bcmwl_hostap_parent_get(wpas->ctrl.bss);
-
-    if (g_scan_failures < BCMWL_HOSTAP_DFS_SCAN_FAILURES_JOIN) return;
-    if (WARN_ON(!parent)) return;
-    if (parent->channel == 0) return;
-    if (strlen(parent->ssid) == 0) return;
-    if (strlen(parent->bssid) == 0) return;
-
-    /* This is intended for DFS cases. Sometimes driver can move from ISM to
-     * PRE-ISM state when roaming or enabling STA link. Once that happens
-     * driver will reject external scans. Consequently wpa_s won't be able to
-     * connect or roam and possibly inheriting ISM from parent AP on DFS
-     * channels. Without this the STA link may end up taking 60s or more to
-     * establish and the entire system may enter recovery mode long before that
-     * gets a chance to finish.
-     *
-     * As such attempt to join through iovar which can virtually guide wpa_s to
-     * connect eventually.
-     */
-    LOGI("%s: trying to force-join to %s (%s) on channel %d (scan failures=%d)",
-         wpas->ctrl.bss, parent->ssid, parent->bssid, parent->channel,
-         g_scan_failures);
-    WARN_ON(!WL(wpas->ctrl.bss, "join", parent->ssid,
-                "-c", strfmta("%d", parent->channel),
-                "-b", parent->bssid));
 }
 
 static void
@@ -182,6 +115,39 @@ static void
 bcmwl_hostap_hapd_ctrl_sta_disconnected(struct hapd *hapd, const char *mac)
 {
     /* relying on wl events for this */
+}
+
+//Start DPP callbacks
+static void
+bcmwl_hostap_hapd_dpp_chirp_received(const struct target_dpp_chirp_obj *chirp)
+{
+    if (WARN_ON(!bcmwl_ops.op_dpp_announcement))
+        return;
+    bcmwl_ops.op_dpp_announcement(chirp);
+}
+
+static void
+bcmwl_hostap_hapd_dpp_conf_sent(const struct target_dpp_conf_enrollee *enrollee)
+{
+    if (WARN_ON(!bcmwl_ops.op_dpp_conf_enrollee))
+        return;
+    bcmwl_ops.op_dpp_conf_enrollee(enrollee);
+}
+
+static void
+bcmwl_hostap_hapd_dpp_conf_received(const struct target_dpp_conf_network *conf)
+{
+    if (WARN_ON(!bcmwl_ops.op_dpp_conf_network))
+        return;
+    bcmwl_ops.op_dpp_conf_network(conf);
+}
+
+static void
+bcmwl_hostap_wpas_dpp_conf_received(const struct target_dpp_conf_network *conf)
+{
+    if (WARN_ON(!bcmwl_ops.op_dpp_conf_network))
+        return;
+    bcmwl_ops.op_dpp_conf_network(conf);
 }
 
 static void
@@ -240,22 +206,28 @@ bcmwl_hostap_wpas_scan_failed(struct wpas *wpas, int status)
 {
     g_scan_failures++;
     bcmwl_hostap_disable_keep_ap_up_maybe(wpas);
-    bcmwl_hostap_parent_force_join_maybe(wpas);
 }
 
 /* helpers */
 static void
 bcmwl_hostap_fill_freqlist(struct wpas *wpas)
 {
-    char *chans = WL(wpas->phy, "channels");
+    char *chans = WL(wpas->phy, "chanspecs");
     char *chan;
+    int freq;
+    int cs;
     size_t i = 0;
 
     if (WARN_ON(!chans))
         return;
     while ((chan = strsep(&chans, " \r\n")))
         if (i < ARRAY_SIZE(wpas->freqlist))
-            wpas->freqlist[i++] = (atoi(chan) > 30 ? 5000 : 2407) + (5 * atoi(chan));
+            if ((cs = strtol(chan, NULL, 16)) > 0)
+                if (bcmwl_chanspec_get_bw_mhz(cs) == 20)
+                    if ((freq = bcmwl_chanspec_get_center_freq(cs)) > 0)
+                        wpas->freqlist[i++] = freq;
+
+    WARN_ON(i == ARRAY_SIZE(wpas->freqlist));
 }
 
 static void
@@ -290,6 +262,9 @@ bcmwl_hostap_init_bss(const char *bss)
         hapd->sta_disconnected = bcmwl_hostap_hapd_ctrl_sta_disconnected;
         hapd->ap_enabled = bcmwl_hostap_hapd_ctrl_ap_enabled;
         hapd->ap_disabled = bcmwl_hostap_hapd_ctrl_ap_disabled;
+        hapd->dpp_chirp_received = bcmwl_hostap_hapd_dpp_chirp_received;
+        hapd->dpp_conf_sent = bcmwl_hostap_hapd_dpp_conf_sent;
+        hapd->dpp_conf_received = bcmwl_hostap_hapd_dpp_conf_received;
         ctrl_enable(&hapd->ctrl);
         hapd = NULL;
     }
@@ -303,6 +278,7 @@ bcmwl_hostap_init_bss(const char *bss)
         wpas->disconnected = bcmwl_hostap_wpas_ctrl_disconnected;
         wpas->scan_failed = bcmwl_hostap_wpas_scan_failed;
         wpas->scan_results = bcmwl_hostap_wpas_scan_results;
+        wpas->dpp_conf_received = bcmwl_hostap_wpas_dpp_conf_received;
         ctrl_enable(&wpas->ctrl);
         wpas = NULL;
     }
@@ -420,7 +396,6 @@ bcmwl_hostap_bss_apply(const struct schema_Wifi_VIF_Config *vconf,
     if (wpas) {
         WARN_ON(wpas_conf_gen(wpas, rconf, vconf, cconf, n_cconf) < 0);
         WARN_ON(wpas_conf_apply(wpas) < 0);
-        bcmwl_hostap_parent_store(wpas, rconf, vconf);
     }
 }
 
@@ -453,4 +428,9 @@ void bcmwl_hostap_sta_get(const char *bss,
     if (WARN_ON(!hapd))
         return;
     hapd_sta_get(hapd, mac, client);
+}
+
+bool bcmwl_hostap_dpp_set(const struct schema_DPP_Config *config)
+{
+    return ctrl_dpp_config(config);
 }

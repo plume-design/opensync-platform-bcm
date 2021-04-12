@@ -55,7 +55,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 static c_item_t g_map_band[] = {
     C_ITEM_STR_STR("a",     SCHEMA_CONSTS_RADIO_TYPE_STR_5G),
-    C_ITEM_STR_STR("b",     SCHEMA_CONSTS_RADIO_TYPE_STR_2G)
+    C_ITEM_STR_STR("b",     SCHEMA_CONSTS_RADIO_TYPE_STR_2G),
+    C_ITEM_STR_STR("6g",    SCHEMA_CONSTS_RADIO_TYPE_STR_6G),
 };
 
 static c_item_t g_map_ht_mode[] = {
@@ -222,38 +223,27 @@ static const char* bcmwl_radio_get_hwname(const char *dphy)
     return NULL;
 }
 
-// FIXME: Remove the following function. It was made obsolete with bcmwl_radio_get_bands().
 bool bcmwl_radio_band_get(const char *phyname, char *band, ssize_t band_len)
 {
-    FILE *fp;
-    char cmd[512];
-    char buf[512];
-    bool success = false;
+    const char *selected = WL(phyname, "band");
+    const char *all = WL(phyname, "bands");
 
-    snprintf(cmd, sizeof(cmd), "wlctl -i %s bands", phyname);
+    if (!all) return false;
+    if (!selected) return false;
 
-    fp = popen(cmd, "r");
-    if (fp && fgets(buf, sizeof(buf), fp))
-    {
-        /* If board is misconfigured it might return "b a".
-         * Pick the first entry only. The subsequent
-         * strscpy() will copy just 1 letter.  This should
-         * work for 99% boards because we almost never see
-         * dual-band radios in consumer wifi routers. If we
-         * do, we can fix that later.
-         */
-        buf[1] = 0;
-        if (buf[0] == 'a' || buf[0] == 'b')
-        {
-            // Valid bands: a = 5G, b = 2.4G
-            success = strscpy(band, strchomp(buf, " \t\r\n"), band_len) > 0;
-        }
+    if (strcmp(selected, "auto")) {
+        strscpy(band, selected, band_len);
+        return true;
     }
 
-    if (fp)
-        pclose(fp);
+    if (strstr(all, " ")) {
+        LOGW("%s: multiple bands avilable, none selected, fix at integration please", phyname);
+        return false;
+    }
 
-    return success;
+    /* reaching here means there's only 1 band on the phy */
+    strscpy(band, all, band_len);
+    return true;
 }
 
 void bcmwl_radio_chanspec_extract(const char *chanspec, int *chan, int *width)
@@ -263,10 +253,16 @@ void bcmwl_radio_chanspec_extract(const char *chanspec, int *chan, int *width)
      * 1l (0x1803)
      * 11u (0x1909)
      * 44/80 (0xe22a)
+     * 6g1 (0x5001)
      */
     char *buf = strdupa(strpbrk(chanspec, "1234567890") ?: "");
     char *str = strsep(&buf, " ");
+    const char *prefix_6g = "6g";
     const char *c, *w;;
+    int num;
+    if (strstr(str, prefix_6g) == str)
+        str += strlen(prefix_6g);
+    num = atoi(str);
     if (strstr(str, "l") || strstr(str, "u")) {
         *chan = atoi(str);
         *width = 40;
@@ -276,7 +272,7 @@ void bcmwl_radio_chanspec_extract(const char *chanspec, int *chan, int *width)
         *width = atoi(w);
     }
     else {
-        *chan = atoi(chanspec);
+        *chan = num;
         *width = 20;
         WARN_ON(*chan == 0);
     }
@@ -322,13 +318,23 @@ bool bcmwl_radio_get_chanspec(const char *phy, int *chan, int *width)
 static char* bcmwl_radio_chanspec_prep(const char *phy, int channel, const char *ht_mode)
 {
     int bw = atoi(strpbrk(ht_mode, "1234567890") ?: "");
+    const char *prefix = "";
+    const char *prefix_6g = "6g";
+    const char *band_6g = "6g";
+    char band[32] = {0};
     char *i, *p;
+
+    if (!bcmwl_radio_band_get(phy, band, sizeof(band)))
+        return NULL;
+
+    if (strcmp(band, band_6g) == 0)
+        prefix = prefix_6g;
 
     switch (bw) {
         default:
             /* FALLTHROUGH */
         case 20:
-            return strfmt("%d", channel);
+            return strfmt("%s%d", prefix, channel);
         case 2040:
             /*
              * This is a special case where obss_coex is enabled to
@@ -339,14 +345,17 @@ static char* bcmwl_radio_chanspec_prep(const char *phy, int channel, const char 
             /* FALLTHROUGH */
         case 40:
             for (p = WL(phy, "chanspecs"); (i = strsep(&p, "\r\n")); )
-                if ((i = strsep(&i, " ")))
-                    if (strstr(i, "l") || strstr(i, "u"))
+                if ((i = strsep(&i, " "))) {
+                    if (strstr(i, prefix_6g) == i)
+                        i += strlen(prefix_6g);
+                    if (strstr(i, "l") || strstr(i, "u") || strstr(i, "/40"))
                         if (atoi(i) == channel)
-                            return strdup(i);
+                            return strfmt("%s%s", prefix, i);
+                }
             return NULL;
         case 80:
         case 160:
-            return strfmt("%d/%d", channel, bw);
+            return strfmt("%s%d/%d", prefix, channel, bw);
     }
     return NULL;
 }
@@ -657,6 +666,8 @@ bool bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
                 WARN_ON(!WL(phy, "bw_cap", "2g", "0xff"));
             if (strstr(rconf->freq_band, "5G"))
                 WARN_ON(!WL(phy, "bw_cap", "5g", "0xff"));
+            if (strstr(rconf->freq_band, "6G"))
+                WARN_ON(!WL(phy, "bw_cap", "6g", "0xff"));
         }
         if ((p = WL(phy, "chanspec")) && (p = strsep(&p, " ")))
             WARN_ON(!WL(phy, "chanspec", p));

@@ -107,6 +107,15 @@ static ev_io g_nl_io;
     util_nl_each_attr(hdr, attr, attrlen) \
         if (attr->rta_type == type)
 
+#define util_nl_each_nested_attr(attr, inner_attr, attrlen) \
+    for (inner_attr = RTA_DATA(attr), attrlen = RTA_PAYLOAD(attr); \
+         RTA_OK(inner_attr, attrlen); \
+         inner_attr = RTA_NEXT(inner_attr, attrlen))
+
+#define util_nl_each_nested_attr_type(attr, inner_attr, attrlen, type) \
+    util_nl_each_nested_attr(attr, inner_attr, attrlen) \
+        if (inner_attr->rta_type == type)
+
 /**
  * Private
  */
@@ -263,6 +272,9 @@ static void bcmwl_event_verify_vht_oper(const char *ifname, const char *chanspec
     long int width = strtol(vht_oper_val, NULL, 16);
 
     if (!info)
+        return;
+
+    if (!vht_oper_tag)
         return;
 
     if (strlen(info) == 0)
@@ -995,6 +1007,27 @@ again:
     }
 }
 
+static bool bcmwl_event_nl_can_ignore(const struct nlmsghdr *hdr)
+{
+    static const char *ignored_link_kinds[] = { "ovs_geneve", NULL };
+    const struct rtattr *attr;
+    int attrlen;
+
+    util_nl_each_attr_type(hdr, attr, attrlen, IFLA_LINKINFO) {
+        const struct rtattr *inner_attr = RTA_DATA(attr);
+        int nested_attrlen = RTA_PAYLOAD(attr);
+
+        util_nl_each_nested_attr_type(attr, inner_attr, nested_attrlen, IFLA_INFO_KIND) {
+            const char **link_kind;
+            for (link_kind = ignored_link_kinds; *link_kind; link_kind++)
+                if (strcmp(RTA_DATA(inner_attr), *link_kind) == 0)
+                    return true;
+        }
+    }
+
+    return false;
+}
+
 static void bcmwl_event_nl_handle(const void *const buf, unsigned int len)
 {
     const struct nlmsghdr *hdr;
@@ -1002,13 +1035,23 @@ static void bcmwl_event_nl_handle(const void *const buf, unsigned int len)
     int attrlen;
     int hdrlen;
 
-    util_nl_each_msg_type(buf, len, hdr, hdrlen, RTM_NEWLINK)
-        util_nl_each_attr_type(hdr, attr, attrlen, IFLA_IFNAME)
-            WARN_ON(!bcmwl_event_register(EV_DEFAULT_ RTA_DATA(attr), bcmwl_event_handler));
+    util_nl_each_msg_type(buf, len, hdr, hdrlen, RTM_NEWLINK) {
+        util_nl_each_attr_type(hdr, attr, attrlen, IFLA_IFNAME) {
+            if (bcmwl_event_nl_can_ignore(hdr))
+                LOGT("Ignore netlink event :: type=RTM_NEWLINK iface=%s", (char*)RTA_DATA(attr));
+            else
+                WARN_ON(!bcmwl_event_register(EV_DEFAULT_ RTA_DATA(attr), bcmwl_event_handler));
+        }
+    }
 
-    util_nl_each_msg_type(buf, len, hdr, hdrlen, RTM_DELLINK)
-        util_nl_each_attr_type(hdr, attr, attrlen, IFLA_IFNAME)
-            bcmwl_event_unregister(EV_DEFAULT_ RTA_DATA(attr), bcmwl_event_handler);
+    util_nl_each_msg_type(buf, len, hdr, hdrlen, RTM_DELLINK) {
+        util_nl_each_attr_type(hdr, attr, attrlen, IFLA_IFNAME) {
+            if (bcmwl_event_nl_can_ignore(hdr))
+                LOGT("Ignore netlink event :: type=RTM_DELLINK iface=%s", (char*)RTA_DATA(attr));
+            else
+                bcmwl_event_unregister(EV_DEFAULT_ RTA_DATA(attr), bcmwl_event_handler);
+        }
+    }
 }
 
 static void bcmwl_event_nl_cb(EV_P_ ev_io *io, int events)

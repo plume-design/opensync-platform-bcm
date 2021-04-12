@@ -1,0 +1,22 @@
+#!/bin/sh
+
+start()
+{
+    if [ -e /etc/hostname ]; then
+        HOSTNAME=$(cat /etc/hostname)
+        if [ -n "$HOSTNAME" ]; then
+            echo "$HOSTNAME" > /proc/sys/kernel/hostname
+        fi
+    fi
+}
+
+case "$1" in
+    start)
+        start
+        exit 0
+        ;;
+
+    *)
+        exit 0
+        ;;
+esac

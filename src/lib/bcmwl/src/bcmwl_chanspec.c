@@ -238,3 +238,36 @@ int bcmwl_chanspec_get_primary(const int cs)
 
     return -1;
 }
+
+int bcmwl_chanspec_get_bw_mhz(const int cs)
+{
+    switch (CHSPEC_BW(cs)) {
+        case WL_CHANSPEC_BW_20: return 20;
+        case WL_CHANSPEC_BW_40: return 40;
+        case WL_CHANSPEC_BW_80: return 80;
+        case WL_CHANSPEC_BW_160: return 160;
+    }
+
+    return 0;
+}
+
+int bcmwl_chanspec_get_center_freq(const int cs)
+{
+    int c = CHSPEC_CHANNEL(cs);
+    switch (CHSPEC_BAND(cs)) {
+        case WL_CHANSPEC_BAND_2G:
+            if (c >= 1 && c <= 14)
+                return 2407 + (5 * c);
+            break;
+        case WL_CHANSPEC_BAND_5G:
+            if (c >= 36 && c <= 181)
+                return 5000 + (5 * c);
+            break;
+#ifdef WL_CHANSPEC_BAND_6G
+        case WL_CHANSPEC_BAND_6G:
+            if (c >= 1 && c <= 233)
+                return 5950 + (5 * c);
+#endif
+    }
+    return 0;
+}
