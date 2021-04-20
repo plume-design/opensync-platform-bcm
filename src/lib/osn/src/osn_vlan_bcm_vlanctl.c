@@ -29,6 +29,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "const.h"
 #include "execsh.h"
 #include "log.h"
+#include "os_util.h"
 #include "osn_vlan.h"
 #include "util.h"
 
@@ -51,6 +52,7 @@ static bool osn_vlan_fini(osn_vlan_t *self);
 static bool osn_vlan_lnx_apply(osn_vlan_t *self);
 static bool osn_vlan_bcm_has_vlanctl(const char *ifname);
 static bool osn_vlan_bcm_apply(osn_vlan_t *self);
+static bool osn_vlan_bcm_apply_egress_map(osn_vlan_t *self);
 static bool osn_vlan_bcm_fini(osn_vlan_t *self);
 
 /*
@@ -267,19 +269,118 @@ bool osn_vlan_bcm_apply(osn_vlan_t *self)
      * $3 - Parent interface name
      */
     static char vlanctl_add_cmd[] = _S(
-            vlanctl --mcast --if-create-name "$3.vc" "$1";
-            vlanctl --if "$3.vc" --rx --tags 1 --filter-vid $2 0 --pop-tag --set-rxif "$1" --rule-append;
-            vlanctl --if "$3.vc" --tx --tags 0 --filter-txif "$1" --push-tag --set-vid $2 0 --rule-append;
-            vlanctl --if "$3.vc" --set-if-mode-rg);
+            ifname="$1";
+            ifparent="$2";
+            vlan="$3";
 
-    if (execsh_log(LOG_SEVERITY_DEBUG, vlanctl_add_cmd, self->ov_ifname, svlan, self->ov_ifparent) != 0)
+            vlanctl --mcast --if-create-name "${ifparent}.vc" "${ifname}";
+            vlanctl --if "${ifparent}.vc" --rx --tags 1 --filter-vid "${vlan}" 0 --pop-tag --set-rxif "${ifname}" --rule-append;
+            vlanctl --if "${ifparent}.vc" --set-if-mode-rg);
+
+    if (execsh_log(LOG_SEVERITY_DEBUG, vlanctl_add_cmd, self->ov_ifname, self->ov_ifparent, svlan) != 0)
     {
-        LOG(ERR, "osn_vlan_bcm: %s: Error creating VLAN interface. `vlanctl` failed.",
+        LOG(ERR, "osn_vlan_bcm: %s: Error creating VLAN interface. `vlanctl` failed when creating VLAN interface.",
+                self->ov_ifname);
+        return false;
+    }
+
+    if (!osn_vlan_bcm_apply_egress_map(self))
+    {
+        LOG(ERR, "osn_vlan_bcm: Error applying egress QoS map: %s", self->ov_egress_qos_map);
+        return false;
+    }
+
+    /*
+     * This is the catch-all default rule, must be added after egress_map
+     */
+    static char vlanctl_add_default_rule_cmd[] = _S(
+            ifname="$1";
+            ifparent="$2";
+            vlan="$3";
+            vlanctl --if "${ifparent}.vc" --tx --tags 0 --filter-txif "${ifname}" --push-tag --set-vid "${vlan}" 0 --rule-append);
+
+    if (execsh_log(LOG_SEVERITY_DEBUG, vlanctl_add_default_rule_cmd, self->ov_ifname, self->ov_ifparent, svlan) != 0)
+    {
+        LOG(ERR, "osn_vlan_bcm: %s: Error creating VLAN interface. `vlanctl` failed when adding default rule.",
                 self->ov_ifname);
         return false;
     }
 
     self->ov_is_bcm_vlan = true;
+
+    return true;
+}
+
+bool osn_vlan_bcm_apply_egress_map(osn_vlan_t *self)
+{
+    char qosmap[C_QOS_MAP_LEN];
+    char *pqosmap;
+    char *psep;
+
+    if (STRSCPY(qosmap, self->ov_egress_qos_map) < 0)
+    {
+        LOG(ERR, "osn_vlan_bcm: Egress map is too long: %s", self->ov_egress_qos_map);
+        return false;
+    }
+
+    psep = qosmap;
+    while ((pqosmap = strsep(&psep, " ")) != NULL)
+    {
+        char svlan[C_VLAN_LEN];
+        int rc;
+
+        if (pqosmap[0] == '\0') continue;
+
+        char *skb_prio = strsep(&pqosmap, ":");
+        char *pcp = strsep(&pqosmap, ":");
+
+        if (skb_prio == NULL || pcp == NULL)
+        {
+            LOG(ERR, "osn_vlan_bcm: Error parsing egress map: %s", self->ov_egress_qos_map);
+            return false;
+        }
+
+        /* Do some rudimentary sanity checks */
+        if (!os_atol(skb_prio, (long[]){0}) || !os_atol(pcp, (long[]){0}))
+        {
+            LOG(ERR, "osn_vlan_bcm: SKB_PRIO or/and PCP is not a number: %s", self->ov_egress_qos_map);
+            return false;
+        }
+
+        /*
+         * vlanctl command to appliy pbits (for egress map):
+         *
+         * $1 - interface name
+         * $2 - parent interface
+         * $3 - vlan number
+         * $4 - SKB priority
+         * $5 - PCP
+         */
+        static char vlanctl_setpbits_cmd[] = _S(
+            ifname="$1";
+            ifparent="$2";
+            vlan="$3";
+            skbprio="$4";
+            pcp="$5";
+
+            vlanctl --if "$ifparent.vc"
+                    --tx
+                    --tags 0
+                    --filter-txif "$ifname"
+                    --filter-skb-prio "$skbprio"
+                    --push-tag
+                    --set-vid "$vlan" 0
+                    --set-pbits "$pcp" 0
+                    --rule-append);
+
+        snprintf(svlan, sizeof(svlan), "%d", self->ov_vid);
+        rc = execsh_log(LOG_SEVERITY_DEBUG, vlanctl_setpbits_cmd, self->ov_ifname, self->ov_ifparent, svlan, skb_prio, pcp);
+        if (rc != 0)
+        {
+            LOG(ERR, "osn_vlan_bcm: Error applying pbits: %s", self->ov_egress_qos_map);
+            return false;
+        }
+    }
 
     return true;
 }
