@@ -706,6 +706,8 @@ bcmwl_wl_cmd_wpa(const char *ifname, const struct bcmwl_wl *wl, const char *argv
         csnprintf(&p, &len, " WPA-802.1x");
     if (atoi(in) & 64)
         csnprintf(&p, &len, " WPA2-802.1x");
+    if (atoi(in) == 0)
+        csnprintf(&p, &len, " Disabled");
 
     free(in);
     return strdup(tmp);
