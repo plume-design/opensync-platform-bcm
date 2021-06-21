@@ -43,12 +43,17 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "const.h"
 #include "util.h"
 #include "ds_tree.h"
+#include "kconfig.h"
+#include "evx.h"
+#include "execsh.h"
 
 #include "mcpd_util.h"
 
 #define MCPD_DAEMON_PATH    "/bin/mcpd"
 #define MCPD_CONFIG_FILE    "/var/mcpd.conf"
 #define MCPD_PID_FILE       "/tmp/mcpd.pid"
+/* Default number of apply retries before giving up */
+#define MCPD_APPLY_RETRIES  5
 
 typedef struct
 {
@@ -67,11 +72,15 @@ typedef struct
     target_mcproxy_params_t   mld_param;
     struct schema_IGMP_Config iccfg;
     struct schema_MLD_Config  mlcfg;
+    ev_debounce               mcpd_apply_dbnc;
+    int                       mcpd_apply_retry;
 } mcpd_util_mgr_t;
 
 static bool mcpd_util_config_valid(void);
 
 static mcpd_util_mgr_t g_mcpd_hdl;
+static ev_debounce_fn_t mcpd_util_apply_fn;
+static char mcpd_iptv_ifname[C_IFNAME_LEN];
 
 /******************************************************************************
  *  PRIVATE definitions
@@ -221,30 +230,37 @@ static bool mcpd_util_write_section(FILE *f, const target_mcproxy_params_t *prox
         fprintf(f, "%s-proxy-interfaces \n", prt_key);
 
         fprintf(f, "%s-mcast-interfaces", prt_key);
-        ds_tree_foreach(&g_mcpd_hdl.uplink_ifs, node)
+        if (mcpd_iptv_ifname[0] != '\0')
         {
-            if (node->bridge[0] == '\0')
+            fprintf(f, " %s/%s", CONFIG_TARGET_LAN_BRIDGE_NAME, mcpd_iptv_ifname);
+        }
+        else
+        {
+            ds_tree_foreach(&g_mcpd_hdl.uplink_ifs, node)
             {
-                fprintf(f, " %s", node->ifname);
-            }
-            else
-            {
-                /*
-                 * TODO: mcpd always requires the physical interface for proper
-                 * operation. In case a GRE backhaul tunnel is defined as the
-                 * interface, strip the "g-" prefix to map the GRE interface
-                 * name to the physical name.
-                 */
-                char *nif = node->ifname;
-                if (strncmp(nif, "g-wl", strlen("g-wl")) == 0)
+                if (node->bridge[0] == '\0')
                 {
-                    nif += strlen("g-");
+                    fprintf(f, " %s", node->ifname);
                 }
+                else
+                {
+                    /*
+                     * TODO: mcpd always requires the physical interface for proper
+                     * operation. In case a GRE backhaul tunnel is defined as the
+                     * interface, strip the "g-" prefix to map the GRE interface
+                     * name to the physical name.
+                     */
+                    char *nif = node->ifname;
+                    if (strncmp(nif, "g-wl", strlen("g-wl")) == 0)
+                    {
+                        nif += strlen("g-");
+                    }
 
-                if (BCM_SDK_VERSION >= 0x50402) {
-                    fprintf(f, " %s", nif);
-                } else {
-                    fprintf(f, " %s/%s", node->bridge, nif);
+                    if (BCM_SDK_VERSION >= 0x50402) {
+                        fprintf(f, " %s", nif);
+                    } else {
+                        fprintf(f, " %s/%s", node->bridge, nif);
+                    }
                 }
             }
         }
@@ -372,6 +388,8 @@ bool mcpd_util_init(void)
     g_mcpd_hdl.mld_param.protocol = DISABLE_MLD;
     g_mcpd_hdl.initialized = true;
 
+    ev_debounce_init2(&g_mcpd_hdl.mcpd_apply_dbnc, mcpd_util_apply_fn, 0.3, 2.0);
+
     if (WARN_ON(mcpd_util_write_config() == false))
         return false;
 
@@ -381,13 +399,9 @@ bool mcpd_util_init(void)
 /******************************************************************************
  *  PUBLIC definitions
  *****************************************************************************/
-
-bool mcpd_util_apply(void)
+void mcpd_util_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent)
 {
     bool started;
-
-    if (!mcpd_util_init())
-        return false;
 
     if (!mcpd_util_config_valid())
     {
@@ -396,29 +410,56 @@ bool mcpd_util_apply(void)
          * the pieces of configuration to properly configure MCPD
          */
         daemon_stop(&g_mcpd_hdl.mcpd_dmn_hdl);
-        return true;
+        return;
     }
 
     if (WARN_ON(mcpd_util_write_config() == false))
-        return false;
+        return;
 
     if (daemon_is_started(&g_mcpd_hdl.mcpd_dmn_hdl, &started) && !started)
     {
         if (!daemon_start(&g_mcpd_hdl.mcpd_dmn_hdl))
         {
             LOG(ERR, "mcpd_util: failed to reload mcp");
-            return false;
+            return;
         }
-        sleep(1);
     }
-    else
+
+    /*
+     * Wait until mcpd is ready for accepting commands via the `mcp` tool. We
+     * ensure this by checking netstat -anp to see if mcpd opened the control
+     * socket.
+     */
+    if (execsh_log(LOG_SEVERITY_DEBUG, _S(netstat -anp | grep -q mcpd)) != 0)
     {
-        if (cmd_log("mcp reload") != 0)
+        LOG(DEBUG, "mcpd_util: mcpd_apply retry %d", g_mcpd_hdl.mcpd_apply_retry);
+        if (g_mcpd_hdl.mcpd_apply_retry > 0)
         {
-            LOG(ERR, "mcpd_util: failed to reload mcp");
-            return false;
+            g_mcpd_hdl.mcpd_apply_retry--;
+            ev_debounce_start(loop, w);
+            return;
         }
+
+        LOG(WARN, "mcpd_util: Unable to detect the MCPD socket.");
     }
+
+    if (cmd_log("mcp reload") != 0)
+    {
+        LOG(ERR, "mcpd_util: failed to reload mcp");
+        return;
+    }
+
+    return;
+}
+
+bool mcpd_util_apply(void)
+{
+    if (!mcpd_util_init())
+        return false;
+
+    /* Reset the retry counter */
+    g_mcpd_hdl.mcpd_apply_retry = MCPD_APPLY_RETRIES;
+    ev_debounce_start(EV_DEFAULT, &g_mcpd_hdl.mcpd_apply_dbnc);
 
     return true;
 }
@@ -461,6 +502,25 @@ bool mcpd_util_update_uplink(const char *ifname, bool enable, const char *bridge
     if (mcpd_util_update_tree(&g_mcpd_hdl.uplink_ifs, ifname, enable, bridge))
     {
         return mcpd_util_apply();
+    }
+
+    return true;
+}
+
+bool mcpd_util_update_iptv(const char *ifname, bool enable)
+{
+    if (enable && mcpd_iptv_ifname[0] == '\0')
+    {
+        STRSCPY_WARN(mcpd_iptv_ifname, ifname);
+    }
+    else if (enable && strcmp(mcpd_iptv_ifname, ifname) != 0)
+    {
+        LOG(WARN, "mcpd_util: Refusing to overwrite IPTV interface %s with %s.", mcpd_iptv_ifname, ifname);
+        return false;
+    }
+    else if (!enable && strcmp(mcpd_iptv_ifname, ifname) == 0)
+    {
+        mcpd_iptv_ifname[0] = '\0';
     }
 
     return true;

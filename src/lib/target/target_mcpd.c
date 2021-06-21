@@ -92,6 +92,16 @@ bool target_set_mcast_uplink(const char *ifname, bool enable, bool is_wan, const
     return mcpd_util_apply();
 }
 
+bool target_set_mcast_iptv(const char *ifname, bool enable)
+{
+    if (!mcpd_util_update_iptv(ifname, enable))
+    {
+        return false;
+    }
+
+    return mcpd_util_apply();
+}
+
 bool target_set_igmp_snooping(const char *ifname, bool enable)
 {
     // Store the config

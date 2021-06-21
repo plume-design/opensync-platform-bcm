@@ -69,6 +69,14 @@ bool mcpd_util_apply(void);
 bool mcpd_util_update_uplink(const char *ifname, bool enable, const char *bridge);
 
 /*
+ * Flag an interface as IPTV
+ * @param ifname uplink interface name
+ * @param enable add or remove interface
+ * @return true if updated
+ */
+bool mcpd_util_update_iptv(const char *ifname, bool enable);
+
+/*
  * Update the list of snooping interfaces for mcast daemon
  * @param ifname igmp snooping interface name
  * @param enable add or remove interface

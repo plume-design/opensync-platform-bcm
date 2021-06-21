@@ -428,6 +428,12 @@ static bool bcmwl_vap_prealloc_one(const char *phy, int idx, void (*mac_xfrm)(ch
         return false;
     if (WARN_ON(!WL(vif, "ap", "1")))
         return false;
+    /*
+     * WAR: Changing AP in some cases resets MPC to 1
+     * as well. Set it back to 0 which is preferred.
+     */
+    WARN_ON(!WL(vif, "mpc", "0"));
+
     if (WARN_ON(!WL(vif, "cur_etheraddr", mac)))
         return false;
     if (WARN_ON(!strexa("ip", "link", "set", "dev", vif, "addr", mac)))
@@ -647,6 +653,12 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
             WARN_ON(!WL(vif, !strcmp(vconf->mode, "ap") ? "ap" :
                              !strcmp(vconf->mode, "sta") ? "apsta" :
                              "ap", "1"));
+            /*
+             * WAR: Changing AP in some cases resets MPC to 1
+             * as well. Set it back to 0, which is preferred.
+             */
+            WARN_ON(!WL(vif, "mpc", "0"));
+
             WARN_ON(!WL(vif, "up"));
         }
 
