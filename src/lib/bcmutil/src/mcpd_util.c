@@ -42,10 +42,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "log.h"
 #include "const.h"
 #include "util.h"
+#include "memutil.h"
 #include "ds_tree.h"
 #include "kconfig.h"
 #include "evx.h"
 #include "execsh.h"
+#include "os_util.h"
 
 #include "mcpd_util.h"
 
@@ -91,7 +93,7 @@ static void mcpd_util_cleanup_proxycfg(target_mcproxy_params_t *proxy_param)
     memset(proxy_param->upstrm_if, 0, sizeof(proxy_param->upstrm_if));
 
     if (proxy_param->num_dwnstrifs)
-        free(proxy_param->dwnstrm_ifs);
+        FREE(proxy_param->dwnstrm_ifs);
 
     proxy_param->num_dwnstrifs = 0;
 }
@@ -106,7 +108,7 @@ static void mcpd_util_copy_proxycfg(
     to->protocol = from->protocol;
     STRSCPY_WARN(to->upstrm_if, from->upstrm_if);
     to->num_dwnstrifs = from->num_dwnstrifs;
-    to->dwnstrm_ifs = calloc(1, to->num_dwnstrifs * sizeof(ifname));
+    to->dwnstrm_ifs = CALLOC(1, to->num_dwnstrifs * sizeof(ifname));
 
     for (cnt = 0; cnt < to->num_dwnstrifs; cnt++)
     {
@@ -124,13 +126,7 @@ static bool mcpd_util_update_tree(ds_tree_t *tree, const char *ifname, bool enab
     {
         if (node == NULL)
         {
-            node = calloc(1, sizeof(mcpd_util_ifname_t));
-            if (node == NULL)
-            {
-                LOG(ERR, "mcpd_util: Error allocating mcpd_util_ifname_t object.");
-                return false;
-            }
-
+            node = CALLOC(1, sizeof(mcpd_util_ifname_t));
             STRSCPY_WARN(node->ifname, ifname);
             ds_tree_insert(tree, node, node->ifname);
         }
@@ -143,7 +139,7 @@ static bool mcpd_util_update_tree(ds_tree_t *tree, const char *ifname, bool enab
         if (node != NULL)
         {
             ds_tree_remove(tree, node);
-            free(node);
+            FREE(node);
             return true;
         }
     }
@@ -152,15 +148,59 @@ static bool mcpd_util_update_tree(ds_tree_t *tree, const char *ifname, bool enab
     return false;
 }
 
+long mcpd_util_igmp_other_config_get_long(const struct schema_IGMP_Config *schema, const char *key)
+{
+    int ii;
+    long val;
+
+    for (ii = 0; ii < schema->other_config_len; ii++)
+    {
+        if (strcmp(schema->other_config_keys[ii], key) == 0)
+        {
+            if (!os_strtoul((char *) schema->other_config[ii], &val, 0))
+            {
+                return 0;
+            }
+
+            return val;
+        }
+    }
+
+    return 0;
+}
+
+long mcpd_util_mld_other_config_get_long(const struct schema_MLD_Config *schema, const char *key)
+{
+    int ii;
+    long val;
+
+    for (ii = 0; ii < schema->other_config_len; ii++)
+    {
+        if (strcmp(schema->other_config_keys[ii], key) == 0)
+        {
+            if (!os_strtoul((char *) schema->other_config[ii], &val, 0))
+            {
+                return 0;
+            }
+
+            return val;
+        }
+    }
+
+    return 0;
+}
+
 static void mcpd_util_write_igmp_sys_params(FILE *f, const struct schema_IGMP_Config *pcfg)
 {
+    int maximum_members = (int) mcpd_util_igmp_other_config_get_long(pcfg, "maximum_members");
+
     fprintf(f, "igmp-query-interval %d\n", pcfg->query_interval != 0 ? pcfg->query_interval : 125);
     fprintf(f, "igmp-query-response-interval %d\n", pcfg->query_response_interval != 0 ? pcfg->query_response_interval : 10);
     fprintf(f, "igmp-last-member-query-interval %d\n", pcfg->last_member_query_interval != 0 ? pcfg->last_member_query_interval : 30);
     fprintf(f, "igmp-robustness-value %d\n", pcfg->query_robustness_value != 0 ? pcfg->query_robustness_value : 2);
     fprintf(f, "igmp-max-groups %d\n", pcfg->maximum_groups != 0 ? pcfg->maximum_groups : 25);
     fprintf(f, "igmp-max-sources %d\n", pcfg->maximum_sources != 0 ? pcfg->maximum_sources : 10);
-    fprintf(f, "igmp-max-members %d\n", pcfg->maximum_members != 0 ? pcfg->maximum_members : 25);
+    fprintf(f, "igmp-max-members %d\n", maximum_members != 0 ? maximum_members : 25);
     fprintf(f, "igmp-fast-leave %d\n", pcfg->fast_leave_enable ? 1 : 0);
     fprintf(f, "igmp-admission-required 0\n");
 
@@ -169,13 +209,15 @@ static void mcpd_util_write_igmp_sys_params(FILE *f, const struct schema_IGMP_Co
 
 static void mcpd_util_write_mld_sys_params(FILE *f, const struct schema_MLD_Config *pcfg)
 {
+    int maximum_members = (int) mcpd_util_mld_other_config_get_long(pcfg, "maximum_members");
+
     fprintf(f, "mld-query-interval %d\n", pcfg->query_interval != 0 ? pcfg->query_interval : 125);
     fprintf(f, "mld-query-response-interval %d\n", pcfg->query_response_interval != 0 ? pcfg->query_response_interval : 10);
     fprintf(f, "mld-last-member-query-interval %d\n", pcfg->last_member_query_interval != 0 ? pcfg->last_member_query_interval : 30);
     fprintf(f, "mld-robustness-value %d\n", pcfg->query_robustness_value != 0 ? pcfg->query_robustness_value : 2);
     fprintf(f, "mld-max-groups %d\n", pcfg->maximum_groups != 0 ? pcfg->maximum_groups : 10);
     fprintf(f, "mld-max-sources %d\n", pcfg->maximum_sources != 0 ? pcfg->maximum_sources : 10);
-    fprintf(f, "mld-max-members %d\n", pcfg->maximum_members != 0 ? pcfg->maximum_members : 10 );
+    fprintf(f, "mld-max-members %d\n", maximum_members != 0 ? maximum_members : 10 );
     fprintf(f, "mld-fast-leave %d\n", pcfg->fast_leave_enable ? 1 : 0);
     fprintf(f, "mld-admission-required 0\n");
 

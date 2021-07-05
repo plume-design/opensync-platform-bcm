@@ -133,7 +133,7 @@ target_dpp_supported(void)
 }
 
 bool
-target_dpp_config_set(const struct schema_DPP_Config *config)
+target_dpp_config_set(const struct schema_DPP_Config **config)
 {
     return bcmwl_hostap_dpp_set(config);
 }

@@ -58,6 +58,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "target.h"
 #include "evx_debounce_call.h"
 #include "kconfig.h"
+#include "memutil.h"
 
 /* This clearly violates the abstraction separation but it's
  * better than do that than to slowness of calling fork+exec
@@ -217,7 +218,7 @@ static bool bcmwl_event_br_get_if_ovs(const char *brname, char *buf, size_t len)
                 csnprintf(&buf, &len, "%s ", port->name);
 
 
-    free(ports);
+    FREE(ports);
     return true;
 }
 
@@ -343,7 +344,7 @@ static void bcmwl_event_unregister_watcher(struct ev_loop *loop, struct bcmwl_ev
     bcmwl_event_socket_close(e->io.fd);
     ev_io_stop(loop, &e->io);
     ds_dlist_remove(&g_watcher_list, e);
-    free(e);
+    FREE(e);
 }
 
 static void bcmwl_event_callback_raw(struct ev_loop *loop, ev_io *w, int revents)
@@ -679,18 +680,13 @@ bool bcmwl_event_register(struct ev_loop *loop,
         return true;
     }
 
-    ew = calloc(1, sizeof(*ew));
-    if (!ew)
-    {
-        LOGE("Unable to allocate event watcher! :: ifname=%s", ifname);
-        return false;
-    }
+    ew = CALLOC(1, sizeof(*ew));
 
     fd = bcmwl_event_socket_open(ifname);
     if (fd < 0)
     {
         LOGE("Unable to register event watcher! :: ifname=%s", ifname);
-        free(ew);
+        FREE(ew);
         return false;
     }
 

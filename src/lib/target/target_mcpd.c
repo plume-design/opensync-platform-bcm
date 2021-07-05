@@ -45,6 +45,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "schema.h"
 #include "mcpd_util.h"
+#include "execsh.h"
+#include "log.h"
 
 #define MODULE_ID LOG_MODULE_ID_TARGET
 
@@ -83,8 +85,74 @@ bool target_set_mld_mcproxy_sys_params(struct schema_MLD_Config *mlcfg)
     return mcpd_util_apply();
 }
 
+bool ovs_set_snooping_flood_reports(const char *ifname, bool enable)
+{
+    int rc;
+
+    rc = execsh_log(
+            LOG_SEVERITY_DEBUG,
+            _S(ovs-vsctl set Port "$1" other_config:mcast-snooping-flood-reports="$2"),
+            (char *)ifname,
+            enable ? "true" : "false");
+    if (rc != 0)
+    {
+        LOG(DEBUG, "mcast: %s: Error enabling[%d] snooping-flood-reports.",
+                ifname,
+                enable);
+        return false;
+    }
+
+    return true;
+}
+
+void mcast_set_snooping_flood_report(const char *ifname, bool enable, bool is_wan, const char *bridge)
+{
+    static char current_snooping_ifname[C_IFNAME_LEN];
+
+    const char *sifname = NULL;
+
+    if (is_wan)
+    {
+        /* Apply settings to the LAN bridge instead */
+        sifname = CONFIG_TARGET_LAN_BRIDGE_NAME;
+    }
+    else if (bridge != NULL)
+    {
+        sifname = ifname;
+    }
+
+    if (sifname == NULL) return;
+
+    if (!ovs_set_snooping_flood_reports(sifname, enable))
+    {
+        return;
+    }
+
+    if (enable)
+    {
+        if (current_snooping_ifname[0] != '\0' && strcmp(sifname, current_snooping_ifname) != 0)
+        {
+            LOG(INFO, "mcast: %s: snooping-flood-reports flag cleared.",
+                    current_snooping_ifname);
+            (void)ovs_set_snooping_flood_reports(current_snooping_ifname, false);
+        }
+
+        STRSCPY_WARN(current_snooping_ifname, sifname);
+    }
+    else if (strcmp(current_snooping_ifname, sifname) == 0)
+    {
+        current_snooping_ifname[0] = '\0';
+    }
+
+    LOG(INFO, "mcast: %s: snooping-flood-reports enabled=%d.",
+            sifname,
+            enable);
+}
+
 bool target_set_mcast_uplink(const char *ifname, bool enable, bool is_wan, const char *bridge)
 {
+    mcast_set_snooping_flood_report(ifname, enable, is_wan, bridge);
+
     // Store the config
     if (mcpd_util_update_uplink(ifname, enable, bridge) == false)
         return false;

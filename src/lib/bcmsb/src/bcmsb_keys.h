@@ -32,6 +32,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 extern uint16_t key_mid;
 extern uint32_t key_kroe_fld[8];
 extern uint32_t key_hmid_rot_fld_pub[8];
-
+extern const char *key_keystore;
 
 #endif /* BCMSB_KEYS_H_INCLUDED */

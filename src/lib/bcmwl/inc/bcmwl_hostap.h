@@ -39,7 +39,7 @@ void bcmwl_hostap_bss_get(const char *bss,
 void bcmwl_hostap_sta_get(const char *bss,
                           const char *mac,
                           struct schema_Wifi_Associated_Clients *client);
-bool bcmwl_hostap_dpp_set(const struct schema_DPP_Config *dpp);
+bool bcmwl_hostap_dpp_set(const struct schema_DPP_Config **dpp);
 #else
 static inline void bcmwl_hostap_init(void) {}
 static inline void bcmwl_hostap_bss_apply(const struct schema_Wifi_VIF_Config *vconf,
@@ -52,7 +52,7 @@ static inline void bcmwl_hostap_bss_get(const char *bss,
 static inline void bcmwl_hostap_sta_get(const char *bss,
                                         const char *mac,
                                         struct schema_Wifi_Associated_Clients *client) {}
-static inline bool bcmwl_hostap_dpp_set(const struct schema_DPP_Config *dpp) { return false; }
+static inline bool bcmwl_hostap_dpp_set(const struct schema_DPP_Config **dpp) { return false; }
 #endif
 
 #endif /* BCMWL_HOSTAP_H_INCLUDED */

@@ -8,7 +8,7 @@
 
 ROOTFS="$1"
 DEST_LIB_DIR="/usr/lib"
-[ -z "$INSTALL_PREFIX" ] && INSTALL_PREFIX="/usr/plume"
+[ -z "$INSTALL_PREFIX" ] && INSTALL_PREFIX="/usr/opensync"
 REL_SRC_DIR="$(realpath "$INSTALL_PREFIX" --relative-to="$DEST_LIB_DIR")"
 mkdir -p "$ROOTFS$DEST_LIB_DIR"
 ln -sf "$REL_SRC_DIR/lib" "$ROOTFS$DEST_LIB_DIR/$(basename "$INSTALL_PREFIX")"

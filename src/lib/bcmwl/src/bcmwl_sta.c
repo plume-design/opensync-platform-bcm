@@ -33,6 +33,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "log.h"
 #include "target.h"
 #include "util.h"
+#include "memutil.h"
 #include "bcmwl.h"
 #include "bcmwl_ioctl.h"
 #include "bcmwl_nvram.h"
@@ -533,8 +534,7 @@ void bcmwl_sta_resync(const char *ifname)
 
     LOGI("%s: syncing %d clients: %s", ifname, n, macs);
 
-    if (WARN_ON(!(clients = calloc(n > 0 ? n : 1, sizeof(*clients)))))
-        return;
+    clients = CALLOC(n > 0 ? n : 1, sizeof(*clients));
 
     i = 0;
     while ((mac = strsep(&macs, " \t\r\n")))
@@ -542,7 +542,7 @@ void bcmwl_sta_resync(const char *ifname)
             bcmwl_sta_get_schema(ifname, mac, &clients[i++]);
 
     bcmwl_ops.op_clients(clients, n, ifname);
-    free(clients);
+    FREE(clients);
 }
 
 struct bcmwl_sta_pktq_stats {

@@ -117,9 +117,9 @@ bcmwl_hostap_hapd_ctrl_sta_disconnected(struct hapd *hapd, const char *mac)
     /* relying on wl events for this */
 }
 
-//Start DPP callbacks
 static void
-bcmwl_hostap_hapd_dpp_chirp_received(const struct target_dpp_chirp_obj *chirp)
+bcmwl_hostap_ctrl_dpp_chirp_received(struct ctrl *ctrl,
+                                     const struct target_dpp_chirp_obj *chirp)
 {
     if (WARN_ON(!bcmwl_ops.op_dpp_announcement))
         return;
@@ -127,7 +127,8 @@ bcmwl_hostap_hapd_dpp_chirp_received(const struct target_dpp_chirp_obj *chirp)
 }
 
 static void
-bcmwl_hostap_hapd_dpp_conf_sent(const struct target_dpp_conf_enrollee *enrollee)
+bcmwl_hostap_ctrl_dpp_conf_sent(struct ctrl *ctrl,
+                                const struct target_dpp_conf_enrollee *enrollee)
 {
     if (WARN_ON(!bcmwl_ops.op_dpp_conf_enrollee))
         return;
@@ -135,15 +136,8 @@ bcmwl_hostap_hapd_dpp_conf_sent(const struct target_dpp_conf_enrollee *enrollee)
 }
 
 static void
-bcmwl_hostap_hapd_dpp_conf_received(const struct target_dpp_conf_network *conf)
-{
-    if (WARN_ON(!bcmwl_ops.op_dpp_conf_network))
-        return;
-    bcmwl_ops.op_dpp_conf_network(conf);
-}
-
-static void
-bcmwl_hostap_wpas_dpp_conf_received(const struct target_dpp_conf_network *conf)
+bcmwl_hostap_ctrl_dpp_conf_received(struct ctrl *ctrl,
+                                    const struct target_dpp_conf_network *conf)
 {
     if (WARN_ON(!bcmwl_ops.op_dpp_conf_network))
         return;
@@ -258,13 +252,13 @@ bcmwl_hostap_init_bss(const char *bss)
         hapd->ctrl.opened = bcmwl_hostap_hapd_ctrl_opened;
         hapd->ctrl.closed = bcmwl_hostap_hapd_ctrl_closed;
         hapd->ctrl.overrun = bcmwl_hostap_hapd_ctrl_overrun;
+        hapd->ctrl.dpp_chirp_received = bcmwl_hostap_ctrl_dpp_chirp_received;
+        hapd->ctrl.dpp_conf_sent = bcmwl_hostap_ctrl_dpp_conf_sent;
+        hapd->ctrl.dpp_conf_received = bcmwl_hostap_ctrl_dpp_conf_received;
         hapd->sta_connected = bcmwl_hostap_hapd_ctrl_sta_connected;
         hapd->sta_disconnected = bcmwl_hostap_hapd_ctrl_sta_disconnected;
         hapd->ap_enabled = bcmwl_hostap_hapd_ctrl_ap_enabled;
         hapd->ap_disabled = bcmwl_hostap_hapd_ctrl_ap_disabled;
-        hapd->dpp_chirp_received = bcmwl_hostap_hapd_dpp_chirp_received;
-        hapd->dpp_conf_sent = bcmwl_hostap_hapd_dpp_conf_sent;
-        hapd->dpp_conf_received = bcmwl_hostap_hapd_dpp_conf_received;
         ctrl_enable(&hapd->ctrl);
         hapd = NULL;
     }
@@ -274,11 +268,13 @@ bcmwl_hostap_init_bss(const char *bss)
         wpas->ctrl.opened = bcmwl_hostap_wpas_ctrl_opened;
         wpas->ctrl.closed = bcmwl_hostap_wpas_ctrl_closed;
         wpas->ctrl.overrun = bcmwl_hostap_wpas_ctrl_overrun;
+        wpas->ctrl.dpp_chirp_received = bcmwl_hostap_ctrl_dpp_chirp_received;
+        wpas->ctrl.dpp_conf_sent = bcmwl_hostap_ctrl_dpp_conf_sent;
+        wpas->ctrl.dpp_conf_received = bcmwl_hostap_ctrl_dpp_conf_received;
         wpas->connected = bcmwl_hostap_wpas_ctrl_connected;
         wpas->disconnected = bcmwl_hostap_wpas_ctrl_disconnected;
         wpas->scan_failed = bcmwl_hostap_wpas_scan_failed;
         wpas->scan_results = bcmwl_hostap_wpas_scan_results;
-        wpas->dpp_conf_received = bcmwl_hostap_wpas_dpp_conf_received;
         ctrl_enable(&wpas->ctrl);
         wpas = NULL;
     }
@@ -430,7 +426,7 @@ void bcmwl_hostap_sta_get(const char *bss,
     hapd_sta_get(hapd, mac, client);
 }
 
-bool bcmwl_hostap_dpp_set(const struct schema_DPP_Config *config)
+bool bcmwl_hostap_dpp_set(const struct schema_DPP_Config **config)
 {
     return ctrl_dpp_config(config);
 }

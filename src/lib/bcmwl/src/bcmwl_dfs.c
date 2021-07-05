@@ -38,6 +38,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "schema.h"
 #include "const.h"
 #include "util.h"
+#include "memutil.h"
 #include "evx_debounce_call.h"
 #include "bcmwl.h"
 #include "bcmwl_nvram.h"
@@ -175,7 +176,7 @@ static int bcmwl_dfs_get_fallback_parents(const char *cphy, struct fallback_pare
         strscpy(parent[num].bssid, bssid, sizeof(parent[num].bssid));
         num++;
     }
-    free(buffer);
+    FREE(buffer);
 
     return num;
 }

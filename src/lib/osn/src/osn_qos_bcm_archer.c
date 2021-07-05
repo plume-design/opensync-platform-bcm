@@ -94,7 +94,7 @@ osn_qos_t* osn_qos_new(const char *ifname)
         global_init = true;
     }
 
-    self = calloc(1, sizeof(*self));
+    self = CALLOC(1, sizeof(*self));
     return self;
 }
 
@@ -107,7 +107,7 @@ void osn_qos_del(osn_qos_t *self)
         bcm_qos_id_put(*qp);
     }
 
-    free(self->q_id);
+    FREE(self->q_id);
 }
 
 bool osn_qos_apply(osn_qos_t *self)
@@ -348,7 +348,7 @@ void bcm_qos_id_put(int qid)
         LOG(WARN, "bcm_qos: Unable to reset queue %d.", qid);
     }
 
-    free(bcm_qos_queue_list[qid].qq_tag);
+    FREE(bcm_qos_queue_list[qid].qq_tag);
     bcm_qos_queue_list[qid].qq_tag = NULL;
 }
 

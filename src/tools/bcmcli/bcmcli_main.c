@@ -33,6 +33,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "target.h"
 #include "log.h"
 #include "os_time.h"
+#include "memutil.h"
 
 #include "bcmwl.h"
 #include "bcmwl_lan.h"
@@ -619,7 +620,7 @@ int main(int argc, char *argv[])
 
         if (buf) {
             printf("%s\n", buf);
-            free(buf);
+            FREE(buf);
             success = true;
         }
     }

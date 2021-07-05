@@ -364,6 +364,11 @@ bool bcmwl_nas_update_security(
     const char *nv_radius_ipaddr;
     const char *nv_radius_port;
     const char *nv_radius_key;
+    const char *nv_radius_ipaddr_sec;
+    const char *nv_radius_port_sec;
+    const char *nv_radius_key_sec;
+    const char *nv_radius_retries;
+    const char *nv_radius_retry_interval;
     const char *wl_eap;
     const char *wl_wsec;
     const char *wl_wsec_restrict;
@@ -397,6 +402,11 @@ bool bcmwl_nas_update_security(
         nv_radius_ipaddr = "";
         nv_radius_port = "";
         nv_radius_key = "";
+        nv_radius_ipaddr_sec = "";
+        nv_radius_port_sec = "";
+        nv_radius_key_sec = "";
+        nv_radius_retries = "";
+        nv_radius_retry_interval = "";
         wl_eap = "1";
         wl_wsec = strfmta("%d", atoi(crypto) == 1 ? TKIP_ENABLED + AES_ENABLED :
                                  atoi(crypto) == 2 ? AES_ENABLED :
@@ -416,6 +426,11 @@ bool bcmwl_nas_update_security(
         nv_radius_ipaddr = SCHEMA_KEY_VAL(vconf->security, "radius_server_ip");
         nv_radius_port = SCHEMA_KEY_VAL(vconf->security, "radius_server_port");
         nv_radius_key = SCHEMA_KEY_VAL(vconf->security, "radius_server_secret");
+        nv_radius_ipaddr_sec = SCHEMA_KEY_VAL(vconf->security, "radius_server_ip_sec");
+        nv_radius_port_sec = SCHEMA_KEY_VAL(vconf->security, "radius_server_port_sec");
+        nv_radius_key_sec = SCHEMA_KEY_VAL(vconf->security, "radius_server_secret_sec");
+        nv_radius_retries = SCHEMA_KEY_VAL(vconf->security, "radius_server_retries");
+        nv_radius_retry_interval = SCHEMA_KEY_VAL(vconf->security, "radius_server_retry_interval");
         wl_eap = "1";
         wl_wsec = strfmta("%d", AES_ENABLED);
         wl_wsec_restrict = "1";
@@ -428,6 +443,11 @@ bool bcmwl_nas_update_security(
         nv_radius_ipaddr = "";
         nv_radius_port = "";
         nv_radius_key = "";
+        nv_radius_ipaddr_sec = "";
+        nv_radius_port_sec = "";
+        nv_radius_key_sec = "";
+        nv_radius_retries = "";
+        nv_radius_retry_interval = "";
         wl_eap = "0";
         wl_wsec = "0";
         wl_wsec_restrict = "0";
@@ -468,6 +488,11 @@ bool bcmwl_nas_update_security(
          |  strcmp(NVG(vif, "radius_ipaddr") ?: "", nv_radius_ipaddr)
          |  strcmp(NVG(vif, "radius_port") ?: "", nv_radius_port)
          |  strcmp(NVG(vif, "radius_key") ?: "", nv_radius_key)
+         |  strcmp(NVG(vif, "radius_ipaddr_sec") ?: "", nv_radius_ipaddr_sec)
+         |  strcmp(NVG(vif, "radius_port_sec") ?: "", nv_radius_port_sec)
+         |  strcmp(NVG(vif, "radius_key_sec") ?: "", nv_radius_key_sec)
+         |  strcmp(NVG(vif, "radius_retries") ?: "", nv_radius_retries)
+         |  strcmp(NVG(vif, "radius_retrytimeout") ?: "", nv_radius_retry_interval)
          |  strcmp(WL(vif, "eap") ?: "", wl_eap)
          |  strcmp(WL(vif, "wsec_restrict") ?: "", wl_wsec_restrict)
          |  (atoi(wl_wpa_auth_prev) != atoi(wl_wpa_auth))
@@ -490,6 +515,11 @@ bool bcmwl_nas_update_security(
     WARN_ON(!NVS(vif, "radius_ipaddr", nv_radius_ipaddr));
     WARN_ON(!NVS(vif, "radius_port", nv_radius_port));
     WARN_ON(!NVS(vif, "radius_key", nv_radius_key));
+    WARN_ON(!NVS(vif, "radius_ipaddr_sec", nv_radius_ipaddr_sec));
+    WARN_ON(!NVS(vif, "radius_port_sec", nv_radius_port_sec));
+    WARN_ON(!NVS(vif, "radius_key_sec", nv_radius_key_sec));
+    WARN_ON(!NVS(vif, "radius_retries", nv_radius_retries));
+    WARN_ON(!NVS(vif, "radius_retrytimeout", nv_radius_retry_interval));
     WARN_ON(!NVS(vif, "ssid", vconf->ssid));
     WARN_ON(!NVS(vif, "wpa_psk", strlen(key) ? key : NULL));
     WARN_ON(!NVS(vif, "plume_wpa_mode", atoi(crypto) ? "true" : "false"));
@@ -571,6 +601,21 @@ bool bcmwl_nas_get_security(
             SCHEMA_KEY_VAL_APPEND(vstate->security, "radius_server_port", p);
         if ((p = NVG(ifname, "radius_key")))
             SCHEMA_KEY_VAL_APPEND(vstate->security, "radius_server_secret", p);
+        if ((p = NVG(ifname, "radius_ipaddr_sec")))
+            if (strlen(p))
+                SCHEMA_KEY_VAL_APPEND(vstate->security, "radius_server_ip_sec", p);
+        if ((p = NVG(ifname, "radius_port_sec")))
+            if (strlen(p))
+                SCHEMA_KEY_VAL_APPEND(vstate->security, "radius_server_port_sec", p);
+        if ((p = NVG(ifname, "radius_key_sec")))
+            if (strlen(p))
+                SCHEMA_KEY_VAL_APPEND(vstate->security, "radius_server_secret_sec", p);
+        if ((p = NVG(ifname, "radius_retries")))
+            if (strlen(p))
+                SCHEMA_KEY_VAL_APPEND(vstate->security, "radius_server_retries", p);
+        if ((p = NVG(ifname, "radius_retrytimeout")))
+            if (strlen(p))
+                SCHEMA_KEY_VAL_APPEND(vstate->security, "radius_server_retry_interval", p);
     } else {
         if ((p = WL(ifname, "wpa_auth")) && strstr(p, "Disabled"))
             SCHEMA_KEY_VAL_APPEND(vstate->security, "encryption", "OPEN");

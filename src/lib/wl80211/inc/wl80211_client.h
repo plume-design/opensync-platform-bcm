@@ -29,6 +29,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "ds_dlist.h"
 #include "schema.h"
+#include "memutil.h"
 
 #include "dppline.h"
 
@@ -94,7 +95,7 @@ static inline wl80211_client_mcs_stats_t* wl80211_client_mcs_stats_alloc()
 {
     wl80211_client_mcs_stats_t *mcs = 0;
 
-    mcs = calloc(1, sizeof(*mcs));
+    mcs = CALLOC(1, sizeof(*mcs));
     return mcs;
 }
 
@@ -102,9 +103,7 @@ static inline wl80211_client_record_t* wl80211_client_record_alloc()
 {
     wl80211_client_record_t *record = NULL;
 
-    record = malloc(sizeof(wl80211_client_record_t));
-    if (!record)
-        return NULL;
+    record = MALLOC(sizeof(wl80211_client_record_t));
 
     memset(record, 0, sizeof(wl80211_client_record_t));
     ds_dlist_init(&record->stats.rate_histo_rx, wl80211_client_mcs_stats_t, ds_node);
@@ -122,14 +121,14 @@ static inline void wl80211_client_record_free(wl80211_client_record_t *record)
 
     while ((mcs = ds_dlist_remove_head(&record->stats.rate_histo_rx)))
     {
-        free(mcs);
+        FREE(mcs);
     }
     while ((mcs = ds_dlist_remove_head(&record->stats.rate_histo_tx)))
     {
-        free(mcs);
+        FREE(mcs);
     }
 
-    free(record);
+    FREE(record);
 }
 
 bool wl80211_client_list_get(

@@ -28,6 +28,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define WL80211_SURVEY_H_INCLUDED
 
 #include "ds_dlist.h"
+#include "memutil.h"
 
 #include "dppline.h"
 
@@ -50,10 +51,8 @@ wl80211_survey_record_t* wl80211_survey_record_alloc()
 {
     wl80211_survey_record_t *record = NULL;
 
-    record = malloc(sizeof(wl80211_survey_record_t));
-    if (record) {
-        memset(record, 0, sizeof(wl80211_survey_record_t));
-    }
+    record = MALLOC(sizeof(wl80211_survey_record_t));
+    memset(record, 0, sizeof(wl80211_survey_record_t));
 
     return record;
 }
@@ -62,7 +61,7 @@ static inline
 void wl80211_survey_record_free(wl80211_survey_record_t *record)
 {
     if (NULL != record) {
-        free(record);
+        FREE(record);
     }
 }
 

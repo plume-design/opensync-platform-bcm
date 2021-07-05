@@ -40,6 +40,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "bcmwl.h"
 #include "bcmwl_ioctl.h"
 #include "kconfig.h"
+#include "memutil.h"
 
 /*
  * Private
@@ -686,7 +687,7 @@ bcmwl_wl_cmd_prefix(const char *ifname, const struct bcmwl_wl *wl, const char *a
         if (strlen(line) > 0)
             csnprintf(&p, &len, "%s %s\n", wl->name, line);
 
-    free(in);
+    FREE(in);
     return strdup(tmp);
 }
 
@@ -709,7 +710,7 @@ bcmwl_wl_cmd_wpa(const char *ifname, const struct bcmwl_wl *wl, const char *argv
     if (atoi(in) == 0)
         csnprintf(&p, &len, " Disabled");
 
-    free(in);
+    FREE(in);
     return strdup(tmp);
 }
 

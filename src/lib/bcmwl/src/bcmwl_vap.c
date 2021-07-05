@@ -316,6 +316,12 @@ bcmwl_vap_state(const char *ifname,
         SCHEMA_SET_STR(vstate->mode, "ap_vlan");
         SCHEMA_SET_STR(vstate->ap_vlan_sta_addr, str_tolower(p));
     }
+    if ((p = WL(ifname, "oce", "rssi_th")))
+    {
+        // The expected format of the return is: "RSSI Threashold: -75"
+        if ((p = strchr(p, ':')))
+            SCHEMA_SET_INT(vstate->min_rssi, atoi(p+1));
+    }
 
     /* FIXME
      *  - min_hw_mode
@@ -788,6 +794,12 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
                     "0"));
         if (rconf->enabled)
             WL(phy, "up");
+    }
+
+    if (vchanged->min_rssi)
+    {
+        WARN_ON(!WL(vif, "oce", "enable",  "1"));
+        WARN_ON(!WL(vif, "oce", "rssi_th", strfmta("%d", vconf->min_rssi)));
     }
 
     if (!strcmp(vconf->mode, "sta"))

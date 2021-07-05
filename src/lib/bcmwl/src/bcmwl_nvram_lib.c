@@ -29,6 +29,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 /* internal */
 #include <log.h>
+#include "memutil.h"
 
 /* bcm */
 #include <wlcsm_lib_api.h>
@@ -77,7 +78,7 @@ bool bcmwl_nvram_set(const char *ifname,
 
     snprintf(key, sizeof(key), "%s_%s", ifname, name);
     err = wlcsm_nvram_set(key, copy);
-    free(copy);
+    FREE(copy);
     LOGT("%s: (err=%d) '%s' = '%s'", __func__, err, key, value ?: "(none)");
     if (err)
         return false;

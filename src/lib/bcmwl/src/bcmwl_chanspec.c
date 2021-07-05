@@ -31,6 +31,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <string.h>
 
 #include "log.h"
+#include "memutil.h"
 #include "os.h"
 #include "bcmwl.h"
 #include "bcmwl_priv.h"
@@ -110,7 +111,7 @@ bool bcmwl_chanspec_load(char *ifname, bcmwl_chanspec_table_t *t)
 
     result = os_cmd_exec(&buf, "wl -i %s chanspecs", ifname);
     if (!result) {
-        if (buf) free(buf);
+        if (buf) FREE(buf);
         return false;
     }
 
@@ -122,9 +123,7 @@ bool bcmwl_chanspec_load(char *ifname, bcmwl_chanspec_table_t *t)
         count++;
     }
     // alloc table
-    cs = calloc(count, sizeof(*cs));
-    if (!cs)
-        return NULL;
+    cs = CALLOC(count, sizeof(*cs));
     // parse lines
     i = 0;
     p = buf;
@@ -136,9 +135,9 @@ bool bcmwl_chanspec_load(char *ifname, bcmwl_chanspec_table_t *t)
         p = nl + 1;
         i++;
     }
-    free(buf);
+    FREE(buf);
     if (i == 0) {
-        free(cs);
+        FREE(cs);
         return false;
     }
     t->cs_table = cs;

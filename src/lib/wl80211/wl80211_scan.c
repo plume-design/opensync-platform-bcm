@@ -47,6 +47,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "os.h"
 #include "os_time.h"
 #include "util.h"
+#include "memutil.h"
 #include "log.h"
 
 #include "wl80211.h"
@@ -84,11 +85,8 @@ static inline wl80211_scan_record_t* wl80211_scan_record_alloc()
 {
     wl80211_scan_record_t *record = NULL;
 
-    record = malloc(sizeof(wl80211_scan_record_t));
-    if (record)
-    {
-        memset(record, 0, sizeof(wl80211_scan_record_t));
-    }
+    record = MALLOC(sizeof(wl80211_scan_record_t));
+    memset(record, 0, sizeof(wl80211_scan_record_t));
 
     return record;
 }
@@ -97,7 +95,7 @@ static inline void wl80211_scan_record_free(wl80211_scan_record_t *record)
 {
     if (NULL != record)
     {
-        free(record);
+        FREE(record);
     }
 }
 

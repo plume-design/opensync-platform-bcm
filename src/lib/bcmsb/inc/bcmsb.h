@@ -83,6 +83,13 @@ bool bcmsb_is_jtag_locked(void);
  */
 const char *bcmsb_mode2str(enum bcmsb_mode mode);
 
+/**
+ * Returns null-terminated string of the keystore of keys embbedded
+ * in the image
+ *
+ */
+const char *bcmsb_get_keystore(void);
+
 #else
 
 static inline int bcmsb_set_mfg_mode(void) { return -1; }
@@ -91,6 +98,7 @@ static inline enum bcmsb_mode bcmsb_get_mode(void) { return 0; }
 static inline int bcmsb_lock_jtag(void) { return 0; }
 static inline bool bcmsb_is_jtag_locked(void) { return false; }
 static inline const char *bcmsb_mode2str(enum bcmsb_mode mode) { return NULL; }
+static inline const char *bcmsb_get_keystore(void) { return NULL; }
 
 #endif /* CONFIG_BCM_SECURE_BOOT_LIB */
 

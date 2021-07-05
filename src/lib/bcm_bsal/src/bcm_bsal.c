@@ -47,6 +47,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "const.h"
 #include "util.h"
+#include "memutil.h"
 #include "target.h"
 #include "bcmwl_debounce.h"
 #include "bcmwl_nvram.h"
@@ -253,7 +254,7 @@ static void remove_client(client_t *client)
 
     recalc_hwaddr_mask();
     LOGD(LOG_PREFIX"%s: remove, mask="PRI(os_macaddr_t), client->ifname, FMT(os_macaddr_pt, &_hwaddr_mask));
-    free(client);
+    FREE(client);
 }
 
 static bool is_event_ignored(int etype)
@@ -1455,11 +1456,7 @@ bool bcm_bsal_add_client(
         return false;
     }
 
-    client = calloc(1, sizeof(*client));
-    if (!client) {
-        LOGE(LOG_PREFIX"%s: Failed to allocate memory for client, addr=%s", ifname, mac);
-        return false;
-    }
+    client = CALLOC(1, sizeof(*client));
 
     client_reset(client);
     STRSCPY(client->ifname, ifname);

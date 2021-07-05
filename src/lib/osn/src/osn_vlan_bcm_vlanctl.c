@@ -32,6 +32,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "os_util.h"
 #include "osn_vlan.h"
 #include "util.h"
+#include "memutil.h"
 
 #include "linux/lnx_vlan.h"
 
@@ -63,17 +64,12 @@ static bool osn_vlan_bcm_fini(osn_vlan_t *self);
 
 osn_vlan_t *osn_vlan_new(const char *ifname)
 {
-    osn_vlan_t *self = calloc(1, sizeof(osn_vlan_t));
-    if (self == NULL)
-    {
-        LOG(ERR, "osn_vlan_bcm: %s: Error allocating the VLAN object.", ifname);
-        return NULL;
-    }
+    osn_vlan_t *self = CALLOC(1, sizeof(osn_vlan_t));
 
     if (STRSCPY(self->ov_ifname, ifname) < 0)
     {
         LOG(ERR, "osn_vlan_bcm: %s: Interface name too long.", ifname);
-        free(self);
+        FREE(self);
         return NULL;
     }
 
@@ -92,7 +88,7 @@ bool osn_vlan_del(osn_vlan_t *self)
         LOG(WARN, "osn_vlan_bcm: %s: Error finalizing VLAN object.", self->ov_ifname);
     }
 
-    free(self);
+    FREE(self);
 
     return retval;
 }
