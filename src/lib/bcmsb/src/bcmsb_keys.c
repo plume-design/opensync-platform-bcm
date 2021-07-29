@@ -39,3 +39,5 @@ uint32_t key_hmid_rot_fld_pub[8] = {
     0, 0, 0, 0,
     0, 0, 0, 0
 };
+
+const char *key_keystore = NULL;

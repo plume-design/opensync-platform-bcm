@@ -305,3 +305,8 @@ const char *bcmsb_mode2str(enum bcmsb_mode mode)
 
     return "_UNKNOWN_";
 }
+
+const char *bcmsb_get_keystore(void)
+{
+    return key_keystore;
+}
