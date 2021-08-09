@@ -522,6 +522,7 @@ static proc_event_res_t process_event_probereq_msg_rx(
 
     snr_time = time(NULL);
     probe_snr = rssi_to_snr(client->ifname, ntohl(rx_data->rssi));
+    probe_snr = normalize_snr(client->ifname, &client->hwaddr, probe_snr);
 
     LOGT(LOG_PREFIX"%s: probreq_msg_rx addr="PRI(os_macaddr_t)" snr=%d",
          client->ifname, FMT(os_macaddr_t, client->hwaddr), probe_snr);

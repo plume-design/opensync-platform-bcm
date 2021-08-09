@@ -331,6 +331,8 @@ static bool wl80211_scan_results_parse(
                 strtok(chan, ":");
                 chan = strtok(NULL, " ");
                 if (chan) {
+                    if (strstr(chan, "6g") == chan)
+                        chan += strlen("6g");
                     entry->chan_capture = atoi(chan);
                 }
             }
@@ -385,6 +387,20 @@ static bool wl80211_scan_results_parse(
     return true;
 }
 
+static void wl80211_scan_build_chan_arg(char *buf, size_t buflen,
+                                        const uint32_t *chan_list, uint32_t chan_num,
+                                        bool is_6ghz)
+{
+    if (WARN_ON(buflen < 2)) return;
+    if (WARN_ON(chan_num == 0)) return;
+
+    while (chan_num--)
+        csnprintf(&buf, &buflen, "%s%d,", is_6ghz ? "6g" : "", *chan_list++);
+
+    if (WARN_ON(buflen == 1)) return; /* likely truncated */
+    *(buf - 1) = 0; /* remove trailing , */
+}
+
 
 /******************************************************************************
  *  PUBLIC definitions
@@ -405,6 +421,8 @@ bool wl80211_scan_channel(
     bool                            scan_retry = false;
     int                             scan_retry_cnt = 0;
     char                            cmd[WL80211_CMD_BUFF_SIZE] = {};
+    char                            chan_arg[1024] = {0};
+    bool                            is_6ghz = radio_cfg->type == RADIO_TYPE_6G;
     FILE                           *file_desc;
 
     if (wl80211_have_wl_escanresults()) {
@@ -415,38 +433,30 @@ bool wl80211_scan_channel(
 
 
     if (scan_type == RADIO_SCAN_TYPE_OFFCHAN) {
+        wl80211_scan_build_chan_arg(chan_arg, sizeof(chan_arg),
+                                    chan_list, 1, is_6ghz);
         snprintf(cmd, sizeof(cmd) - 1,
                 WL80211_SCAN_OFFCHAN_RESULTS_GET,
                 radio_cfg->if_name,
                 scan_cmd,
-                chan_list[0],
+                chan_arg,
                 dwell_time);
     } else if (scan_type == RADIO_SCAN_TYPE_ONCHAN) {
+        wl80211_scan_build_chan_arg(chan_arg, sizeof(chan_arg),
+                                    chan_list, 1, is_6ghz);
         snprintf(cmd, sizeof(cmd) - 1,
                 WL80211_SCAN_ONCHAN_RESULTS_GET,
                 radio_cfg->if_name,
                 scan_cmd,
-                chan_list[0]);
+                chan_arg);
     } else if (scan_type == RADIO_SCAN_TYPE_FULL) {
-#define SCAN_CHAN_STR_SIZE      4
-#define SCAN_CHANLIST_STR_SIZE  128
-        char     chan[SCAN_CHAN_STR_SIZE];
-        char     chanlist[SCAN_CHANLIST_STR_SIZE];
-        uint32_t chan_index;
-
-        memset (chanlist, 0, sizeof(chanlist));
-        for (chan_index = 0; chan_index < chan_num; chan_index++) {
-            sprintf(chan, "%d,", chan_list[chan_index]);
-            strcat(chanlist, chan);
-        }
-#undef SCAN_CHAN_STR_SIZE
-#undef SCAN_CHANLIST_STR_SIZE
-
+        wl80211_scan_build_chan_arg(chan_arg, sizeof(chan_arg),
+                                    chan_list, chan_num, is_6ghz);
         snprintf(cmd, sizeof(cmd) - 1,
                 WL80211_SCAN_FULL_RESULTS_GET,
                 radio_cfg->if_name,
                 scan_cmd,
-                chanlist,
+                chan_arg,
                 dwell_time);
     } else {
         return false;

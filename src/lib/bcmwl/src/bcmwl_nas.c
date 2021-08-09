@@ -595,6 +595,7 @@ bool bcmwl_nas_get_security(
         }
     } else if ((p = WL(ifname, "wpa_auth")) && strstr(p, "WPA2-802.1x")) {
         SCHEMA_KEY_VAL_APPEND(vstate->security, "encryption", "WPA-EAP");
+        SCHEMA_KEY_VAL_APPEND(vstate->security, "mode", "2");
         if ((p = NVG(ifname, "radius_ipaddr")))
             SCHEMA_KEY_VAL_APPEND(vstate->security, "radius_server_ip", p);
         if ((p = NVG(ifname, "radius_port")))

@@ -889,6 +889,8 @@ static void bcmwl_event_handle_link(const bcm_event_t *ev)
          (flags == WLC_EVENT_MSG_LINK) ? "up" : "down",
          reason_str,
          reason);
+
+    evx_debounce_call(bcmwl_vap_state_report, ifname);
 }
 
 bool bcmwl_event_handler(const char *ifname,

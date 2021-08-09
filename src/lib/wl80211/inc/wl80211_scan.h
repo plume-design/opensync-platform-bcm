@@ -33,8 +33,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #define WL80211_SCAN_CMD_SCAN              "scan"
 #define WL80211_SCAN_CMD_ESCAN             "escanresults"
-#define WL80211_SCAN_OFFCHAN_RESULTS_GET   "wl -i %s %s -c %d -t passive -h 0 -p %d"
-#define WL80211_SCAN_ONCHAN_RESULTS_GET    "wl -i %s %s -c %d -t passive -h 0 -p 100"
+#define WL80211_SCAN_OFFCHAN_RESULTS_GET   "wl -i %s %s -c %s -t passive -h 0 -p %d"
+#define WL80211_SCAN_ONCHAN_RESULTS_GET    "wl -i %s %s -c %s -t passive -h 0 -p 100"
 #define WL80211_SCAN_FULL_RESULTS_GET      "wl -i %s %s -c %s -t passive -h 0 -p %d"
 #define WL80211_SCAN_ALL_RESULTS_GET       "wl -i %s scanresults"
 
