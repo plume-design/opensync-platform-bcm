@@ -28,6 +28,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 /* std libc */
 #include <string.h>
+#include <sys/types.h>
+#include <dirent.h>
 
 /* internal */
 #include <log.h>
@@ -81,6 +83,29 @@ target_radio_init_steer_war(void)
 }
 
 static void
+target_radio_init_mbo(void)
+{
+    struct dirent *p;
+    DIR *d;
+
+    /* On older (notably 11ac driver) MBO is enabled by
+     * default. This is not a good idea since it requires
+     * PMF to be enabled. Opensync doesn't really enable
+     * explicit PMF, and it only ever gets enabled
+     * implicitly when using WPA3 which isn't even supported
+     * on 11ac drivers. Just disable it to avoid interop
+     * issues until Opensync really needs this. The newer
+     * 11ax drivers disable MBO by default.
+     */
+    for (d = opendir("/sys/class/net"); d && (p = readdir(d)); )
+        if (bcmwl_is_phy(p->d_name) || bcmwl_is_vif(p->d_name))
+            WL(p->d_name, "mbo", "ap_enable", "0");
+
+    if (!WARN_ON(!d))
+        closedir(d);
+}
+
+static void
 target_bcmwl_wps_set_script(void)
 {
     char wps_script[64] = { 0 };
@@ -101,6 +126,7 @@ target_radio_init(const struct target_radio_ops *ops)
         return false;
     bcmwl_vap_prealloc_all();
     target_bcmwl_wps_set_script();
+    target_radio_init_mbo();
     target_radio_init_uapsd_war();
     target_radio_init_steer_war();
 

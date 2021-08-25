@@ -62,7 +62,7 @@ bool bcm_bsal_finalize(struct ev_loop *loop);
  *  PRIVATE definitions
  *****************************************************************************/
 #define LOG_PREFIX "BCM-BSAL: "
-#define CLIENT_PROBE_REQ_FILTER_PERIOD 2U // seconds
+#define CLIENT_PROBE_REQ_FILTER_PERIOD .5 // seconds
 #define CLIENT_STA_INFO_UPDATE_PERIOD 5. // seconds
 #define CLIENT_STA_INFO_DATA_VOLUME_THRESHOLD 2000 // bytes
 #define PROBE_HMW_MAGIC_VALUE 1 // "Special" HWM value indicating unconditional blocking
@@ -199,6 +199,25 @@ static probe_t* probe_get(client_t *client)
 static void probe_clean(client_t *client)
 {
     memset(&client->max_probe, 0, sizeof(client->max_probe));
+}
+
+static void fill_bsal_probe_req_event(bsal_event_t *event,
+                                      const client_t *client,
+                                      int snr,
+                                      bool ssid_null)
+{
+    bsal_ev_probe_req_t *prob_req_ev;
+
+    memset(event, 0, sizeof(*event));
+
+    event->type = BSAL_EVENT_PROBE_REQ;
+    STRSCPY(event->ifname, client->ifname);
+
+    prob_req_ev = &event->data.probe_req;
+    memcpy(&prob_req_ev->client_addr, &client->hwaddr.addr, sizeof(prob_req_ev->client_addr));
+    prob_req_ev->rssi = snr;
+    prob_req_ev->ssid_null = ssid_null;
+    prob_req_ev->blocked = client->is_blacklisted;
 }
 
 static void update_hwaddr_mask(os_macaddr_t *hwaddr_client)
@@ -507,6 +526,8 @@ static proc_event_res_t process_event_probereq_msg_rx(
     ssize_t payload_size;
     int probe_snr;
     uint8_t ssid_ie_len;
+    uint8_t dsss_param_ie_len;
+    const uint8_t *dsss_param_ie_channel;
     time_t snr_time;
 
     rx_data = (const wl_event_rx_frame_data_t*) (event_raw + 1);
@@ -515,6 +536,7 @@ static proc_event_res_t process_event_probereq_msg_rx(
 
     snr_time = time(NULL);
     probe_snr = rssi_to_snr(client->ifname, ntohl(rx_data->rssi));
+    probe_snr = normalize_snr(client->ifname, &client->hwaddr, probe_snr);
 
     LOGT(LOG_PREFIX"%s: probreq_msg_rx addr="PRI(os_macaddr_t)" snr=%d",
          client->ifname, FMT(os_macaddr_t, client->hwaddr), probe_snr);
@@ -536,6 +558,33 @@ static proc_event_res_t process_event_probereq_msg_rx(
     {
         ssid_null = false;
     }
+
+    /* Look for DSSS Parameter Set IE */
+    do {
+        int chan;
+        int width;
+
+        if (!tlv_find_element(payload, payload_size, DOT11_MNG_DS_PARMS_ID,
+            &dsss_param_ie_len, &dsss_param_ie_channel))
+            break;
+
+        if (!bcmwl_radio_get_chanspec(event_raw->event.ifname, &chan, &width))
+            break;
+
+        LOGT(LOG_PREFIX"%s: probreq_msg_rx addr="PRI(os_macaddr_t)" dsss_param_cur_chan=%d",
+             client->ifname, FMT(os_macaddr_t, client->hwaddr), *dsss_param_ie_channel);
+
+        if (chan != *dsss_param_ie_channel)
+            break;
+
+        /*
+         * At this point, based on information in DSSS Parameter Set IE, we know
+         * that STA sent probe on the same channel AP is listening. It's safe
+         * to skip probe filtering and report BSAL event immediately.
+         */
+        fill_bsal_probe_req_event(event, client, probe_snr, ssid_null);
+        return PROC_EVENT_NEW_BSAL_EVENT;
+    } while (0);
 
     // Update client state
     probe_add(client, probe_snr, snr_time, ssid_null);
@@ -1256,8 +1305,6 @@ static void probe_req_filter_timer_callback(
         int revents)
 {
     bool propagate_probe_req = true;
-    bsal_event_t event;
-    bsal_ev_probe_req_t *prob_req_ev;
     client_t *client;
     probe_t *probe;
 
@@ -1268,17 +1315,6 @@ static void probe_req_filter_timer_callback(
         LOGD("%s: no probe for " PRI(os_macaddr_t), client->ifname, FMT(os_macaddr_t, client->hwaddr));
         return;
     }
-
-    memset(&event, 0, sizeof(event));
-
-    event.type = BSAL_EVENT_PROBE_REQ;
-    STRSCPY(event.ifname, client->ifname);
-
-    prob_req_ev = &event.data.probe_req;
-    memcpy(&prob_req_ev->client_addr, &client->hwaddr.addr, sizeof(prob_req_ev->client_addr));
-    prob_req_ev->rssi = probe->snr;
-    prob_req_ev->ssid_null = probe->ssid_null;
-    prob_req_ev->blocked = client->is_blacklisted;
 
     LOGD(LOG_PREFIX"%s: deliver probreq_msg_rx addr="PRI(os_macaddr_t)" snr=%d",
          client->ifname, FMT(os_macaddr_t, client->hwaddr), probe->snr);
@@ -1305,6 +1341,9 @@ static void probe_req_filter_timer_callback(
     probe_clean(client);
 
     if (propagate_probe_req) {
+        bsal_event_t event;
+
+        fill_bsal_probe_req_event(&event, client, probe->snr, probe->ssid_null);
         _bsal_event_callback(&event);
     }
 }
