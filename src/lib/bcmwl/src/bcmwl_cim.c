@@ -49,11 +49,11 @@ bcmwl_cim_lookup(struct bcmwl_cim *arr,
 }
 
 static bool
-bcmwl_cim_parse_v3_us_v2(struct bcmwl_cim *arr,
-                         size_t len,
-                         const void *iovbuf,
-                         int version,
-                         const struct bcmwl_ioctl_num_conv *conv)
+bcmwl_cim_parse_v3_v4_us_v2(struct bcmwl_cim *arr,
+                            size_t len,
+                            const void *iovbuf,
+                            int version,
+                            const struct bcmwl_ioctl_num_conv *conv)
 {
 #ifdef WL_CHANIM_STATS_US_VERSION_2
     const wl_chanim_stats_us_v2_t *v2 = iovbuf;
@@ -65,7 +65,7 @@ bcmwl_cim_parse_v3_us_v2(struct bcmwl_cim *arr,
     int i;
 
     if (WARN_ON(!conv)) return false;
-    if (version != 3) return false;
+    if (version != 3 && version != 4) return false;
 
     ver = conv->dtoh32(v2->version);
     cnt = conv->dtoh32(v2->count);
@@ -293,7 +293,7 @@ bcmwl_cim_parse(struct bcmwl_cim *arr,
     ver = conv->dtoh32(stats->version);
     cnt = conv->dtoh32(stats->count);
 
-    if (WARN_ON(ver != 2 && ver != 3)) return false;
+    if (WARN_ON(ver != 2 && ver != 3 && ver != 4)) return false;
 
     for (i = 0; i < cnt; i++) {
         sample = &stats->stats[i];
@@ -387,7 +387,7 @@ bool bcmwl_cim_get(const char *phy,
     if (WARN_ON(!bcmwl_GIOV(phy, "chanim_stats", &arg, &buf)))
         return false;
 
-    if (WARN_ON(!(bcmwl_cim_parse_v3_us_v2(arr, len, buf, ver, conv) ||
+    if (WARN_ON(!(bcmwl_cim_parse_v3_v4_us_v2(arr, len, buf, ver, conv) ||
                   bcmwl_cim_parse_v3_us_v1(arr, len, buf, ver, conv) ||
                   bcmwl_cim_parse_v2_us(arr, len, buf, ver, conv))))
         return false;

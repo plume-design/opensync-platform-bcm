@@ -355,6 +355,13 @@ bool bcmwl_vap_is_sta(const char *ifname)
     return apsta && is_primary;
 }
 
+bool bcmwl_vap_is_ap(const char *ifname)
+{
+    int is_ap = 0;
+    WARN_ON(!bcmwl_GIOV(ifname, "ap", NULL, &is_ap));
+    return is_ap == 1;
+}
+
 void bcmwl_vap_mac_xfrm(char *addr, int idx, int max)
 {
     if (!idx)
@@ -562,12 +569,12 @@ static bool bcmwl_vap_update_uapsd(const struct schema_Wifi_VIF_Config *vconf,
 
 static bool bcmwl_vap_has_correct_mode(const char *ifname, const char *mode)
 {
-    bool is_sta = !strcmp(mode, "sta");
-    if (is_sta && strcmp("1", WL(ifname, "apsta")))
-        return false;
-    if (is_sta != bcmwl_vap_is_sta(ifname))
-        return false;
-    return true;
+    bool want_sta = !strcmp(mode, "sta");
+    bool want_ap = !strcmp(mode, "ap");
+    bool is_sta = bcmwl_vap_is_sta(ifname);
+    bool is_ap = bcmwl_vap_is_ap(ifname);
+    LOGT("%s: mode: sta=%d/%d ap=%d/%d", ifname, want_sta, is_sta, want_ap, is_ap);
+    return want_sta == is_sta && want_ap == is_ap;
 }
 
 static void bcmwl_vap_update_rrm(const struct schema_Wifi_Radio_Config *rconf,
@@ -666,6 +673,8 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
             WARN_ON(!WL(vif, "mpc", "0"));
 
             WARN_ON(!WL(vif, "up"));
+
+            bcmwl_hostap_init_bss(vif);
         }
 
         if (!strcmp(vconf->mode, "sta")) {

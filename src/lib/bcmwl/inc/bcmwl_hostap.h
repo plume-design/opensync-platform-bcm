@@ -29,6 +29,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #ifdef CONFIG_BCM_USE_HOSTAP
 void bcmwl_hostap_init(void);
+void bcmwl_hostap_init_bss(const char *bss);
 void bcmwl_hostap_bss_apply(const struct schema_Wifi_VIF_Config *vconf,
                             const struct schema_Wifi_Radio_Config *rconf,
                             const struct schema_Wifi_Credential_Config *cconf,
@@ -42,6 +43,7 @@ void bcmwl_hostap_sta_get(const char *bss,
 bool bcmwl_hostap_dpp_set(const struct schema_DPP_Config **dpp);
 #else
 static inline void bcmwl_hostap_init(void) {}
+static inline void bcmwl_hostap_init_bss(const char *bss) {}
 static inline void bcmwl_hostap_bss_apply(const struct schema_Wifi_VIF_Config *vconf,
                                           const struct schema_Wifi_Radio_Config *rconf,
                                           const struct schema_Wifi_Credential_Config *cconf,

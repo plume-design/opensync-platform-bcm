@@ -224,7 +224,21 @@ bcmwl_hostap_fill_freqlist(struct wpas *wpas)
     WARN_ON(i == ARRAY_SIZE(wpas->freqlist));
 }
 
-static void
+static bool
+bcmwl_hostap_is_ap(const char *bss)
+{
+    return bcmwl_vap_is_sta(bss) == false &&
+           bcmwl_vap_is_ap(bss) == true;
+}
+
+static bool
+bcmwl_hostap_is_sta(const char *bss)
+{
+    return bcmwl_vap_is_sta(bss) == true &&
+           bcmwl_vap_is_ap(bss) == false;
+}
+
+void
 bcmwl_hostap_init_bss(const char *bss)
 {
     struct hapd *hapd = hapd_lookup(bss);
@@ -241,14 +255,20 @@ bcmwl_hostap_init_bss(const char *bss)
 
     phy = strfmta("wl%d", r);
 
-    if (v == 0 && kconfig_enabled(CONFIG_TARGET_CAP_EXTENDER)) {
-        if (WARN_ON(hapd)) return;
-        if (wpas) return;
-        wpas = wpas_new(phy, bss);
-    } else {
-        if (WARN_ON(wpas)) return;
+    if (bcmwl_hostap_is_ap(bss)) {
+        if (wpas) wpas_destroy(wpas);
+        wpas = NULL;
+
         if (hapd) return;
         hapd = hapd_new(phy, bss);
+    }
+
+    if (bcmwl_hostap_is_sta(bss)) {
+        if (hapd) hapd_destroy(hapd);
+        hapd = NULL;
+
+        if (wpas) return;
+        wpas = wpas_new(phy, bss);
     }
 
     if (hapd) {

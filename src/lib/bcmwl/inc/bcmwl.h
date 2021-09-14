@@ -111,6 +111,7 @@ bool bcmwl_vap_state(const char *ifname,
                      struct schema_Wifi_VIF_State *vstate);
 void bcmwl_vap_state_report(const char *ifname);
 bool bcmwl_vap_is_sta(const char *ifname);
+bool bcmwl_vap_is_ap(const char *ifname);
 void bcmwl_vap_mac_xfrm(char *addr, int idx, int max);
 bool bcmwl_vap_prealloc(const char *phy, int max_idx, void (*mac_xfrm)(char *addr, int idx, int max));
 void bcmwl_vap_prealloc_all(void);
