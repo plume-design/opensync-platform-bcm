@@ -1324,14 +1324,14 @@ static void probe_req_filter_timer_callback(
         }
     }
 
-    probe_clean(client);
-
     if (propagate_probe_req) {
         bsal_event_t event;
 
         fill_bsal_probe_req_event(&event, client, probe->snr, probe->ssid_null);
         _bsal_event_callback(&event);
     }
+
+    probe_clean(client);
 }
 
 
