@@ -34,6 +34,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <endian.h>
 #include <limits.h>
 #include <arpa/inet.h>
+#include <stdlib.h>
 
 #if defined(USE_ALTERNATE_BCM_DRIVER_PATHS)
     #include "ethernet.h"
@@ -946,6 +947,16 @@ static bool process_event_callback(
     proc_event_res_t proc_event_res = PROC_EVENT_NO_BSAL_EVENT;
     bsal_event_t event;
     client_t *client;
+
+    /*
+     * BM code is not resilient to events overrun. In such case its state may
+     * get silently corrupted. Therefore, it's safer to fail-fast BM.
+     */
+    if (!client_hwaddr && !data) {
+        LOGE(LOG_PREFIX"Event overrun, exiting");
+        ev_break(EV_DEFAULT_ EVBREAK_ALL);
+        return true;
+    }
 
     if (is_event_ignored(ntohl(bcm_event->event.event_type))) {
         return true;

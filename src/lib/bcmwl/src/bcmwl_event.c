@@ -324,6 +324,9 @@ static void bcmwl_event_overrun_recover_ifname(const char *ifname)
     evx_debounce_call(bcmwl_sta_resync, ifname);
     if (bcmwl_is_phy(ifname))
         evx_debounce_call(bcmwl_radio_state_report, ifname);
+
+    if (g_bcmwl_extra_cb)
+        g_bcmwl_extra_cb(ifname, NULL, NULL);
 }
 
 static void bcmwl_event_overrun_recover(const char *bridge)

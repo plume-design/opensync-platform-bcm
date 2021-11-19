@@ -29,61 +29,69 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #define _GNU_SOURCE
-#include <stdio.h>
-#include <string.h>
-
+#include "hw_acc.h"
 #include "os.h"
 #include "log.h"
+#include "execsh.h"
+#include "kconfig.h"
 
-#include "target.h"
+#define FLOWMGR_CMD_FILE "/proc/driver/flowmgr/cmd"
 
-#define MODULE_ID LOG_MODULE_ID_TARGET
+bool hw_acc_flush_flow_per_mac(const char *mac) {
+    char cmd[256];
+    int rc;
 
-static void fc_cache_invalidate(const char *openflow_rule)
-{
-    char        *flow       = strdupa(openflow_rule);
-    char        *ptr        = NULL;
-    const char  *k          = NULL;
-    const char  *v          = NULL;
-    bool        flushed_mac = false;
-
-    /* Openflow rules are of the type
-     * "udp6,tp_dst=53,dl_src=a4:e9:75:48:a3:7f,dl_dst=aa:bb:cc:dd:ee:ff"
-     * "tcp,tp_dst=80,dl_src=ff:ff:ff:ff:ff:ff" */
-    while ((ptr = strsep(&flow, ",")))
-        if ((k = strsep(&ptr, "=")) && (v = strsep(&ptr, "")))
-            if (!strcmp(k, "dl_src") || !strcmp(k, "dl_dst"))
-                if (!WARN_ON(!strexa("fcctl", "flush", "--mac", v)))
-                {
-                    LOGI("fcctl: flushed mac '%s'", v);
-                    flushed_mac = true;
-                }
-
-    /* If no mac addresses were found in the openflow rule,
-     * flush all fcctl flows */
-    if (!flushed_mac)
-        if (!WARN_ON(!strexa("fcctl", "flush")))
-            LOGD("fcctl: flushed all flows");
-}
-
-bool target_om_hook(target_om_hook_t hook, const char *openflow_rule)
-{
-    switch (hook)
+    if (kconfig_enabled(CONFIG_BCM_FCCTL_HW_ACC))
     {
-        case TARGET_OM_POST_ADD:
-        case TARGET_OM_POST_DEL:
+        rc = execsh_log(LOG_SEVERITY_DEBUG, _S(fcctl flush --mac "$1"), (char*)mac);
+        if (rc != 0)
         {
-            fc_cache_invalidate(openflow_rule);
-            break;
+            return false;
         }
-
-        case TARGET_OM_PRE_ADD:
-        case TARGET_OM_PRE_DEL:
-            break;
-
-        default:
-            break;
+        LOGD("fcctl: flushed mac '%s'", mac);
+        return true;
+    }
+    if (kconfig_enabled(CONFIG_BCM_FLOW_MGR_HW_ACC))
+    {
+        snprintf(cmd, sizeof(cmd), "flow_flushmac %s", mac);
+        if (file_put(FLOWMGR_CMD_FILE, cmd) == -1)
+        {
+            return false;
+        }
+        LOGD("flow_mgr: flushed mac '%s'", mac);
+        return true;
     }
 
-    return true;
+    LOGW("hw_acc: hardware acceleration not enabled\n");
+    return false;
+}
+
+bool hw_acc_flush_all_flows(void)
+{
+    char cmd[256];
+    int rc;
+
+    if (kconfig_enabled(CONFIG_BCM_FCCTL_HW_ACC))
+    {
+        rc = execsh_log(LOG_SEVERITY_DEBUG, _S(fcctl flush));
+        if (rc != 0)
+        {
+            return false;
+        }
+        LOGD("fcctl: flushed all flows\n");
+        return true;
+    } 
+    if (kconfig_enabled(CONFIG_BCM_FLOW_MGR_HW_ACC))
+    {
+        snprintf(cmd, sizeof(cmd), "flow_delall");
+        if (file_put(FLOWMGR_CMD_FILE, cmd) == -1)
+        {
+            return false;
+        }
+        LOGD("flow_mgr: flushed all flows\n");
+        return true;
+    }
+
+    LOGW("hw_acc: hardware acceleration not enabled\n");
+    return false;
 }

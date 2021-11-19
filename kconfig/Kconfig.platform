@@ -26,13 +26,13 @@ config BCM_IMP_DRIVER_VERSION
 endif # BCM_WIFI_DRIVER_PATH
 
 config BCM_USE_DPP
-    bool "Use DPP for WPA Key Managment"
+    bool "Use DPP for WPA Key Management"
     default n
     help
         Add support for WFA Easy Connect (DPP).
 
 config BCM_REF_WIFI
-    bool "Enable reference wifi api implementation"
+    bool "Enable reference WiFi API implementation"
     default n
     help
         Given product may require non-standard integration.
@@ -107,8 +107,8 @@ config BCM_NVRAM_EXEC
     bool "nvram executable via fork+exec"
     help
         Historically this was the first approach. It tends to just
-        work with some exception, but it's biggest pitfal is slowness.
-        It's resource intensive due to fork() + exec() use.
+        work with some exception, but its biggest pitfall is slowness.
+        It is resource intensive due to fork() + exec() use.
 
 config BCM_NVRAM_LIB
     bool "wlcsm library"
@@ -137,14 +137,14 @@ config BCM_NVRAM_EXEC_PATH
         Normally the system tries to rely on PATH variable to find the
         binary, however on some systems PATH may not include the nvram
         by default, or may have multiple implementations. In case PATH
-        cannot be easily overriden an absolute path can be specified
-        here, eg. /usr/sbin/nvram.
+        cannot be easily overridden an absolute path can be specified
+        here, e.g. /usr/sbin/nvram.
 
         If unsure, say 'nvram'
 endif
 
 config BCM_PREFER_IOV
-    bool "prefer raw ioctl() calls instead of fork()+exec(wlctl..)"
+    bool "Prefer raw ioctl() calls instead of fork()+exec(wlctl..)"
     default y
     help
         Historically for various reasons all interactions to the
@@ -157,14 +157,14 @@ config BCM_PREFER_IOV
 
         This kconfig option (prefer raw ioctl) enables raw ioctl usage
         instead of fork+exec. The support covers only select few
-        calls to speed the uglies spots.
+        calls to speed up the worst spots.
 
         Select 'n' if issues are observed.
 
         If unsure, say 'y'.
 
 config BCM_USE_RATE_HISTO
-    bool "use wlctl rate_histo_report to collect mcs histograms"
+    bool "Use wlctl rate_histo_report to collect MCS histograms"
     default y
     help
         MCS histograms are used to infer link-quality between devices.
@@ -176,24 +176,24 @@ config BCM_USE_RATE_HISTO
 
         The rate is a 4-touple of preamble, bandwidth, mcs and nss.
 
-        There are a number of counters, eg. msdu, mpdu, ppdu, bytes.
+        There are a number of counters, e.g. msdu, mpdu, ppdu, bytes.
 
-        If using 11ax and newer devices say 'n'.
-        If using 11ac and older devices say 'y'.
+        If using 11ax and newer devices, say 'n'.
+        If using 11ac and older devices, say 'y'.
 
 config BCM_USE_RATE_HISTO_TO_EXPECTED_TPUT
-    bool "use mcs histograms to compute expected throughput phyrates"
+    bool "Use MCS histograms to compute expected throughput phyrates"
     default y
     depends on BCM_USE_RATE_HISTO
     help
         This makes sense only for 11ac and older devices which
-        originally were intended to report mcs histograms. Some of
+        originally were intended to report MCS histograms. Some of
         them couldn't be updated to deliver (reliable) expected
-        throughput phyrates. Instead mcs histograms can be utilized to
-        esimate them.
+        throughput phyrates. Instead MCS histograms can be utilized to
+        estimate them.
 
-        If using 11ax and newer devices say 'n'.
-        If using 11ac and older devices say 'y'.
+        If using 11ax and newer devices, say 'n'.
+        If using 11ac and older devices, say 'y'.
 
 menuconfig BCM_WPS
     bool "Enable Wireless Protected Setup (WPS)"
@@ -298,5 +298,19 @@ config BCM_SECURE_BOOT_LIB
           BRCM_DRIVER_SOTP=y
           BUILD_CFE_ALLOW_NONSEC_SOTP_ACCESS=y
           BUILD_SOTPCTL=y
+choice
+    prompt "Hardware Acceleration"
+    default BCM_FCCTL_HW_ACC
+
+    config BCM_FCCTL_HW_ACC
+        bool "Use FlowCache hardware acceleration (fcctl)"
+        help
+            Select for FlowCache hardware acceleration (fcctl).
+
+    config BCM_FLOW_MGR_HW_ACC
+        bool "Use FAP hardware acceleration (flowmgr)"
+        help
+            Select for FAP hardware acceleration (flowmgr).
+endchoice
 
 endif # PLATFORM_IS_BCM
