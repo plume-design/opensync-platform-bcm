@@ -34,6 +34,13 @@ fi
 
 if ! wl -i "$ifname" bss | grep -q up
 then
+    if wl -i "$ifname" dfs_status | grep -q PRE-ISM
+    then
+        # Driver sometimes puts some of the BSSes down while
+        # CAC is in progress.
+        log_info "$ifname: bss is down, but cac is in progress, ignoring"
+        exit 0
+    fi
     log_warn "$ifname: bss is not up"
     exit 1
 fi
