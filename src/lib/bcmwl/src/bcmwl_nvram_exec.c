@@ -47,7 +47,12 @@ char *bcmwl_nvram_getall(void)
 char *bcmwl_nvram_get(const char *ifname,
                       const char *name)
 {
-    return DUP(strexa(NVRAM, "get", strfmta("%s_%s", ifname, name)));
+    if((strncmp(ifname, "", sizeof("")) == 0))
+    {
+        return DUP(strexa(NVRAM, "get", strfmta("%s", name)));
+    }
+    else
+        return DUP(strexa(NVRAM, "get", strfmta("%s_%s", ifname, name)));
 }
 
 bool bcmwl_nvram_set(const char *ifname,
@@ -55,9 +60,17 @@ bool bcmwl_nvram_set(const char *ifname,
                      const char *value)
 {
     const char *p;
-    if (value)
-        p = strexa(NVRAM, "set", strfmta("%s_%s=%s", ifname, name, value));
-    else
-        p = strexa(NVRAM, "unset", strfmta("%s_%s", ifname, name));
+    if (value) {
+        if (!strcmp(ifname, ""))
+            p = strexa(NVRAM, "set", strfmta("%s=%s", name, value));
+        else
+            p = strexa(NVRAM, "set", strfmta("%s_%s=%s", ifname, name, value));
+    }
+    else {
+        if (!strcmp(ifname, ""))
+            p = strexa(NVRAM, "unset", strfmta("%s", name));
+        else
+            p = strexa(NVRAM, "unset", strfmta("%s_%s", ifname, name));
+    }
     return p && strlen(p) == 0 ? true : false;
 }

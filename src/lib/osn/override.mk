@@ -41,4 +41,13 @@ UNIT_EXPORT_LDFLAGS += -larcher
 
 endif
 
+# Multicast OSN backend
+ifneq "$(or $(CONFIG_OSN_BACKEND_IGMP_BCM),$(CONFIG_OSN_BACKEND_MLD_BCM))" ""
+UNIT_CFLAGS += -I$(OVERRIDE_DIR)/inc
+UNIT_SRC_TOP += $(OVERRIDE_DIR)/src/osn_mcast_bridge_bcm.c
+endif
+
+UNIT_SRC_TOP += $(if $(CONFIG_OSN_BACKEND_IGMP_BCM),$(OVERRIDE_DIR)/src/osn_igmp_bcm.c,)
+UNIT_SRC_TOP += $(if $(CONFIG_OSN_BACKEND_MLD_BCM),$(OVERRIDE_DIR)/src/osn_mld_bcm.c,)
+
 UNIT_SRC_TOP += $(if $(CONFIG_OSN_BACKEND_VLAN_BCM_VLANCTL),$(OVERRIDE_DIR)/src/osn_vlan_bcm_vlanctl.c,)

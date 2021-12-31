@@ -208,6 +208,8 @@ static const char* bcmwl_radio_get_hwname(const char *dphy)
         "0xaaa4", "bcm43684",
         "0xf6ca", "bcm6755",
         "0x6710", "bcm6710",
+        "0x6715", "bcm6715",
+        "0x6756", "bcm6756",
         NULL, NULL,
     };
     const char *const*hw;
@@ -367,11 +369,11 @@ static char* bcmwl_radio_chanspec_prep(const char *phy, int channel, const char 
 char* bcmwl_radio_get_vifs(const char *phy)
 {
     struct dirent *p;
-    char *vifs = strdupa("");
+    char *vifs = "";
     DIR *d;
 
     if (WARN_ON(!(d = opendir("/sys/class/net"))))
-        return vifs;
+        goto out;
 
     while ((p = readdir(d)))
         if (strstr(p->d_name, phy) == p->d_name)
@@ -380,6 +382,7 @@ char* bcmwl_radio_get_vifs(const char *phy)
                     vifs = strchomp(strfmta("%s %s", p->d_name, vifs), " ");
 
     closedir(d);
+out:
     return strdup(vifs);
 }
 

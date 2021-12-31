@@ -27,6 +27,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define _GNU_SOURCE
 
 /* std libc */
+#include <stdio.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <dirent.h>
@@ -207,19 +208,28 @@ static void
 bcmwl_hostap_fill_freqlist(struct wpas *wpas)
 {
     char *chans = WL(wpas->phy, "chanspecs");
-    char *chan;
+    char *line;
     int freq;
     int cs;
     size_t i = 0;
 
     if (WARN_ON(!chans))
         return;
-    while ((chan = strsep(&chans, " \r\n")))
+    
+    while ((line = strsep(&chans, "\n")))
         if (i < ARRAY_SIZE(wpas->freqlist))
-            if ((cs = strtol(chan, NULL, 16)) > 0)
+        {
+            if (1 == sscanf(line, "%*s (%x)", &cs))
+            {
                 if (bcmwl_chanspec_get_bw_mhz(cs) == 20)
                     if ((freq = bcmwl_chanspec_get_center_freq(cs)) > 0)
                         wpas->freqlist[i++] = freq;
+            }
+            else
+            {
+                LOG(WARN, "bcmwl: unexpected %s chanspecs report format: %s", wpas->phy, line);
+            }
+        }
 
     WARN_ON(i == ARRAY_SIZE(wpas->freqlist));
 }

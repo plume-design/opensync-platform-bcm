@@ -1,0 +1,9 @@
+config OSN_BACKEND_IGMP_BCM
+    bool "BCM mcpd"
+
+    help
+        Use the Broadcom `mcpd` utility for managing IGMP.
+
+        Broadcom platforms use mcpd binary for correctly configuring IPv4
+        multicast traffic.
+

@@ -22,29 +22,13 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-##############################################################################
-#
-# BCM utils
-#
-##############################################################################
+UNIT_NAME := fut_platform_bcm_lib_override
 
-UNIT_NAME := bcmutil
-UNIT_TYPE := LIB
+UNIT_DISABLE := n
 
-UNIT_SRC += src/mcpd_util.c
+# Template type:
+UNIT_TYPE := FUT
+# Output directory
+UNIT_DIR := shell/lib/override/
 
-UNIT_CFLAGS := -I$(UNIT_PATH)/inc
-
-UNIT_EXPORT_CFLAGS := $(UNIT_CFLAGS)
-UNIT_EXPORT_LDFLAGS := $(UNIT_LDFLAGS)
-
-UNIT_DEPS := src/lib/ds
-UNIT_DEPS += src/lib/schema
-UNIT_DEPS += src/lib/daemon
-UNIT_DEPS += src/lib/common
-UNIT_DEPS += src/lib/kconfig
-UNIT_DEPS += src/lib/log
-
-UNIT_DEPS_CFLAGS += src/lib/target
-
-include platform/bcm/build/bcm-sdk-wifi.mk
+UNIT_FILE := bcm_platform_override.sh

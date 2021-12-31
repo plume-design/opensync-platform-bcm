@@ -90,6 +90,7 @@ config BCM_USE_NAS
 
 config BCM_USE_HOSTAP
     bool "Use hostapd and wpa_supplicant authentication"
+    select HEALTHCHECK_HOSTAPD_WPA_SUPPLICANT
     help
         This enables use of hostap suite (hostapd / wpa_supplicant)
         to authenticate clients (AP role) and connecting
@@ -312,5 +313,18 @@ choice
         help
             Select for FAP hardware acceleration (flowmgr).
 endchoice
+
+config BCM_USE_TOAD
+    bool "Use toad daemon for SSID prioritization"
+    default n
+    help
+        This enables driving userspace daemons of TOAD daemon
+        handling.
+        By enabling this option SSID prioritization between
+        public and private AP can be achieved.
+
+config BCM_TOAD_PATH
+    string "Path to toad binaries"
+    default "/usr/bin/toad"
 
 endif # PLATFORM_IS_BCM

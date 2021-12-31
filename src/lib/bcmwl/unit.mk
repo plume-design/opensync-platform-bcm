@@ -51,6 +51,7 @@ UNIT_SRC  += src/bcmwl_debounce.c
 UNIT_SRC  += src/bcmwl_dfs.c
 UNIT_SRC  += src/bcmwl_cim.c
 UNIT_SRC  += src/bcmwl.c
+UNIT_SRC  += $(if $(CONFIG_BCM_USE_TOAD),src/bcmwl_toad.c,)
 
 UNIT_CFLAGS := -I$(UNIT_PATH)/inc
 UNIT_CFLAGS += $(if $(CONFIG_BCM_NVRAM_LIB),-I$(BCM_BUILD_ROOT)/userspace/private/libs/wlcsm/include,)

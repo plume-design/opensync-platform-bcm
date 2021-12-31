@@ -24,7 +24,7 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-die() { log_warn "$*"; Healthcheck_Fail; }
-pidof hostapd || die hostapd not found
-pidof wpa_supplicant || die wpa_supplicant not found
-Healthcheck_Pass
+
+# Increase udp conntrack timeout to facilitate collection of conntrack stats by FCM
+echo 400 > /proc/sys/net/netfilter/nf_conntrack_udp_timeout
+echo 400 > /proc/sys/net/netfilter/nf_conntrack_udp_timeout_stream

@@ -48,6 +48,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "bcmwl_event.h"
 #include "bcmwl_acl.h"
 #include "bcmwl_ioctl.h"
+#include "bcmwl_toad.h"
 
 /**
  * Private
@@ -326,6 +327,10 @@ bcmwl_vap_state(const char *ifname,
     /* FIXME
      *  - min_hw_mode
      */
+    if ((p = NVG(ifname, "airtime_precedence")) && (strnlen(p, 50) > 0))
+    {
+        SCHEMA_SET_STR(vstate->airtime_precedence, p);
+    }
 
     return true;
 }
@@ -672,6 +677,7 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
              */
             WARN_ON(!WL(vif, "mpc", "0"));
 
+            WARN_ON(!WL(vif, "taf", "enable", "1"));
             WARN_ON(!WL(vif, "up"));
 
             bcmwl_hostap_init_bss(vif);
@@ -817,6 +823,14 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
     NVS(vif, "plume_min_hw_mode", vconf->min_hw_mode_exists
                                   ? vconf->min_hw_mode
                                   : NULL);
+
+    if ( vconf->enabled_changed || vconf->airtime_precedence_exists)
+    {
+        WARN_ON(!NVS(vif, "airtime_precedence", vconf->airtime_precedence));
+        bcmwl_toad_configure_atf(vconf);
+    }
+    else
+        WARN_ON(!NVU(vif, "airtime_precedence"));
 
     bcmwl_hostap_bss_apply(vconf, rconf, cconfs, vchanged, num_cconfs);
     bcmwl_roam_later(vconf->if_name);

@@ -78,8 +78,11 @@ INCLUDES     += $(SDK_INCLUDES)
 
 HOSTAP_HEADERS := -I$(BRCMDRIVERS_DIR)/broadcom/net/wl/$(DRIVER_VERSION)/main/components/opensource/router_tools/hostapd/src/common
 
-OVS_PACKAGE_VERNUM := $(shell echo $(OVS_PACKAGE_VER) | (IFS=. read A B C; echo $$(($$A*10000+$$B*100+$$C))))
-DEFINES += -DOVS_PACKAGE_VERNUM=$(OVS_PACKAGE_VERNUM)
+# libnl3 (netlink lib) available only together with hostap
+ifeq ($(CONFIG_BCM_USE_HOSTAP),y)
+LIBNL3_HEADERS = -I$(BRCMDRIVERS_DIR)/broadcom/net/wl/$(DRIVER_VERSION)/main/components/opensource/router_tools/libnl/install/include/libnl3
+export LIBNL3_HEADERS
+endif
 
 ifeq ($(SDK_NEW_INC_PATHS),y)
 DEFINES += -DUSE_ALTERNATE_BCM_DRIVER_PATHS
@@ -98,6 +101,7 @@ LDFLAGS      += -L$(BCM_FSBUILD_DIR)/lib
 LDFLAGS      += -L$(BCM_FSBUILD_DIR)/public/lib
 LDFLAGS      += -L$(BCM_FSBUILD_DIR)/gpl/lib
 LDFLAGS      += -L$(INSTALL_DIR)/usr/lib
+LDFLAGS      += -L$(INSTALL_DIR)/lib/gpl
 SDK_ROOTFS   := $(INSTALL_DIR)
 
 ifeq ($(V),1)
