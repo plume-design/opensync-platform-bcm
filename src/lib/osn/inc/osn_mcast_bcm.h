@@ -27,7 +27,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef OSN_MCAST_BCM_H_INCLUDED
 #define OSN_MCAST_BCM_H_INCLUDED
 
-#include "daemon.h"
 #include "evx.h"
 
 #include "osn_igmp.h"
@@ -108,7 +107,6 @@ struct osn_mld
 typedef struct
 {
     bool                        initialized;
-    daemon_t                    daemon;
     ev_debounce                 mcpd_debounce;
     int                         mcpd_retry;
     ev_debounce                 ovs_debounce;

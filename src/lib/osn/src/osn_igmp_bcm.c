@@ -38,10 +38,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdio.h>
-
 #include <errno.h>
 
-#include "daemon.h"
 #include "log.h"
 #include "const.h"
 #include "util.h"

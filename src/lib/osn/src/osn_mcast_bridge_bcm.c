@@ -32,9 +32,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "osn_mcast_bcm.h"
 
-#define MCPD_DAEMON_PATH    "/bin/mcpd"
 #define MCPD_CONFIG_FILE    "/var/mcpd.conf"
-#define MCPD_PID_FILE       "/tmp/mcpd.pid"
 /* Default number of apply retries before giving up */
 #define MCPD_APPLY_RETRIES  5
 #define OVS_APPLY_RETRIES  5
@@ -57,24 +55,12 @@ static osn_mcast_bridge *osn_mcast_bridge_init()
     if (self->initialized)
         return self;
 
-    /* Initialize mcpd */
-    if (!daemon_init(&self->daemon, MCPD_DAEMON_PATH, DAEMON_LOG_ALL))
+    /* MCPD should already be running */
+    if (execsh_log(LOG_SEVERITY_DEBUG, _S(ps | grep "[m]cpd")) != 0)
     {
-        LOGE("osn_mcast_bridge_init: Unable to initialize mcpd.");
-        return NULL;
+        LOG(ERR, "mcpd_util_init: MCPD should be already running");
+        return false;
     }
-
-    if (!daemon_pidfile_set(&self->daemon, MCPD_PID_FILE, true))
-    {
-        LOGE("osn_mcast_bridge_init: Error setting the PID file path.");
-    }
-
-    if (!daemon_restart_set(&self->daemon, true, 5.0, 5))
-    {
-        LOGE("osn_mcast_bridge_init: Error enabling daemon auto-restart.");
-    }
-
-    daemon_arg_add(&self->daemon, "-c", MCPD_CONFIG_FILE);
 
     /* Initialize apply debounce */
     ev_debounce_init2(&self->mcpd_debounce, osn_mcast_mcpd_apply_fn, 0.4, 2.0);
@@ -365,20 +351,13 @@ static bool osn_mcast_write_mcpd_config(osn_mcast_bridge *self)
 void osn_mcast_mcpd_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent)
 {
     osn_mcast_bridge *self = &osn_mcast_bridge_base;
-    bool started;
 
     /* Apply MCPD configuration */
     if (WARN_ON(osn_mcast_write_mcpd_config(self) == false))
         return;
 
-    if (daemon_is_started(&self->daemon, &started) && started == false)
-    {
-        LOGI("osn_mcast_mcpd_apply_fn: Starting mcpd");
-        daemon_start(&self->daemon);
-    }
-
     /*
-     * Wait until mcpd is ready for accepting commands via the `mcp` tool. We
+     * Wait until mcpd is ready for accepting commands via the `mcpctl` tool. We
      * ensure this by checking netstat -anp to see if mcpd opened the control
      * socket.
      */
@@ -397,8 +376,8 @@ void osn_mcast_mcpd_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent)
         return;
     }
 
-    if (cmd_log("mcp reload") != 0)
-        LOG(ERR, "osn_mcast_mcpd_apply_fn: failed to reload mcp");
+    if (cmd_log("mcpctl reload") != 0)
+        LOG(ERR, "osn_mcast_mcpd_apply_fn: 'mcpctl reload' failed");
 
     return;
 }
