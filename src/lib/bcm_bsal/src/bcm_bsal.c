@@ -74,10 +74,12 @@ bool bcm_bsal_finalize(struct ev_loop *loop);
 
 typedef enum
 {
-    SNR_XING_STATE_NONE = 0,
-    SNR_XING_STATE_BELOW_LWM = 1,
-    SNR_XING_STATE_BETWEEN_LWM_HWM = 2,
-    SNR_XING_STATE_ABOVE_HWM = 3,
+    SNR_XING_STATE_NONE,
+    SNR_XING_STATE_BELOW_BOWM,
+    SNR_XING_STATE_BETWEEN_BOWM_LWM,
+    SNR_XING_STATE_BELOW_LWM,
+    SNR_XING_STATE_BETWEEN_LWM_HWM,
+    SNR_XING_STATE_ABOVE_HWM,
 } snr_xing_state_t;
 
 typedef enum
@@ -117,6 +119,7 @@ typedef struct
     uint8_t snr_lwm;
     uint8_t snr_hwm;
 
+    uint8_t xing_snr_busy_override;
     uint8_t xing_snr_low;
     uint8_t xing_snr_high;
 
@@ -281,9 +284,13 @@ static bool is_event_ignored(int etype)
 
 static snr_xing_state_t evaluate_snr_xing(const client_t *client, int snr)
 {
-    if (snr < client->xing_snr_low)
+    if (snr < client->xing_snr_busy_override)
     {
-        return SNR_XING_STATE_BELOW_LWM;
+        return SNR_XING_STATE_BELOW_BOWM;
+    }
+    else if ((snr >= client->xing_snr_busy_override) && (snr < client->xing_snr_low))
+    {
+        return SNR_XING_STATE_BETWEEN_BOWM_LWM;
     }
     else if ((snr >= client->xing_snr_low) && (snr <= client->xing_snr_high))
     {
@@ -1196,56 +1203,122 @@ static bool client_update_rssi_xing_event(
     memcpy(&rssi_xing_ev->client_addr, &client->hwaddr.addr, sizeof(rssi_xing_ev->client_addr));
     rssi_xing_ev->rssi = new_snr;
 
-    // Old state is SNR_XING_STATE_BELOW_LWM
-    if ((client->snr_xing_level == SNR_XING_STATE_BELOW_LWM) &&
-        (new_snr_xing_level == SNR_XING_STATE_BETWEEN_LWM_HWM))
+    // Old state is SNR_XING_STATE_BELOW_BOWM
+    if ((client->snr_xing_level == SNR_XING_STATE_BELOW_BOWM) &&
+        (new_snr_xing_level == SNR_XING_STATE_BETWEEN_BOWM_LWM))
+    {
+        rssi_xing_ev->high_xing = BSAL_RSSI_UNCHANGED;
+        rssi_xing_ev->low_xing = BSAL_RSSI_UNCHANGED;
+        rssi_xing_ev->busy_override_xing = BSAL_RSSI_HIGHER;
+    }
+    else if ((client->snr_xing_level == SNR_XING_STATE_BELOW_BOWM) &&
+             (new_snr_xing_level == SNR_XING_STATE_BETWEEN_LWM_HWM))
     {
         rssi_xing_ev->high_xing = BSAL_RSSI_UNCHANGED;
         rssi_xing_ev->low_xing = BSAL_RSSI_HIGHER;
+        rssi_xing_ev->busy_override_xing = BSAL_RSSI_HIGHER;
     }
-    else if ((client->snr_xing_level == SNR_XING_STATE_BELOW_LWM) &&
+    else if ((client->snr_xing_level == SNR_XING_STATE_BELOW_BOWM) &&
              (new_snr_xing_level == SNR_XING_STATE_ABOVE_HWM))
     {
         rssi_xing_ev->high_xing = BSAL_RSSI_HIGHER;
         rssi_xing_ev->low_xing = BSAL_RSSI_HIGHER;
+        rssi_xing_ev->busy_override_xing = BSAL_RSSI_HIGHER;
+    }
+    // Old state is SNR_XING_STATE_BETWEEN_BOWM_LWM
+    else if ((client->snr_xing_level == SNR_XING_STATE_BETWEEN_BOWM_LWM) &&
+             (new_snr_xing_level == SNR_XING_STATE_BELOW_BOWM))
+    {
+        rssi_xing_ev->high_xing = BSAL_RSSI_UNCHANGED;
+        rssi_xing_ev->low_xing = BSAL_RSSI_UNCHANGED;
+        rssi_xing_ev->busy_override_xing = BSAL_RSSI_LOWER;
+    }
+    else if ((client->snr_xing_level == SNR_XING_STATE_BETWEEN_BOWM_LWM) &&
+             (new_snr_xing_level == SNR_XING_STATE_BETWEEN_LWM_HWM))
+    {
+        rssi_xing_ev->high_xing = BSAL_RSSI_UNCHANGED;
+        rssi_xing_ev->low_xing = BSAL_RSSI_HIGHER;
+        rssi_xing_ev->busy_override_xing = BSAL_RSSI_UNCHANGED;
+    }
+    else if ((client->snr_xing_level == SNR_XING_STATE_BETWEEN_BOWM_LWM) &&
+             (new_snr_xing_level == SNR_XING_STATE_ABOVE_HWM))
+    {
+        rssi_xing_ev->high_xing = BSAL_RSSI_HIGHER;
+        rssi_xing_ev->low_xing = BSAL_RSSI_HIGHER;
+        rssi_xing_ev->busy_override_xing = BSAL_RSSI_UNCHANGED;
     }
     // Old state is SNR_XING_STATE_BETWEEN_LWM_HWM
     else if ((client->snr_xing_level == SNR_XING_STATE_BETWEEN_LWM_HWM) &&
-             (new_snr_xing_level == SNR_XING_STATE_BELOW_LWM))
+             (new_snr_xing_level == SNR_XING_STATE_BELOW_BOWM))
     {
         rssi_xing_ev->high_xing = BSAL_RSSI_UNCHANGED;
         rssi_xing_ev->low_xing = BSAL_RSSI_LOWER;
+        rssi_xing_ev->busy_override_xing = BSAL_RSSI_LOWER;
+    }
+    else if ((client->snr_xing_level == SNR_XING_STATE_BETWEEN_LWM_HWM) &&
+             (new_snr_xing_level == SNR_XING_STATE_BETWEEN_BOWM_LWM))
+    {
+        rssi_xing_ev->high_xing = BSAL_RSSI_UNCHANGED;
+        rssi_xing_ev->low_xing = BSAL_RSSI_LOWER;
+        rssi_xing_ev->busy_override_xing = BSAL_RSSI_UNCHANGED;
     }
     else if ((client->snr_xing_level == SNR_XING_STATE_BETWEEN_LWM_HWM) &&
              (new_snr_xing_level == SNR_XING_STATE_ABOVE_HWM))
     {
         rssi_xing_ev->high_xing = BSAL_RSSI_HIGHER;
         rssi_xing_ev->low_xing = BSAL_RSSI_UNCHANGED;
+        rssi_xing_ev->busy_override_xing = BSAL_RSSI_UNCHANGED;
     }
     // Old state is SNR_XING_STATE_ABOVE_HWM
+    else if ((client->snr_xing_level == SNR_XING_STATE_ABOVE_HWM) &&
+             (new_snr_xing_level == SNR_XING_STATE_BELOW_BOWM))
+    {
+        rssi_xing_ev->high_xing = BSAL_RSSI_LOWER;
+        rssi_xing_ev->low_xing = BSAL_RSSI_LOWER;
+        rssi_xing_ev->busy_override_xing = BSAL_RSSI_LOWER;
+    }
+    else if ((client->snr_xing_level == SNR_XING_STATE_ABOVE_HWM) &&
+             (new_snr_xing_level == SNR_XING_STATE_BETWEEN_BOWM_LWM))
+    {
+        rssi_xing_ev->high_xing = BSAL_RSSI_LOWER;
+        rssi_xing_ev->low_xing = BSAL_RSSI_LOWER;
+        rssi_xing_ev->busy_override_xing = BSAL_RSSI_UNCHANGED;
+    }
     else if ((client->snr_xing_level == SNR_XING_STATE_ABOVE_HWM) &&
              (new_snr_xing_level == SNR_XING_STATE_BETWEEN_LWM_HWM))
     {
         rssi_xing_ev->high_xing = BSAL_RSSI_LOWER;
         rssi_xing_ev->low_xing = BSAL_RSSI_UNCHANGED;
+        rssi_xing_ev->busy_override_xing = BSAL_RSSI_UNCHANGED;
     }
-    else if ((client->snr_xing_level == SNR_XING_STATE_ABOVE_HWM) &&
-             (new_snr_xing_level == SNR_XING_STATE_BELOW_LWM))
+    // Old state is SNR_XING_STATE_NONE
+    else if ((client->snr_xing_level == SNR_XING_STATE_NONE) &&
+             (new_snr_xing_level == SNR_XING_STATE_BELOW_BOWM))
+    {
+        rssi_xing_ev->high_xing = BSAL_RSSI_UNCHANGED;
+        rssi_xing_ev->low_xing = BSAL_RSSI_UNCHANGED;
+        rssi_xing_ev->busy_override_xing = BSAL_RSSI_LOWER;
+    }
+    else if ((client->snr_xing_level == SNR_XING_STATE_NONE) &&
+             (new_snr_xing_level == SNR_XING_STATE_BETWEEN_BOWM_LWM))
+    {
+        rssi_xing_ev->high_xing = BSAL_RSSI_UNCHANGED;
+        rssi_xing_ev->low_xing = BSAL_RSSI_LOWER;
+        rssi_xing_ev->busy_override_xing = BSAL_RSSI_UNCHANGED;
+    }
+    else if ((client->snr_xing_level == SNR_XING_STATE_NONE) &&
+             (new_snr_xing_level == SNR_XING_STATE_BETWEEN_LWM_HWM))
     {
         rssi_xing_ev->high_xing = BSAL_RSSI_LOWER;
-        rssi_xing_ev->low_xing = BSAL_RSSI_LOWER;
+        rssi_xing_ev->low_xing = BSAL_RSSI_UNCHANGED;
+        rssi_xing_ev->busy_override_xing = BSAL_RSSI_UNCHANGED;
     }
     else if ((client->snr_xing_level == SNR_XING_STATE_NONE) &&
              (new_snr_xing_level == SNR_XING_STATE_ABOVE_HWM))
     {
         rssi_xing_ev->high_xing = BSAL_RSSI_UNCHANGED;
         rssi_xing_ev->low_xing = BSAL_RSSI_UNCHANGED;
-    }
-    else if ((client->snr_xing_level == SNR_XING_STATE_NONE) &&
-             (new_snr_xing_level == SNR_XING_STATE_BELOW_LWM))
-    {
-        rssi_xing_ev->high_xing = BSAL_RSSI_UNCHANGED;
-        rssi_xing_ev->low_xing = BSAL_RSSI_UNCHANGED;
+        rssi_xing_ev->busy_override_xing = BSAL_RSSI_UNCHANGED;
     }
     else
     {
@@ -1492,11 +1565,11 @@ bool bcm_bsal_add_client(
     memcpy(&hwaddr.addr, client_hwaddr, sizeof(hwaddr.addr));
     mac = strfmta(PRI(os_macaddr_t), FMT(os_macaddr_t, hwaddr));
 
-    LOGD(LOG_PREFIX"%s: %s hwaddr=%s probe_lwm=%d probe_hwm=%d auth_lwm=%d auth_hwm=%d xing_low=%d xing_high=%d",
+    LOGD(LOG_PREFIX"%s: %s hwaddr=%s probe_lwm=%d probe_hwm=%d auth_lwm=%d auth_hwm=%d xing_busy_override=%d xing_low=%d xing_high=%d",
          ifname, __func__, mac,
          client_conf->rssi_probe_lwm, client_conf->rssi_probe_hwm,
          client_conf->rssi_auth_lwm, client_conf->rssi_auth_hwm,
-         client_conf->rssi_low_xing, client_conf->rssi_high_xing);
+         client_conf->rssi_busy_override_xing, client_conf->rssi_low_xing, client_conf->rssi_high_xing);
 
     client = get_client(ifname, &hwaddr);
     if (client) {
@@ -1511,6 +1584,7 @@ bool bcm_bsal_add_client(
     memcpy(&client->hwaddr, &hwaddr, sizeof(client->hwaddr));
     client->snr_lwm = client_conf->rssi_probe_lwm;
     client->snr_hwm = client_conf->rssi_probe_hwm;
+    client->xing_snr_busy_override = client_conf->rssi_busy_override_xing;
     client->xing_snr_low = client_conf->rssi_low_xing;
     client->xing_snr_high = client_conf->rssi_high_xing;
 
@@ -1563,11 +1637,11 @@ bool bcm_bsal_update_client(
     memcpy(&hwaddr.addr, mac_addr, sizeof(hwaddr.addr));
     mac = strfmta(PRI(os_macaddr_t), FMT(os_macaddr_t, hwaddr));
 
-    LOGD(LOG_PREFIX"%s: %s addr=%s probe_lwm=%d probe_hwm=%d auth_lwm=%d auth_hwm=%d xing_low=%d xing_high=%d",
+    LOGD(LOG_PREFIX"%s: %s addr=%s probe_lwm=%d probe_hwm=%d auth_lwm=%d auth_hwm=%d xing_busy_override=%d xing_low=%d xing_high=%d",
          ifname, __func__, mac,
          conf->rssi_probe_lwm, conf->rssi_probe_hwm,
          conf->rssi_auth_lwm, conf->rssi_auth_hwm,
-         conf->rssi_low_xing, conf->rssi_high_xing);
+         conf->rssi_busy_override_xing, conf->rssi_low_xing, conf->rssi_high_xing);
 
     client = get_client(ifname, &hwaddr);
     if (!client) {
@@ -1595,6 +1669,7 @@ bool bcm_bsal_update_client(
 
     client->snr_lwm = conf->rssi_probe_lwm;
     client->snr_hwm = conf->rssi_probe_hwm;
+    client->xing_snr_busy_override = conf->rssi_busy_override_xing;
     client->xing_snr_low = conf->rssi_low_xing;
     client->xing_snr_high = conf->rssi_high_xing;
 

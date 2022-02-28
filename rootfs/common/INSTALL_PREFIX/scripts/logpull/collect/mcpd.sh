@@ -25,25 +25,15 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-# Start mcpd on system startup.
-# Initially start with empty config file, which causes mcpd to run with 
-# default settings.  When things get configured, a new config file will be
-# written out and run "mcpctl reload".
+. "$LOGPULL_LIB"
 
-case "$1" in
-	start)
-		echo "Starting mcpd..."
-		# create empty config file
-		# MCPD_CONFIG_FILE ==>"/var/mcpd.conf" in rut_multicast.h and mcpd_config.c
-		cat /dev/null > /var/mcpd.conf
-		mcpd 2>&1 | logger -t mcpd &
-		exit 0
-		;;
+MCPD_CONFIG_FILE=/var/mcpd.conf
 
-	*)
-		echo "$0: unrecognized or unsupported option $1"
-		exit 1
-		;;
+collect_mcpd_log()
+{
+        collect_cmd  /bin/mcpctl allinfo
+        collect_file  $MCPD_CONFIG_FILE
+}
 
-esac
 
+collect_mcpd_log
