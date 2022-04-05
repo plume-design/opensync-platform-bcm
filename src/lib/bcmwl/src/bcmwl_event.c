@@ -806,7 +806,7 @@ static void bcmwl_event_report_channel(const char *ifname)
 static void bcmwl_event_handle_csa_rx_ind(const char *ifname, void *_ev)
 {
     bcm_event_t *ev = _ev;
-    wl_chan_switch_rx_ind_t *rx_ind;
+    wl_chan_switch_recv_t *rx_ind;
     unsigned int length;
     struct dirent *p;
     DIR *d;
@@ -823,7 +823,7 @@ static void bcmwl_event_handle_csa_rx_ind(const char *ifname, void *_ev)
     if (WARN_ON(!mac))
         return;
 
-    rx_ind = (wl_chan_switch_rx_ind_t *)(ev + 1);
+    rx_ind = (wl_chan_switch_recv_t *)(ev + 1);
     length = ntohl(ev->event.datalen);
 
     if (length < sizeof(*rx_ind)) {
@@ -907,7 +907,7 @@ static void bcmwl_event_print(const bcm_event_t *ev)
     CASE2STR(WLC_E_ASSOC_IND, "assoc indication");
     CASE2STR(WLC_E_DISASSOC, "disassoc");
     CASE2STR(WLC_E_DISASSOC_IND, "disassoc indication");
-    CASE2STR(WLC_E_CSA_RX_IND, "csa rx indication");
+    CASE2STR(WLC_E_CSA_RECV_IND, "csa rx indication");
     default: /* too verbose */ return;
     }
 
@@ -998,7 +998,7 @@ bool bcmwl_event_handler(const char *ifname,
         case WLC_E_DISASSOC_IND:
             bcmwl_event_handle_ap_sta_assoc(ifname, hwaddr);
             return BCMWL_EVENT_HANDLED;
-        case WLC_E_CSA_RX_IND:
+        case WLC_E_CSA_RECV_IND:
             bcmwl_event_handle_csa_rx_ind(ifname, ev);
             return BCMWL_EVENT_HANDLED;
         case WLC_E_CSA_COMPLETE_IND:

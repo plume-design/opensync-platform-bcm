@@ -169,19 +169,22 @@ bool bcmwl_radio_is_dhd(const char *ifname)
     return DHD(ifname, "cap") != NULL;
 }
 
-/* 3 enables only SU OFDMA. The MU OFDMA (UL and DL) are
- * buggy in the current driver and are causing issues.
- *
- * This iovar wasn't originally enforced/ checked to a
- * precise value. Instead it was just made sure it's not 0
- * and was set to -1. Once issues are resolved, it should go
- * back to that state.
+/* CONFIG_BCMWL_HE_FEATURES:
+ * Using -1 will enable all features that a radio supports
+ * wl he features [<features mask>] - query or enable/disable HE sub-features
+ * 0x01: HE 5G support
+ * 0x02: HE 2G support
+ * 0x04: HE DL OFDMA support
+ * 0x08: HE UL OFDMA support
+ * 0x10: HE DL MUMIMO support
+ * 0x20: HE UL MUMIMO support
+ * 0x40: HE STA ULMU support
+ * 0x80: HE ER SU Rx support
  */
-#define BCMWL_HE_FEATURES "3"
 
 static const char* bcmwl_radio_get_hwmode(const char *dphy)
 {
-    const int feat = atoi(BCMWL_HE_FEATURES);
+    const int feat = atoi(CONFIG_BCMWL_HE_FEATURES);
 
     if (atoi(WL(dphy, "he", "enab") ?: "0") && atoi(WL(dphy, "he", "features") ?: "0") == feat)
         return "11ax";
@@ -621,7 +624,7 @@ bool bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
         const char *he;
         const char *he_features;
     } modes[] = {
-        { "11ax", "-1", "1", "1", BCMWL_HE_FEATURES },
+        { "11ax", "-1", "1", "1", CONFIG_BCMWL_HE_FEATURES },
         { "11ac", "-1", "1", "0", "0" },
         { "11n",  "-1", "0", "0", "0" },
         { "11g",  "0",  "0", "0", "0" },

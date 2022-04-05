@@ -150,7 +150,7 @@ bool bcmwl_init_wm(void)
     bcmwl_event_enable_all(WLC_E_AUTH);
     bcmwl_event_enable_all(WLC_E_AUTHORIZED);
     bcmwl_event_enable_all(WLC_E_AUTH_IND);
-    bcmwl_event_enable_all(WLC_E_CSA_RX_IND);
+    bcmwl_event_enable_all(WLC_E_CSA_RECV_IND);
     bcmwl_event_enable_all(WLC_E_CSA_COMPLETE_IND);
     bcmwl_event_enable_all(WLC_E_DEAUTH);
     bcmwl_event_enable_all(WLC_E_DEAUTH_IND);

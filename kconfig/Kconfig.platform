@@ -327,4 +327,19 @@ config BCM_TOAD_PATH
     string "Path to toad binaries"
     default "/usr/bin/toad"
 
+config BCMWL_HE_FEATURES
+    string "wl he features flags"
+    default "3"
+    help
+        Using -1 will enable all features that a radio supports
+        wl he features [<features mask>] - query or enable/disable HE sub-features
+        0x01: HE 5G support
+        0x02: HE 2G support
+        0x04: HE DL OFDMA support
+        0x08: HE UL OFDMA support
+        0x10: HE DL MUMIMO support
+        0x20: HE UL MUMIMO support
+        0x40: HE STA ULMU support
+        0x80: HE ER SU Rx support
+
 endif # PLATFORM_IS_BCM
