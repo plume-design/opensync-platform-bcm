@@ -270,6 +270,9 @@ bcmwl_hostap_init_bss(const char *bss)
     if (!bcmwl_parse_vap(bss, &r, &v))
         return;
 
+    if (strstr(bss, "wds") == bss)
+        return;
+
     phy = strfmta("wl%d", r);
 
     if (v == 0 && kconfig_enabled(CONFIG_TARGET_CAP_EXTENDER)) {

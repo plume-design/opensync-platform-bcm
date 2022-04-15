@@ -63,7 +63,7 @@ bool bcm_bsal_finalize(struct ev_loop *loop);
  *****************************************************************************/
 #define LOG_PREFIX "BCM-BSAL: "
 #define CLIENT_PROBE_REQ_FILTER_PERIOD .5 // seconds
-#define CLIENT_STA_INFO_UPDATE_PERIOD 5. // seconds
+#define CLIENT_STA_INFO_UPDATE_PERIOD 0.5 // seconds
 #define CLIENT_STA_INFO_DATA_VOLUME_THRESHOLD 2000 // bytes
 #define PROBE_HMW_MAGIC_VALUE 1 // "Special" HWM value indicating unconditional blocking
 #define CLIENT_INACTIVE_TIMEOUT 60U // TODO: use inact_tmout_sec_normal
@@ -285,6 +285,7 @@ static bool is_event_ignored(int etype)
         case WLC_E_REASSOC_IND:
         case WLC_E_PRUNE:
         case WLC_E_ACTION_FRAME:
+        case WLC_E_DISASSOC:
             return false;
         default:
             return true;
@@ -432,7 +433,8 @@ static bool iface_enable_events(const char *ifname)
         WARN_ON(!bcmwl_event_enable(ifname, WLC_E_ASSOC)) ||
         WARN_ON(!bcmwl_event_enable(ifname, WLC_E_REASSOC_IND)) ||
         WARN_ON(!bcmwl_event_enable(ifname, WLC_E_PRUNE)) ||
-        WARN_ON(!bcmwl_event_enable(ifname, WLC_E_ACTION_FRAME)))
+        WARN_ON(!bcmwl_event_enable(ifname, WLC_E_ACTION_FRAME)) ||
+        WARN_ON(!bcmwl_event_enable(ifname, WLC_E_DISASSOC)))
     {
         return false;
     }
@@ -677,6 +679,37 @@ static proc_event_res_t process_event_disassoc_ind(
     memcpy(&disconn_ev->client_addr, &client->hwaddr.addr, sizeof(disconn_ev->client_addr));
     disconn_ev->reason = ntohl(event_raw->event.reason);
     disconn_ev->source = BSAL_DISC_SOURCE_REMOTE;
+    disconn_ev->type = BSAL_DISC_TYPE_DISASSOC;
+
+    client_reset(client);
+
+    if (client->snr_hwm)
+    {
+        if (WARN_ON(!client_acl_block(client))) {
+            return PROC_EVENT_ERROR;
+        }
+    }
+
+    return PROC_EVENT_NEW_BSAL_EVENT;
+}
+
+static proc_event_res_t process_event_disassoc(
+        client_t *client,
+        const bcm_event_t *event_raw,
+        bsal_event_t *event)
+{
+    bsal_ev_disconnect_t *disconn_ev;
+
+    LOGD(LOG_PREFIX"%s: disassoc addr="PRI(os_macaddr_t), client->ifname, FMT(os_macaddr_t, client->hwaddr));
+
+    client->connect_send = false;
+    event->type = BSAL_EVENT_CLIENT_DISCONNECT;
+    STRSCPY(event->ifname, client->ifname);
+
+    disconn_ev = &event->data.disconnect;
+    memcpy(&disconn_ev->client_addr, &client->hwaddr.addr, sizeof(disconn_ev->client_addr));
+    disconn_ev->reason = ntohl(event_raw->event.reason);
+    disconn_ev->source = BSAL_DISC_SOURCE_LOCAL;
     disconn_ev->type = BSAL_DISC_TYPE_DISASSOC;
 
     client_reset(client);
@@ -1011,6 +1044,9 @@ static bool process_event_callback(
         case WLC_E_ACTION_FRAME:
             proc_event_res = process_event_action_frame(client, bcm_event, &event);
             break;
+        case WLC_E_DISASSOC:
+            proc_event_res = process_event_disassoc(client, bcm_event, &event);
+            break;
         default:
             LOGE(LOG_PREFIX"Event Error: (event: %u) (%s)", ntohl(bcm_event->event.event_type),
                  __PRETTY_FUNCTION__);
@@ -1338,14 +1374,14 @@ static void probe_req_filter_timer_callback(
         }
     }
 
-    probe_clean(client);
-
     if (propagate_probe_req) {
         bsal_event_t event;
 
         fill_bsal_probe_req_event(&event, client, probe->snr, probe->ssid_null);
         _bsal_event_callback(&event);
     }
+
+    probe_clean(client);
 }
 
 
