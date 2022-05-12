@@ -27,7 +27,7 @@
 
 ####################### INFORMATION SECTION - START ###########################
 #
-#   Broadcomm (BCM) platform overrides
+#   Broadcom (BCM) platform overrides
 #
 ####################### INFORMATION SECTION - STOP ############################
 
@@ -35,17 +35,19 @@ echo "${FUT_TOPDIR}/shell/lib/override/bcm_platform_override.sh sourced"
 
 ###############################################################################
 # DESCRIPTION:
-#   Function starts wireless driver on a device.
+#   Function starts wireless driver on the device.
 # INPUT PARAMETER(S):
 #   None.
 # RETURNS:
-#   None.
+#   0   Wireless driver started on device.
 # USAGE EXAMPLE(S):
 #   start_wireless_driver
 ###############################################################################
 start_wireless_driver()
 {
-    /etc/init.d/bcm-wlan-drivers.sh start
+    log "bcm_platform_override:start_wireless_driver - Starting wireless driver"
+    /etc/init.d/bcm-wlan-drivers.sh start ||
+        raise "FAIL: Could not start wireless driver" -l "bcm_platform_override:start_wireless_driver" -ds
 }
 
 ###############################################################################
@@ -65,124 +67,35 @@ stop_wireless_driver()
 
 ###############################################################################
 # DESCRIPTION:
-#   Function retrieves interface regulatory domain.
-# INPUT PARAMETER(S):
-#   $1  Physical Radio interface name for which to retrieve regulatory domain (string, required)
-# ECHOES:
-#   Interface regulatory domain - defaults to US if any failure occurs
-# NOTE:
-#   Function first checks Wifi_Radio_State interface 'country' field, if it is not populated, it retrieves
-#   Wifi_Radio_State 'hw_params' field and looks for 'reg_domain' entry
-# USAGE EXAMPLE(S):
-#   get_iface_regulatory_domain wifi0
-###############################################################################
-get_iface_regulatory_domain()
-{
-    local NARGS=1
-    [ $# -ne ${NARGS} ] &&
-        raise "wm2_lib:get_iface_regulatory_domain requires ${NARGS} input argument(s), $# given" -arg
-    # shellcheck disable=SC2034
-    if_name="${1}"
-    country_found=1
-    country=$(get_ovsdb_entry_value Wifi_Radio_State country -w if_name "${if_name}")
-    if [ "${country}" == "[\"set\",[]]" ]; then
-        log -deb "wm2_lib:get_iface_regulatory_domain - Country is not set in Wifi_Radio_State."
-        hw_params_reg_domain=$(get_ovsdb_entry_value Wifi_Radio_State hw_params -w if_name "${if_name}" -json_value reg_domain)
-        log -deb "wm2_lib:get_iface_regulatory_domain - Trying to acquire country region trough hw_params: ${hw_params_reg_domain}"
-        # 58 (3a hex) US | 55 (37 hex) EU
-        if [ ${?} == 0 ]; then
-            if [ ${hw_params_reg_domain} == '"58"' ]; then
-                country='US'
-            elif [ ${hw_params_reg_domain} == '"55"' ]; then
-                country='EU'
-            else
-                log -deb "wm2_lib:get_iface_regulatory_domain - Failed to retrieve device regulatory domain. Defaulting to US regulatory rules!"
-                country='US'
-            fi
-        else
-            log -deb "wm2_lib:get_iface_regulatory_domain - Failed to retrieve device regulatory domain. Defaulting to US regulatory rules!"
-            country='US'
-        fi
-        country_found=0
-    else
-        country_found=0
-    fi
-    if [ "${country_found}" == 1 ];then
-        log -deb "wm2_lib:get_iface_regulatory_domain - Failed to retrieve device regulatory domain. Defaulting to US regulatory rules!"
-        country='US'
-    fi
-    echo "${country}"
-}
-
-###############################################################################
-# DESCRIPTION:
-#   Function checks if Country is applied at OS - LEVEL2.
-#   Uses wl to get Country info.
-#   Provide override function if wl not available on device.
+#   Function empties all VIF interfaces by emptying the Wifi_VIF_Config table.
+#   On BCM does not wait for Wifi_VIF_State table to be empty.
 #   Raises exception on fail.
 # INPUT PARAMETER(S):
-#   $1  Country (string, required)
-#   $2  Interface name (string, required)
+#   $1  wait timeout in seconds (int, optional, default=60)
 # RETURNS:
-#   0   Country is as expected.
+#   None.
 #   See DESCRIPTION.
 # USAGE EXAMPLE(S):
-#   check_country_at_os_level US <IF_NAME>
+#   vif_clean
+#   vif_clean 240
 ###############################################################################
-check_country_at_os_level()
+vif_clean()
 {
-    local NARGS=2
-    [ $# -ne ${NARGS} ] &&
-        raise "bcm_platform_override:check_country_at_os_level requires ${NARGS} input argument(s), $# given" -arg
-    wm2_country=$1
-    wm2_if_name=$2
+    VIF_CLEAN_TIMEOUT=${1:-60}
 
-    log "bcm_platform_override:check_country_at_os_level - Checking COUNTRY at OS - LEVEL2"
-
-    wait_for_function_response 0 "wl -a $wm2_if_name country | grep -F $wm2_country" &&
-        log -deb "bcm_platform_override:check_country_at_os_level - Country '$wm2_country' is set at OS - LEVEL2 - Success" ||
-        raise "FAIL: Country '$wm2_country' is not set at OS - LEVEL2" -l "bcm_platform_override:check_country_at_os_level" -tc
-
-    return 0
-}
-
-
-###############################################################################
-# DESCRIPTION:
-#   Function simulates DFS (Dynamic Frequency Shift) radar event on interface.
-# INPUT PARAMETER(S):
-#   $1  channel (int, required)
-# RETURNS:
-#   0   Simulation was a success.
-# USAGE EXAMPLE(S):
-#   simulate_dfs_radar <IF_NAME>
-###############################################################################
-simulate_dfs_radar()
-{
-    local NARGS=1
-    [ $# -ne ${NARGS} ] &&
-        raise "bcm_platform_override:simulate_dfs_radar requires ${NARGS} input argument(s), $# given" -arg
-    wm2_if_name=$1
-
-    log "bcm_platform_override:simulate_dfs_radar - Trigering DFS radar event on wm2_if_name"
-
-    wait_for_function_response 0 "wl -i $wm2_if_name radar 2" &&
-        log -deb "bcm_platform_override:simulate_dfs_radar - DFS event: '$wm2_if_name' simulation was SUCCESSFUL" ||
-        log -err "bcm_platform_override:simulate_dfs_radar - DFS event: '$wm2_if_name' simulation was UNSUCCESSFUL"
-
-    return 0
+    log -deb "bcm_platform_override:vif_clean - Purging VIF"
+    empty_ovsdb_table Wifi_VIF_Config ||
+        raise "FAIL: empty_ovsdb_table - Could not empty Wifi_VIF_Config table" -l "bcm_platform_override:vif_clean" -oe
+    sleep 5
 }
 
 ###############################################################################
 # DESCRIPTION:
-#   Function echoes Tx Power set at OS – LEVEL2.
-#   Uses wl to get Tx Power info for VIF interface.
+#   Function returns Radio TX Power set at OS - LEVEL2.
 # INPUT PARAMETER(S):
 #   $1  VIF interface name (string, required)
 # RETURNS:
-#   0   on successful Tx Power retrieval, fails otherwise
-# ECHOES:
-#   Tx Power from OS
+#   Echoes Radio TX Power set for interface
 # USAGE EXAMPLE(S):
 #   get_tx_power_from_os home-ap-24
 ###############################################################################
@@ -198,16 +111,14 @@ get_tx_power_from_os()
 
 ###############################################################################
 # DESCRIPTION:
-#   Function checks if Tx Chainmask is applied at OS - LEVEL2.
-#   Function raises an exception if Tx Chainmask is not applied.
+#   Function checks if the radio TX chainmask is applied at OS - LEVEL2.
 # INPUT PARAMETER(S):
-#   $1  Tx Chainmask (int, required)
-#   $2  Interface name (string, required)
+#   $1  Radio TX Chainmask (int, required)
+#   $2  Radio interface name (string, required)
 # RETURNS:
-#   0   On success.
-#   See DESCRIPTION.
+#   0   Radio TX Chainmask on system matches expected value.
 # USAGE EXAMPLE(S):
-#   check_tx_chainmask_at_os_level 3 home-ap-U50
+#   check_tx_chainmask_at_os_level 3 wl0
 ###############################################################################
 check_tx_chainmask_at_os_level()
 {
@@ -217,8 +128,7 @@ check_tx_chainmask_at_os_level()
     wm2_tx_chainmask=$1
     wm2_if_name=$2
 
-    log -deb "bcm_platform_override:check_tx_chainmask_at_os_level - Checking Tx Chainmask at OS - LEVEL2"
-
+    log "bcm_platform_override:check_tx_chainmask_at_os_level - Checking Radio TX Chainmask for interface '$wm2_if_name' at OS - LEVEL2"
     wait_for_function_response 0 "wl -a $wm2_if_name txchain | grep -F $wm2_tx_chainmask" &&
         log -deb "bcm_platform_override:check_tx_chainmask_at_os_level - Tx Chainmask '$wm2_tx_chainmask' is set at OS - LEVEL2 - Success" ||
         raise "FAIL: Tx Chainmask '$wm2_tx_chainmask' is not set at OS - LEVEL2" -l "bcm_platform_override:check_tx_chainmask_at_os_level" -tc
@@ -229,13 +139,12 @@ check_tx_chainmask_at_os_level()
 ###############################################################################
 # DESCRIPTION:
 #   Function checks if Beacon interval is applied at OS - LEVEL2.
-#   Function raises an exception if Beacon interval is not applied.
+#   Function raises an exception if beacon interval is not applied.
 # INPUT PARAMETER(S):
 #   $1  Beacon interval (int, required)
 #   $2  VIF interface name (string, required)
 # RETURNS:
-#   0   Beacon interval is as expected.
-#   See DESCRIPTION.
+#   0   Beacon interval on system matches expected value
 # USAGE EXAMPLE(S):
 #   check_beacon_interval_at_os_level 600 home-ap-U50
 ###############################################################################
@@ -247,11 +156,10 @@ check_beacon_interval_at_os_level()
     wm2_bcn_int=$1
     wm2_vif_if_name=$2
 
-    log -deb "bcm_platform_override:check_beacon_interval_at_os_level - Checking Beacon interval at OS - LEVEL2"
-
+    log "bcm_platform_override:check_beacon_interval_at_os_level - Checking Beacon interval at OS - LEVEL2"
     wait_for_function_response 0 "wl -a $wm2_vif_if_name bi | grep -F $wm2_bcn_int" &&
         log -deb "bcm_platform_override:check_beacon_interval_at_os_level - Beacon interval '$wm2_bcn_int' for '$wm2_vif_if_name' is set at OS - LEVEL2 - Success" ||
-        raise "FAIL: Beacon interval $'wm2_bcn_int' is not set at OS - LEVEL2" -l "bcm_platform_override:check_beacon_interval_at_os_level" -tc
+        raise "FAIL: Beacon interval '$wm2_bcn_int' for '$wm2_vif_if_name' is not set at OS - LEVEL2" -l "bcm_platform_override:check_beacon_interval_at_os_level" -tc
 
     return 0
 }
@@ -262,9 +170,7 @@ check_beacon_interval_at_os_level()
 # INPUT PARAMETER(S):
 #   $1  VIF interface name (string, required)
 # RETURNS:
-#   0   On successful channel retrieval, fails otherwise
-# ECHOES:
-#   Channel from OS
+#   Echoes channel set for interface
 # USAGE EXAMPLE(S):
 #   get_channel_from_os wl0
 ###############################################################################
@@ -285,9 +191,7 @@ get_channel_from_os()
 #   $1  VIF interface name (string, required)
 #   $2  channel (int, required)
 # RETURNS:
-#   0   On successful channel retrieval, fails otherwise
-# ECHOES:
-#   HT mode from OS in format: HT20, HT40 (examples)
+#   Echoes HT mode set for interface
 # USAGE EXAMPLE(S):
 #   get_ht_mode_from_os wl1.2 1
 ###############################################################################
@@ -325,12 +229,12 @@ get_ht_mode_from_os()
 
 ###############################################################################
 # DESCRIPTION:
-#   Function checks vlan interface existence at OS - LEVEL2.
+#   Function checks if vlan interface exists at OS level - LEVEL2.
 # INPUT PARAMETER(S):
-#   $1  parent_ifname (string, required)
-#   $2  vlan_id (int, required)
+#   $1  Parent interface name (string, required)
+#   $2  VLAN ID (int, required)
 # RETURNS:
-#   0   On success.
+#   0   vlan interface exists on system.
 # USAGE EXAMPLE(S):
 #  check_vlan_iface eth0 100
 ###############################################################################
@@ -343,28 +247,30 @@ check_vlan_iface()
     vlan_id=$2
 
     if_name="$parent_ifname.$vlan_id"
-    sys_entry="/sys/class/net/${if_name}"
+    vlan_file="/sys/class/net/${if_name}"
 
-    log "bcm_platform_override:check_vlan_iface: Checking for ${sys_entry} existence - LEVEL2"
-    wait_for_function_response 0 "[ -e ${sys_entry} ]" &&
-        log "bcm_platform_override:check_vlan_iface: LEVEL2 - sys file entry '${sys_entry}' exists - Success" ||
-        raise "FAIL: LEVEL2 - sys file entry '${sys_entry}' does not exist" -l "bcm_platform_override:check_vlan_iface" -tc
+    log "bcm_platform_override:check_vlan_iface: Checking for ${vlan_file} existence - LEVEL2"
+    wait_for_function_response 0 "[ -e ${vlan_file} ]" &&
+        log "bcm_platform_override:check_vlan_iface: LEVEL2 - system file entry '${vlan_file}' exists - Success" ||
+        raise "FAIL: LEVEL2 - system file entry '${vlan_file}' does not exist" -l "bcm_platform_override:check_vlan_iface" -tc
 
     return 0
 }
 
 ###############################################################################
 # DESCRIPTION:
-#   Function checks for CSA(Channel Switch Announcement) msg on the LEAF device
-#   sent by GW on channel change.
+#   Function checks for CSA (Channel Switch Announcement) message on the leaf
+#   device, sent by the GW upon channel change.
 # INPUT PARAMETER(S):
-#   $1  mac address of GW (string, required)
+#   $1  MAC address of GW (string, required)
 #   $2  CSA channel GW switches to (int, required)
-#   $3  HT mode of the channel (string, required)
+#   $3  HT mode (channel bandwidth) (string, required)
 # RETURNS:
-#   0   CSA message is found in LEAF device var logs, fail otherwise.
+#   0   CSA message is found in device logs.
 # USAGE EXAMPLE(S):
 #   check_sta_send_csa_message 1A:2B:3C:4D:5E:6F 6 HT20
+# EXAMPLE DEVICE LOG:
+#   Sep 30 09:29:52 WM[2724]: <INFO> MISC: wl0.2: csa completed (52 (0xec32))
 ###############################################################################
 check_sta_send_csa_message()
 {
@@ -375,8 +281,6 @@ check_sta_send_csa_message()
     gw_csa_channel=$2
     ht_mode=$3
 
-    # Example log:
-    # Sep 30 09:29:52 WM[2724]: <INFO> MISC: wl0.2: csa completed (52 (0xec32))
     wm_csa_log_grep="$LOGREAD | grep -i 'csa completed ($gw_csa_channel'"
     wait_for_function_response 0 "${wm_csa_log_grep}" 90 &&
         log "bcm_platform_override:check_sta_send_csa_message : 'csa completed' message found in logs for channel:${gw_csa_channel} with HT mode: ${ht_mode} - Success" ||
@@ -384,7 +288,7 @@ check_sta_send_csa_message()
     return 0
 }
 
-####################### Broadcomm(BCM) PLATFORM OVERRIDE SECTION - STOP #########################
+####################### Broadcom (BCM) PLATFORM OVERRIDE SECTION - STOP #########################
 
 ###################################################################################
 # DESCRIPTION:
@@ -410,4 +314,282 @@ clear_dns_cache()
         log -err "FAIL: bcm_platform_override:clear_dns_cache - ${process} kill failed - DNS cache not cleared"
         return 1
     fi
+}
+
+###############################################################################
+# DESCRIPTION:
+#   Function prepares device for ONBRD tests.
+#   It does not wait for radio interfaces in Wifi_Radio_State table.
+#   Raises exception on fail in any of its steps.
+# INPUT PARAMETER(S):
+#   None.
+# RETURNS:
+#   0   On success.
+#   See DESCRIPTION.
+# USAGE EXAMPLE(S):
+#   onbrd_setup_test_environment
+###############################################################################
+onbrd_setup_test_environment()
+{
+    log "bcm_platform_override:onbrd_setup_test_environment - Running ONBRD setup"
+
+    device_init &&
+        log -deb "bcm_platform_override:onbrd_setup_test_environment - Device initialized - Success" ||
+        raise "FAIL: device_init - Could not initialize device" -l "bcm_platform_override:onbrd_setup_test_environment" -ds
+
+    start_openswitch &&
+        log -deb "bcm_platform_override:onbrd_setup_test_environment - OpenvSwitch started - Success" ||
+        raise "FAIL: start_openswitch - Could not start OpenvSwitch" -l "bcm_platform_override:onbrd_setup_test_environment" -ds
+
+    restart_managers
+    log -deb "bcm_platform_override:onbrd_setup_test_environment: Executed restart_managers, exit code: $?"
+
+    sleep 15
+
+    log -deb "bcm_platform_override:onbrd_setup_test_environment - ONBRD setup - end"
+
+    return 0
+}
+
+###############################################################################
+# DESCRIPTION:
+#   Function checks leaf report log messages.
+#   Supported radio bands: 2.4G, 5GL, 5GU
+#   Supported log types: initializing, parsed, marked_connected
+#   Raises exception on fail:
+#       - incorrect log type provided
+#       - logs not found
+# INPUT PARAMETER(S):
+#   $1  radio band (string, required)
+#   $2  client mac (string, required)
+#   $3  log type (string, required)
+# RETURNS:
+#   0   On success.
+#   See DESCRIPTION.
+# USAGE EXAMPLE(S):
+#   check_leaf_report_log 5GL <client MAC> initializing
+#   check_leaf_report_log 5GL <client MAC> parsed
+###############################################################################
+check_leaf_report_log()
+{
+    local NARGS=3
+    [ $# -ne ${NARGS} ] &&
+        raise "bcm_platform_override:check_leaf_report_log requires ${NARGS} input argument(s), $# given" -arg
+    sm_radio_band=$1
+    sm_leaf_mac_address=$(echo "$2" | tr a-z A-Z)
+    sm_log_type=$3
+
+    case $sm_log_type in
+        *initializing*)
+            log_msg="Checking logs for 'Initializing $sm_radio_band client reporting'"
+            die_msg="Not initializing $sm_radio_band client reporting"
+            pass_msg="Initializing $sm_radio_band client reporting"
+            sm_log_grep="$LOGREAD | grep -i 'Initializing $sm_radio_band' | grep -i 'client reporting'"
+        ;;
+        *parsed*)
+            log_msg="Checking logs for 'Parsed $sm_radio_band client MAC $sm_leaf_mac_address'"
+            die_msg="Not parsed $sm_radio_band client MAC $sm_leaf_mac_address"
+            pass_msg="Parsed $sm_radio_band client MAC $sm_leaf_mac_address"
+            sm_log_grep="$LOGREAD | grep -i 'Parsed $sm_radio_band client MAC $sm_leaf_mac_address'"
+        ;;
+        *marked_connected*)
+            log_msg="Checking logs for 'Marked $sm_radio_band client $sm_leaf_mac_address connected'"
+            die_msg="Not marked $sm_radio_band client $sm_leaf_mac_address connected"
+            pass_msg="Marked $sm_radio_band client $sm_leaf_mac_address connected"
+            sm_log_grep="$LOGREAD | grep -i 'Marked $sm_radio_band' | grep -i 'client $sm_leaf_mac_address connected'"
+        ;;
+        *)
+            raise "FAIL: Incorrect log type provided" -l "bcm_platform_override:check_leaf_report_log" -arg
+        ;;
+    esac
+    log -deb "bcm_platform_override:check_leaf_report_log - $log_msg"
+    wait_for_function_response 0 "${sm_log_grep}" 60 &&
+        log -deb "bcm_platform_override:check_leaf_report_log - $pass_msg - Success" ||
+        raise "FAIL: $die_msg" -l "bcm_platform_override:check_leaf_report_log" -tc
+
+    return 0
+}
+
+###############################################################################
+# DESCRIPTION:
+#   Function checks existence of leaf report messages.
+#   Supported radio bands: 2.4G, 5GL, 5GU
+#   Supported report type: raw
+#   Raises exception on fail.
+# INPUT PARAMETER(S):
+#   $1  radio band (string, required)
+#   $2  reporting interval (int, required)
+#   $3  sampling interval (int, required)
+#   $4  report type (string, required)
+#   $5  leaf mac (string, required)
+# RETURNS:
+#   0   On success.
+#   See DESCRIPTION.
+# USAGE EXAMPLE(S):
+#   inspect_leaf_report 5GL 10 5 raw <leaf MAC>
+###############################################################################
+inspect_leaf_report()
+{
+    local NARGS=5
+    [ $# -ne ${NARGS} ] &&
+        raise "bcm_platform_override:inspect_leaf_report requires ${NARGS} input argument(s), $# given" -arg
+    sm_radio_band=$1
+    sm_reporting_interval=$2
+    sm_sampling_interval=$3
+    sm_report_type=$4
+    sm_leaf_mac=$5
+
+    if [[ -z $sm_leaf_mac ]]; then
+        raise "FAIL: Empty leaf MAC address" -l "bcm_platform_override:inspect_leaf_report" -ow
+    fi
+
+    empty_ovsdb_table Wifi_Stats_Config ||
+        raise "FAIL: Could not empty Wifi_Stats_Config: empty_ovsdb_table" -l "bcm_platform_override:inspect_leaf_report" -oe
+
+    insert_wifi_stats_config \
+        "$sm_radio_band" \
+        "[\"set\",[]]" \
+        "survey" \
+        "[\"set\",[]]" \
+        "$sm_reporting_interval" \
+        "$sm_sampling_interval" \
+        "$sm_report_type" &&
+            log -deb "bcm_platform_override:inspect_leaf_report - Wifi_Stats_Config inserted - Success" ||
+            raise "FAIL: Could not insert Wifi_Stats_Config: insert_wifi_stats_config" -l "bcm_platform_override:inspect_leaf_report" -oe
+
+    insert_wifi_stats_config \
+        "$sm_radio_band" \
+        "[\"set\",[]]" \
+        "client" \
+        "[\"set\",[]]" \
+        "$sm_reporting_interval" \
+        "$sm_sampling_interval" \
+        "$sm_report_type" &&
+            log -deb "bcm_platform_override:inspect_leaf_report - Wifi_Stats_Config inserted - Success" ||
+            raise "FAIL: Could not insert Wifi_Stats_Config: insert_wifi_stats_config" -l "bcm_platform_override:inspect_leaf_report" -oe
+
+    check_leaf_report_log "$sm_radio_band" "$sm_leaf_mac" initializing
+    check_leaf_report_log "$sm_radio_band" "$sm_leaf_mac" parsed
+    check_leaf_report_log "$sm_radio_band" "$sm_leaf_mac" marked_connected
+
+    log "bcm_platform_override:inspect_leaf_report - Emptying Wifi_Stats_Config table"
+    empty_ovsdb_table Wifi_Stats_Config &&
+        log -deb "bcm_platform_override:inspect_leaf_report - Wifi_Stats_Config table emptied - Success" ||
+        raise "FAIL: Could not empty Wifi_Stats_Config table" -l "bcm_platform_override:inspect_leaf_report" -oe
+
+    return 0
+}
+
+###############################################################################
+# DESCRIPTION:
+#   Function checks existence of survey report log messages.
+#   Supported radio bands: 2.4G, 5GL, 5GU
+#   Supported survey types: on-chan, off-chan
+#   Supported log types: processing_survey, sending_survey_report
+#   Raises exception on fail:
+#       - incorrect log type provided
+#       - logs not found
+# INPUT PARAMETER(S):
+#   $1  radio band (string, required)
+#   $2  channel (int, required)
+#   $3  survey type (string, required)
+#   $4  log type (string, required)
+# RETURNS:
+#   0   On success.
+#   See DESCRIPTION.
+# USAGE EXAMPLE(S):
+#   check_survey_report_log 5GL 1 on-chan processing_survey
+#   check_survey_report_log 5GL 1 on-chan sending_survey_report
+###############################################################################
+check_survey_report_log()
+{
+    local NARGS=4
+    [ $# -ne ${NARGS} ] &&
+        raise "bcm_platform_override:check_survey_report_log requires ${NARGS} input argument(s), $# given" -arg
+    sm_radio_band=$1
+    sm_channel=$2
+    sm_survey_type=$3
+    sm_log_type=$4
+
+    case $sm_log_type in
+        *processing_survey*)
+            log_msg="Checking logs for survey $sm_radio_band channel $sm_channel reporting processing survey"
+            die_msg="No survey processing done on $sm_radio_band $sm_survey_type on channel $sm_channel"
+            pass_msg="Survey processing done on $sm_radio_band $sm_survey_type on channel $sm_channel"
+            sm_log_grep="$LOGREAD | tail -500 | grep -i 'Processing $sm_radio_band' | grep -i '$sm_survey_type $sm_channel'"
+        ;;
+        *sending_survey_report*)
+            log_msg="Checking logs for survey $sm_radio_band channel $sm_channel reporting sending survey"
+            die_msg="No survey sending done on $sm_radio_band $sm_survey_type on channel $sm_channel"
+            pass_msg="Survey sending done on $sm_radio_band $sm_survey_type on channel $sm_channel"
+            sm_log_grep="$LOGREAD | tail -500 | grep -i 'Sending $sm_radio_band' | grep -i '$sm_survey_type survey report'"
+            ;;
+        *)
+            raise "FAIL: Incorrect log type provided" -l "bcm_platform_override:check_survey_report_log" -arg
+            ;;
+    esac
+    log "bcm_platform_override:check_survey_report_log - $log_msg"
+    wait_for_function_response 0 "${sm_log_grep}" 30 &&
+        log -deb "bcm_platform_override:check_survey_report_log - $pass_msg - Success" ||
+        raise "FAIL: $die_msg" -l "bcm_platform_override:check_survey_report_log" -tc
+
+    return 0
+}
+
+###############################################################################
+# DESCRIPTION:
+#   Function inspects existence of all survey report messages.
+#   Supported radio bands: 2.4G, 5GL, 5GU
+#   Supported survey types: on-chan, off-chan
+#   Supported report type: raw
+#   Raises exception if fails to empty table Wifi_Stats_Config.
+# INPUT PARAMETER(S):
+#   $1  radio band (string, required)
+#   $2  channel (int, required)
+#   $3  survey type (string, required)
+#   $4  reporting interval (int, required)
+#   $5  sampling interval (int, required)
+#   $6  report type (string, required)
+# RETURNS:
+#   0   On success.
+#   See DESCRIPTION.
+# USAGE EXAMPLE(S):
+#   check_survey_report_log 5GL 1 on-chan 10 5 raw
+###############################################################################
+inspect_survey_report()
+{
+    local NARGS=6
+    [ $# -ne ${NARGS} ] &&
+        raise "bcm_platform_override:inspect_survey_report requires ${NARGS} input argument(s), $# given" -arg
+    sm_radio_band=$1
+    sm_channel=$2
+    sm_survey_type=$3
+    sm_reporting_interval=$4
+    sm_sampling_interval=$5
+    sm_report_type=$6
+    sm_stats_type="survey"
+
+    sm_channel_list="[\"set\",[$sm_channel]]"
+
+    empty_ovsdb_table Wifi_Stats_Config ||
+        raise "FAIL: empty_ovsdb_table - Could not empty Wifi_Stats_Config" -l "bcm_platform_override:inspect_survey_report" -oe
+
+    insert_wifi_stats_config \
+        "$sm_radio_band" \
+        "$sm_channel_list" \
+        "$sm_stats_type" \
+        "$sm_survey_type" \
+        "$sm_reporting_interval" \
+        "$sm_sampling_interval" \
+        "$sm_report_type" &&
+            log -deb "bcm_platform_override:inspect_survey_report - Wifi_Stats_Config inserted - Success" ||
+            raise "FAIL: Could not insert Wifi_Stats_Config: insert_wifi_stats_config" -l "bcm_platform_override:inspect_survey_report" -oe
+
+    check_survey_report_log "$sm_radio_band" "$sm_channel" "$sm_survey_type" processing_survey
+    check_survey_report_log "$sm_radio_band" "$sm_channel" "$sm_survey_type" sending_survey_report
+
+    empty_ovsdb_table Wifi_Stats_Config ||
+        raise "FAIL: empty_ovsdb_table - Could not empty Wifi_Stats_Config table" -l "bcm_platform_override:inspect_survey_report" -oe
+
+    return 0
 }

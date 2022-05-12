@@ -1868,7 +1868,7 @@ bool bcm_bsal_bss_tm_request(
 
     const char *mac_fmt = "%02x%02x%02x%02x%02x%02x";
 
-    const char *neigh_report_body_fmt = "%08x" // BSSSID Information
+    const char *neigh_report_body_fmt = "%02x%02x%02x%02x" // BSSSID Information
                                         "%02x" // Operating Class
                                         "%02x" // Channel Number
                                         "%02x"; // PHY Type
@@ -1905,7 +1905,11 @@ bool bcm_bsal_bss_tm_request(
                            neighbor->bssid[3], neighbor->bssid[4], neighbor->bssid[5]);
 
         offset += snprintf(buffer + offset, sizeof(buffer) - offset, neigh_report_body_fmt,
-                           htole32(neighbor->bssid_info),
+                           /* bssid_info needs to be little-endian on the wire */
+                           (neighbor->bssid_info & 0x000000ff) >> 0,
+                           (neighbor->bssid_info & 0x0000ff00) >> 8,
+                           (neighbor->bssid_info & 0x00ff0000) >> 16,
+                           (neighbor->bssid_info & 0xff000000) >> 24,
                            neighbor->op_class,
                            neighbor->channel,
                            neighbor->phy_type);
