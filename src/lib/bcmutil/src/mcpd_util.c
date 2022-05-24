@@ -66,7 +66,6 @@ typedef struct
 
 typedef struct
 {
-    daemon_t                  mcpd_dmn_hdl;
     bool                      initialized;
     ds_tree_t                 snooping_ifs;
     ds_tree_t                 uplink_ifs;
@@ -395,8 +394,6 @@ static bool mcpd_util_write_config(void)
  */
 bool mcpd_util_init(void)
 {
-    daemon_t *pdmn = &g_mcpd_hdl.mcpd_dmn_hdl;
-
     if (g_mcpd_hdl.initialized)
         return true;
 
@@ -411,21 +408,13 @@ bool mcpd_util_init(void)
             mcpd_util_ifname_t,
             node);
 
-    // Create daemon handler
-    if (!daemon_init(pdmn, MCPD_DAEMON_PATH, DAEMON_LOG_ALL))
+    /* MCPD should already be running */
+    if (execsh_log(LOG_SEVERITY_DEBUG, _S(ps | grep "[m]cpd")) != 0)
     {
-        LOGE("mcpd_util_init: Unable to initialize mcpd daemon.");
+        LOG(ERR, "mcpd_util_init: MCPD should be already running");
         return false;
     }
-    if (!daemon_pidfile_set(pdmn, MCPD_PID_FILE, true))
-    {
-        LOGW("mcpd_util_init: Error setting the PID file path.");
-    }
-    if (!daemon_restart_set(pdmn, true, 5.0, 5))
-    {
-        LOGW("mcpd_util_init: Error enabling daemon auto-restart.");
-    }
-    daemon_arg_add(pdmn, "-c", MCPD_CONFIG_FILE);
+
     g_mcpd_hdl.igmp_param.protocol = DISABLE_IGMP;
     g_mcpd_hdl.mld_param.protocol = DISABLE_MLD;
     g_mcpd_hdl.initialized = true;
@@ -443,32 +432,20 @@ bool mcpd_util_init(void)
  *****************************************************************************/
 void mcpd_util_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent)
 {
-    bool started;
-
     if (!mcpd_util_config_valid())
     {
         /*
          * Silently ignore this error as we may still be waiting to receive all
          * the pieces of configuration to properly configure MCPD
          */
-        daemon_stop(&g_mcpd_hdl.mcpd_dmn_hdl);
         return;
     }
 
     if (WARN_ON(mcpd_util_write_config() == false))
         return;
 
-    if (daemon_is_started(&g_mcpd_hdl.mcpd_dmn_hdl, &started) && !started)
-    {
-        if (!daemon_start(&g_mcpd_hdl.mcpd_dmn_hdl))
-        {
-            LOG(ERR, "mcpd_util: failed to reload mcp");
-            return;
-        }
-    }
-
     /*
-     * Wait until mcpd is ready for accepting commands via the `mcp` tool. We
+     * Wait until mcpd is ready for accepting commands via the `mcpctl` tool. We
      * ensure this by checking netstat -anp to see if mcpd opened the control
      * socket.
      */
@@ -485,9 +462,9 @@ void mcpd_util_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent)
         LOG(WARN, "mcpd_util: Unable to detect the MCPD socket.");
     }
 
-    if (cmd_log("mcp reload") != 0)
+    if (cmd_log("mcpctl reload") != 0)
     {
-        LOG(ERR, "mcpd_util: failed to reload mcp");
+        LOG(ERR, "mcpd_util: failed to reload mcpctl");
         return;
     }
 

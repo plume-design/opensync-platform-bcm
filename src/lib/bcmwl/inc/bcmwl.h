@@ -185,6 +185,7 @@ bcmwl_chanspec_t* bcmwl_chanspec_get(char *ifname, int chanspec);
 int bcmwl_chanspec_get_primary(const int cs);
 int bcmwl_chanspec_get_bw_mhz(const int cs);
 int bcmwl_chanspec_get_center_freq(const int cs);
+bool bcmwl_chanspec_is_valid(const char *phy, const int chanspec);
 
 // Miscellaneous
 bool bcmwl_misc_send_action_frame(const char *ifname,

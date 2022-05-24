@@ -198,6 +198,7 @@ static const char *event2str(int e)
         CASE2STR(WLC_E_MSCH);
 #endif
         CASE2STR(WLC_E_CSA_START_IND);
+        CASE2STR(WLC_E_CSA_RX_IND);
         CASE2STR(WLC_E_CSA_DONE_IND);
         CASE2STR(WLC_E_CSA_FAILURE_IND);
         CASE2STR(WLC_E_CCA_CHAN_QUAL);

@@ -913,6 +913,14 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
     float retried;
     size_t tid;
     int i;
+    int idx;
+    uint8 *nr;
+#if SCB_RX_REPORT_DATA_STRUCT_VERSION >= 5
+    uint8 tid_count;
+    uint8 tid_max = NUMPRIO;
+#else
+    uint8 tid_max = ARRAY_SIZE(r->station_counters);
+#endif
 
     if (WARN_ON(!(conv = bcmwl_ioctl_lookup_num_conv(ifname))))
         return -1;
@@ -928,9 +936,19 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
     if (WARN_ON(resp.cmd.structure_version != SCB_RX_REPORT_DATA_STRUCT_VERSION))
         return -1;
 
-    for (i = 0; i < resp.cmd.structure_count; i++) {
-        r = &resp.cmd.structure_record[i];
+    r = resp.cmd.structure_record;
+    nr = (uint8 *)r;
 
+    for (i = 0; i < resp.cmd.structure_count; i++) {
+        idx = 0;
+        r = (iov_rx_report_record_t *)nr;
+#if SCB_RX_REPORT_DATA_STRUCT_VERSION >= 5
+        tid_count = __builtin_popcount((uint)r->tid_report_mask);
+        nr += (sizeof(iov_rx_report_record_t) +
+            (tid_count - 1) * resp.cmd.length_struct_counters);
+#else
+        nr += sizeof(resp.cmd.structure_record[0]);
+#endif
         phyrate = 0;
         mpdu = 0;
         ampdu = 0;
@@ -943,24 +961,32 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
         bw_ratio = 1;
         tones = 0;
 
-        for (tid = 0; tid < ARRAY_SIZE(r->station_counters); tid++) {
+        for (tid = 0; tid < tid_max; tid++) {
+#if SCB_RX_REPORT_DATA_STRUCT_VERSION >= 5
+            /* Do only for reported tid */
+            if (!(r->tid_report_mask & (1 << tid)))
+                continue;
+#else
             if (!(r->station_flags & (1 << tid)))
                 continue;
-
-            phyrate += conv->dtoh64(r->station_counters[tid].rxphyrate);
-            mpdu += conv->dtoh32(r->station_counters[tid].rxmpdu);
-            ampdu += conv->dtoh32(r->station_counters[tid].rxampdu);
-            retried += conv->dtoh32(r->station_counters[tid].rxretried);
-            bw += conv->dtoh32(r->station_counters[tid].rxbw);
-#if SCB_RX_REPORT_DATA_STRUCT_VERSION == 2
-            ampdu_ofdma += conv->dtoh32(r->station_counters[tid].rxampdu_ofdma);
+            idx = tid;
 #endif
-#if SCB_RX_REPORT_DATA_STRUCT_VERSION == 3
-            mpdu_ofdma += conv->dtoh32(r->station_counters[tid].rxmpdu_ofdma);
+            phyrate += conv->dtoh64(r->station_counters[idx].rxphyrate);
+            mpdu += conv->dtoh32(r->station_counters[idx].rxmpdu);
+            ampdu += conv->dtoh32(r->station_counters[idx].rxampdu);
+            retried += conv->dtoh32(r->station_counters[idx].rxretried);
+            bw += conv->dtoh32(r->station_counters[idx].rxbw);
+#if SCB_RX_REPORT_DATA_STRUCT_VERSION == 2
+            ampdu_ofdma += conv->dtoh32(r->station_counters[idx].rxampdu_ofdma);
+#endif
+#if SCB_RX_REPORT_DATA_STRUCT_VERSION >= 3
+            mpdu_ofdma += conv->dtoh32(r->station_counters[idx].rxmpdu_ofdma);
 #endif
 #if SCB_RX_REPORT_DATA_STRUCT_VERSION >= 2
-            tones += conv->dtoh32(r->station_counters[tid].rxtones);
+            tones += conv->dtoh32(r->station_counters[idx].rxtones);
 #endif
+            /* increment of idx for v5 and above*/
+            idx++;
         }
 
         if (mpdu > 0) {

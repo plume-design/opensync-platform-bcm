@@ -803,6 +803,56 @@ static void bcmwl_event_report_channel(const char *ifname)
     closedir(d);
 }
 
+static void bcmwl_event_handle_csa_rx_ind(const char *ifname, void *_ev)
+{
+    bcm_event_t *ev = _ev;
+    wl_chan_switch_rx_ind_t *rx_ind;
+    unsigned int length;
+    struct dirent *p;
+    DIR *d;
+    int chan;
+    const char *parentchange = strfmta("%s/parentchange.sh", target_bin_dir());
+    const char *mac = strfmta("%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
+                ev->event.addr.octet[0],
+                ev->event.addr.octet[1],
+                ev->event.addr.octet[2],
+                ev->event.addr.octet[3],
+                ev->event.addr.octet[4],
+                ev->event.addr.octet[5]);
+
+    if (WARN_ON(!mac))
+        return;
+
+    rx_ind = (wl_chan_switch_rx_ind_t *)(ev + 1);
+    length = ntohl(ev->event.datalen);
+
+    if (length < sizeof(*rx_ind)) {
+        LOGW("%s: CSA RX Ind event incorrect size %d, skip parsing", ifname, length);
+        return;
+    }
+
+    if (rx_ind->is_chspec_valid)
+        return;
+
+    for (d = opendir("/sys/class/net"); d && (p = readdir(d)); ) {
+        if (bcmwl_is_phy(p->d_name)) {
+            if (!bcmwl_chanspec_is_valid(p->d_name, rx_ind->chspec))
+                continue;
+
+            chan = bcmwl_chanspec_get_primary(rx_ind->chspec);
+            if (WARN_ON(chan < 0))
+                return;
+
+            LOGT("Parent chanege configuration: %s %s %s %s", parentchange, p->d_name, mac, strfmta("%d", chan));
+            WARN_ON(!strexa(parentchange, p->d_name, mac, strfmta("%d", chan)));
+            break;
+        }
+    }
+
+    if (!WARN_ON(!d))
+        closedir(d);
+}
+
 static void bcmwl_event_handle_csa(const char *ifname)
 {
     LOGI("%s: csa completed (%s)", ifname, WL(ifname, "chanspec") ?: "");
@@ -857,6 +907,7 @@ static void bcmwl_event_print(const bcm_event_t *ev)
     CASE2STR(WLC_E_ASSOC_IND, "assoc indication");
     CASE2STR(WLC_E_DISASSOC, "disassoc");
     CASE2STR(WLC_E_DISASSOC_IND, "disassoc indication");
+    CASE2STR(WLC_E_CSA_RX_IND, "csa rx indication");
     default: /* too verbose */ return;
     }
 
@@ -921,6 +972,9 @@ bool bcmwl_event_handler(const char *ifname,
             break;
     }
 
+    if (e >= WLC_E_BCMWL_DUMMY_BASE)
+        return BCMWL_EVENT_HANDLED;
+
     bcmwl_roam_event_handler(ev);
     bcmwl_event_print(ev);
 
@@ -943,6 +997,9 @@ bool bcmwl_event_handler(const char *ifname,
         case WLC_E_DISASSOC:
         case WLC_E_DISASSOC_IND:
             bcmwl_event_handle_ap_sta_assoc(ifname, hwaddr);
+            return BCMWL_EVENT_HANDLED;
+        case WLC_E_CSA_RX_IND:
+            bcmwl_event_handle_csa_rx_ind(ifname, ev);
             return BCMWL_EVENT_HANDLED;
         case WLC_E_CSA_COMPLETE_IND:
             bcmwl_event_handle_csa(ifname);
@@ -1273,6 +1330,9 @@ void bcmwl_event_enable_all(unsigned int bit)
 {
     struct dirent *p;
     DIR *d;
+
+    if (bit >= WLC_E_BCMWL_DUMMY_BASE)
+        return;
 
     for (d = opendir("/sys/class/net"); d && (p = readdir(d)); )
         if (bcmwl_is_phy(p->d_name))
