@@ -55,6 +55,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #define BCMWL_VAP_PREALLOC_MAX 8 /* drv hard limit is 16, leave some for wds */
+#define BCMWL_RADIUS_SUPPORTED_MAX 8 /* arbitrary max number of all (A and AA) servers*/
 
 // some platforms use "wl1.1", some "wl1_1"
 // vif index 0 is just "wl1" not "wl1.0"
@@ -338,18 +339,30 @@ bcmwl_vap_state(const char *ifname,
 void bcmwl_vap_state_report(const char *ifname)
 {
     struct schema_Wifi_VIF_State vstate;
+    struct schema_RADIUS radius_list[BCMWL_RADIUS_SUPPORTED_MAX];
+    int num_radius_list = 0;
     const char *phy;
     int r;
     int v;
 
     if (!bcmwl_ops.op_vstate)
         return;
+    if (!bcmwl_ops.op_radius_state)
+        return;
     if (WARN_ON(!bcmwl_parse_vap(ifname, &r, &v)))
         return;
     phy = strfmta("wl%d", r);
+
+    bcmwl_hostap_radius_get(ifname,
+                            radius_list,
+                            BCMWL_RADIUS_SUPPORTED_MAX,
+                            &num_radius_list);
+
     LOGD("vif: %s@%s: updating", ifname, phy);
-    if (bcmwl_vap_state(ifname, &vstate))
+    if (bcmwl_vap_state(ifname, &vstate)) {
         bcmwl_ops.op_vstate(&vstate, phy);
+        bcmwl_ops.op_radius_state(radius_list, num_radius_list, ifname);
+    }
 }
 
 bool bcmwl_vap_is_sta(const char *ifname)
@@ -618,13 +631,24 @@ static void bcmwl_vap_update_rrm(const struct schema_Wifi_Radio_Config *rconf,
         WARN_ON(!WL(phy, "up"));
 }
 
-/* FIXME: The following is intended to deprecate and
- * eventually replace bcmwl_vap_update().
- */
 bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
                        const struct schema_Wifi_Radio_Config *rconf,
                        const struct schema_Wifi_Credential_Config *cconfs,
                        const struct schema_Wifi_VIF_Config_flags *vchanged,
+                       int num_cconfs)
+{
+    return bcmwl_vap_update3(vconf, rconf, cconfs, vchanged, NULL, 0, num_cconfs);
+}
+
+/* FIXME: The following is intended to deprecate and
+ * eventually replace bcmwl_vap_update().
+ */
+bool bcmwl_vap_update3(const struct schema_Wifi_VIF_Config *vconf,
+                       const struct schema_Wifi_Radio_Config *rconf,
+                       const struct schema_Wifi_Credential_Config *cconfs,
+                       const struct schema_Wifi_VIF_Config_flags *vchanged,
+                       const struct schema_RADIUS *radius_list,
+                       int num_radius_list,
                        int num_cconfs)
 {
     const char *vif = vconf->if_name;
@@ -655,7 +679,8 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
         bcmwl_dfs_bgcac_recalc(phy);
 
         if (!vconf->enabled) {
-            bcmwl_hostap_bss_apply(vconf, rconf, cconfs, vchanged, num_cconfs);
+            bcmwl_hostap_bss_apply(vconf, rconf, cconfs, vchanged,
+                                   radius_list, num_radius_list, num_cconfs);
             goto report;
         }
 
@@ -729,7 +754,9 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
         vchanged->group_rekey ||
         vchanged->ft_psk ||
         vchanged->ft_mobility_domain)
-        WARN_ON(!bcmwl_nas_update_security(vconf, rconf, cconfs, vchanged, num_cconfs));
+        WARN_ON(!bcmwl_nas_update_security(vconf, rconf, cconfs,
+                                           vchanged, radius_list,
+                                           num_radius_list, num_cconfs));
 
     if (vchanged->ssid_broadcast)
         WARN_ON(!WL(vif, "closednet",
@@ -832,7 +859,8 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
     else
         WARN_ON(!NVU(vif, "airtime_precedence"));
 
-    bcmwl_hostap_bss_apply(vconf, rconf, cconfs, vchanged, num_cconfs);
+    bcmwl_hostap_bss_apply(vconf, rconf, cconfs, vchanged,
+                           radius_list, num_radius_list, num_cconfs);
     bcmwl_roam_later(vconf->if_name);
 
 report:

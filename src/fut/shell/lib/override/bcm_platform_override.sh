@@ -558,7 +558,7 @@ check_survey_report_log()
 ###############################################################################
 inspect_survey_report()
 {
-    local NARGS=6
+    local NARGS=7
     [ $# -ne ${NARGS} ] &&
         raise "bcm_platform_override:inspect_survey_report requires ${NARGS} input argument(s), $# given" -arg
     sm_radio_band=$1
@@ -567,6 +567,7 @@ inspect_survey_report()
     sm_reporting_interval=$4
     sm_sampling_interval=$5
     sm_report_type=$6
+    sm_survey_interval=$7
     sm_stats_type="survey"
 
     sm_channel_list="[\"set\",[$sm_channel]]"
@@ -581,7 +582,8 @@ inspect_survey_report()
         "$sm_survey_type" \
         "$sm_reporting_interval" \
         "$sm_sampling_interval" \
-        "$sm_report_type" &&
+        "$sm_report_type" \
+        "$sm_survey_interval" &&
             log -deb "bcm_platform_override:inspect_survey_report - Wifi_Stats_Config inserted - Success" ||
             raise "FAIL: Could not insert Wifi_Stats_Config: insert_wifi_stats_config" -l "bcm_platform_override:inspect_survey_report" -oe
 

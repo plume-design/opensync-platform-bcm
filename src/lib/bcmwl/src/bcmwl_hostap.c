@@ -215,7 +215,7 @@ bcmwl_hostap_fill_freqlist(struct wpas *wpas)
 
     if (WARN_ON(!chans))
         return;
-    
+
     while ((line = strsep(&chans, "\n")))
         if (i < ARRAY_SIZE(wpas->freqlist))
         {
@@ -391,6 +391,8 @@ bcmwl_hostap_bss_apply(const struct schema_Wifi_VIF_Config *vconf,
                        const struct schema_Wifi_Radio_Config *rconf,
                        const struct schema_Wifi_Credential_Config *cconf,
                        const struct schema_Wifi_VIF_Config_flags *vchanged,
+                       const struct schema_RADIUS *radius_list,
+                       size_t num_radius_list,
                        size_t n_cconf)
 {
     struct hapd *hapd = hapd_lookup(vconf->if_name);
@@ -418,7 +420,7 @@ bcmwl_hostap_bss_apply(const struct schema_Wifi_VIF_Config *vconf,
             tmp_vconf.rrm = 0;
         }
 
-        WARN_ON(hapd_conf_gen(hapd, rconf, &tmp_vconf) < 0);
+        WARN_ON(hapd_conf_gen2(hapd, rconf, &tmp_vconf, radius_list, num_radius_list) < 0);
         WARN_ON(hapd_conf_apply(hapd) < 0);
     }
 
@@ -447,6 +449,18 @@ bcmwl_hostap_bss_get(const char *bss,
         SCHEMA_SET_STR(vstate->mode, "sta");
         wpas_bss_get(wpas, vstate);
     }
+}
+
+void
+bcmwl_hostap_radius_get(const char *bss,
+                        struct schema_RADIUS *radius_list,
+                        int max_radius_num,
+                        int *num_radius_list)
+{
+    struct hapd *hapd = hapd_lookup(bss);
+    if (WARN_ON(!hapd))
+        return;
+    hapd_lookup_radius(hapd, radius_list, max_radius_num, num_radius_list);
 }
 
 void bcmwl_hostap_sta_get(const char *bss,

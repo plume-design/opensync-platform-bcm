@@ -153,6 +153,19 @@ target_vif_config_set2(const struct schema_Wifi_VIF_Config *vconf,
 }
 
 bool
+target_vif_config_set3(const struct schema_Wifi_VIF_Config *vconf,
+                       const struct schema_Wifi_Radio_Config *rconf,
+                       const struct schema_Wifi_Credential_Config *cconfs,
+                       const struct schema_Wifi_VIF_Config_flags *vchanged,
+                       const struct schema_RADIUS *radius_list,
+                       int num_radius_list,
+                       int num_cconfs)
+{
+    return bcmwl_vap_update3(vconf, rconf, cconfs, vchanged,
+                             radius_list, num_radius_list, num_cconfs);
+}
+
+bool
 target_dpp_supported(void)
 {
     return kconfig_enabled(CONFIG_BCM_USE_DPP);

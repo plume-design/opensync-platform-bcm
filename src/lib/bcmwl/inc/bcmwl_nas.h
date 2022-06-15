@@ -40,6 +40,8 @@ bool bcmwl_nas_update_security(
         const struct schema_Wifi_Radio_Config *rconf,
         const struct schema_Wifi_Credential_Config *cconfs,
         const struct schema_Wifi_VIF_Config_flags *vchanged,
+        const struct schema_RADIUS *radius_list,
+        int num_radius_list,
         int num_cconfs);
 bool bcmwl_nas_get_security(
         const char *ifname,
@@ -52,6 +54,8 @@ static inline bool bcmwl_nas_update_security(
         const struct schema_Wifi_Radio_Config *rconf,
         const struct schema_Wifi_Credential_Config *cconfs,
         const struct schema_Wifi_VIF_Config_flags *vchanged,
+        const struct schema_RADIUS *radius_list,
+        int num_radius_list,
         int num_cconfs) { return true; }
 static inline bool bcmwl_nas_get_security(
         const char *ifname,
