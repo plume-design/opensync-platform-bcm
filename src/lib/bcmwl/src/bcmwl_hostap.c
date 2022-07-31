@@ -157,6 +157,31 @@ bcmwl_hostap_hapd_ctrl_ap_disabled(struct hapd *hapd)
     bcmwl_hostap_bss_report(hapd->ctrl.bss);
 }
 
+static void
+bcmwl_hostap_hapd_ctrl_wps_active(struct hapd *hapd)
+{
+    bcmwl_vap_state_report(hapd->ctrl.bss);
+    bcmwl_hostap_reset_wps_pbc(hapd->ctrl.bss);
+}
+
+static void
+bcmwl_hostap_hapd_ctrl_wps_success(struct hapd *hapd)
+{
+    bcmwl_vap_state_report(hapd->ctrl.bss);
+}
+
+static void
+bcmwl_hostap_hapd_ctrl_wps_timeout(struct hapd *hapd)
+{
+    bcmwl_vap_state_report(hapd->ctrl.bss);
+}
+
+static void
+bcmwl_hostap_hapd_ctrl_wps_disable(struct hapd *hapd)
+{
+    bcmwl_vap_state_report(hapd->ctrl.bss);
+}
+
 /* wpas */
 static void
 bcmwl_hostap_wpas_ctrl_opened(struct ctrl *ctrl)
@@ -292,6 +317,10 @@ bcmwl_hostap_init_bss(const char *bss)
         hapd->sta_disconnected = bcmwl_hostap_hapd_ctrl_sta_disconnected;
         hapd->ap_enabled = bcmwl_hostap_hapd_ctrl_ap_enabled;
         hapd->ap_disabled = bcmwl_hostap_hapd_ctrl_ap_disabled;
+        hapd->wps_active = bcmwl_hostap_hapd_ctrl_wps_active;
+        hapd->wps_success = bcmwl_hostap_hapd_ctrl_wps_success;
+        hapd->wps_timeout = bcmwl_hostap_hapd_ctrl_wps_timeout;
+        hapd->wps_disable = bcmwl_hostap_hapd_ctrl_wps_disable;
         ctrl_enable(&hapd->ctrl);
         hapd = NULL;
     }
@@ -476,4 +505,40 @@ void bcmwl_hostap_sta_get(const char *bss,
 bool bcmwl_hostap_dpp_set(const struct schema_DPP_Config **config)
 {
     return ctrl_dpp_config(config);
+}
+
+void bcmwl_hostap_ctrl_wps_session(const char *bss, int wps, int wps_pbc)
+{
+    struct hapd *hapd = hapd_lookup(bss);
+
+    if (!hapd || !wps)
+        return;
+
+    if (WARN_ON(hapd_wps_cancel(hapd) != 0))
+        return;
+
+    if (!wps_pbc)
+        return;
+
+    if (WARN_ON(hapd_wps_activate(hapd) != 0))
+        return;
+}
+
+void bcmwl_hostap_reset_wps_pbc(const char* ifname)
+{
+    struct schema_Wifi_VIF_Config vconf;
+    const char *phy;
+    int r;
+    int v;
+
+    if (WARN_ON(!bcmwl_parse_vap(ifname, &r, &v)))
+        return;
+
+    phy = strfmta("wl%d", r);
+    memset(&vconf, 0, sizeof(vconf));
+    vconf._partial_update = true;
+    SCHEMA_SET_STR(vconf.if_name, ifname);
+    SCHEMA_UNSET_FIELD(vconf.wps_pbc);
+
+    bcmwl_ops.op_vconf(&vconf, phy);
 }
