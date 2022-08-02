@@ -835,6 +835,11 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
     bcmwl_hostap_bss_apply(vconf, rconf, cconfs, vchanged, num_cconfs);
     bcmwl_roam_later(vconf->if_name);
 
+    if (vchanged->wps_pbc || vchanged->wps || vchanged->wps_pbc_key_id)
+    {
+        bcmwl_hostap_ctrl_wps_session(vif, vconf->wps, vconf->wps_pbc);
+    }
+
 report:
     evx_debounce_call(bcmwl_vap_state_report, vconf->if_name);
     evx_debounce_call(bcmwl_radio_state_report, rconf->if_name);

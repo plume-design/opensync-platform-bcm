@@ -41,6 +41,8 @@ void bcmwl_hostap_sta_get(const char *bss,
                           const char *mac,
                           struct schema_Wifi_Associated_Clients *client);
 bool bcmwl_hostap_dpp_set(const struct schema_DPP_Config **dpp);
+void bcmwl_hostap_ctrl_wps_session(const char *bss, int wps, int wps_pbc);
+void bcmwl_hostap_reset_wps_pbc(const char* ifname);
 #else
 static inline void bcmwl_hostap_init(void) {}
 static inline void bcmwl_hostap_init_bss(const char *bss) {}
@@ -55,6 +57,8 @@ static inline void bcmwl_hostap_sta_get(const char *bss,
                                         const char *mac,
                                         struct schema_Wifi_Associated_Clients *client) {}
 static inline bool bcmwl_hostap_dpp_set(const struct schema_DPP_Config **dpp) { return false; }
+static inline void bcmwl_hostap_ctrl_wps_session(const char *bss, int wps, int wps_pbc) {}
+static inline void bcmwl_hostap_reset_wps_pbc(const char* ifname) {}
 #endif
 
 #endif /* BCMWL_HOSTAP_H_INCLUDED */

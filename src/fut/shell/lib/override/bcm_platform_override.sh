@@ -27,7 +27,7 @@
 
 ####################### INFORMATION SECTION - START ###########################
 #
-#   Broadcomm (BCM) platform overrides
+#   Broadcom (BCM) platform overrides
 #
 ####################### INFORMATION SECTION - STOP ############################
 
@@ -384,7 +384,7 @@ check_sta_send_csa_message()
     return 0
 }
 
-####################### Broadcomm(BCM) PLATFORM OVERRIDE SECTION - STOP #########################
+####################### Broadcom (BCM) PLATFORM OVERRIDE SECTION - STOP #########################
 
 ###################################################################################
 # DESCRIPTION:

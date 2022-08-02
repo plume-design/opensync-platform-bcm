@@ -36,7 +36,7 @@ case "$1" in
 		# create empty config file
 		# MCPD_CONFIG_FILE ==>"/var/mcpd.conf" in rut_multicast.h and mcpd_config.c
 		cat /dev/null > /var/mcpd.conf
-		mcpd &
+		mcpd 2>&1 | logger -t mcpd &
 		exit 0
 		;;
 

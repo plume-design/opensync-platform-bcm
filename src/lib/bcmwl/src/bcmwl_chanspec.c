@@ -37,6 +37,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "bcmwl_priv.h"
 #include <wlioctl.h>
 #include <dhdioctl.h>
+#include "bcmwl_ioctl.h"
 
 #define MODULE_ID LOG_MODULE_ID_WL
 
@@ -269,4 +270,43 @@ int bcmwl_chanspec_get_center_freq(const int cs)
 #endif
     }
     return 0;
+}
+
+bool bcmwl_chanspec_is_valid(const char *phy, const int chanspec)
+{
+    const struct bcmwl_ioctl_num_conv *conv;
+    chanspec_t cs;
+    int i;
+    struct {
+        int chanspec;
+        char cc_abbrev[4];
+        int count;
+    } __attribute__((packed)) in = {0};
+    struct {
+        int count;
+        int list[512];
+    } __attribute__((packed)) out = {0};
+    const int max = ARRAY_SIZE(out.list);
+
+    LOGT("%s: chanspec %x validation", phy, chanspec);
+
+    if (WARN_ON(!(conv = bcmwl_ioctl_lookup_num_conv(phy))))
+        return false;
+
+    in.count = conv->dtoh32(max);
+
+    if (WARN_ON(!bcmwl_GIOV(phy, "chanspecs", &in, &out)))
+        return false;
+
+    out.count = conv->dtoh32(out.count);
+
+    if (WARN_ON(out.count > max))
+        out.count = max;
+
+    for (i = 0; i < out.count; i++) {
+        cs = (chanspec_t ) conv->dtoh32(out.list[i]);
+        if (cs == chanspec)
+            return true;
+    }
+    return false;
 }

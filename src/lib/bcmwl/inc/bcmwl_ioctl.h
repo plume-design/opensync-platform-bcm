@@ -192,4 +192,17 @@ const struct bcmwl_ioctl_num_conv* bcmwl_ioctl_lookup_num_conv(const char *ifnam
 #define BCMWL_IOCMAX_GMACLIST ((WLC_IOCTL_MAXLEN - sizeof(int)) / sizeof(struct ether_addr))
 #define BCMWL_IOCMAX_SMACLIST (BCMWL_IOCMAX_GMACLIST - (128 / sizeof(struct ether_addr)))
 
+/* Dummy events used  when are not supported in BCMWL
+ * It helps to avoid compilation problems with
+ * drivers which does not contain custom events */
+#define WLC_E_BCMWL_DUMMY_BASE (WLC_E_LAST + 10000)
+
+#ifndef WLC_E_CSA_RECV_IND
+#define WLC_E_CSA_RECV_IND (WLC_E_BCMWL_DUMMY_BASE + 0)
+typedef struct wl_chan_switch_rx_ind {
+      chanspec_t chspec;
+      uint8 is_chspec_valid;
+} wl_chan_switch_recv_t;
+#endif /* WLC_E_CSA_RECV_IND */
+
 #endif /* BCMWL_IOCTL_H_INCLUDED */
