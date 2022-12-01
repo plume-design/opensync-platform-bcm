@@ -34,11 +34,18 @@ void bcmwl_hostap_bss_apply(const struct schema_Wifi_VIF_Config *vconf,
                             const struct schema_Wifi_Radio_Config *rconf,
                             const struct schema_Wifi_Credential_Config *cconf,
                             const struct schema_Wifi_VIF_Config_flags *vchanged,
+                            const struct schema_Wifi_VIF_Neighbors *nbors_list,
                             const struct schema_RADIUS *radius_list,
+                            size_t n_cconf,
+                            size_t n_nbors_list,
                             size_t n_radius_list,
-                            size_t n_cconf);
+                            const char *bssid);
 void bcmwl_hostap_bss_get(const char *bss,
                           struct schema_Wifi_VIF_State *vstate);
+void bcmwl_hostap_nbors_get(const char *bss,
+                            struct schema_Wifi_VIF_Neighbors *nbors_list,
+                            int max_nbors_num,
+                            int *num_nbors_list);
 void bcmwl_hostap_radius_get(const char *bss,
                              struct schema_RADIUS *radius_list,
                              int max_radius_num,
@@ -56,15 +63,22 @@ static inline void bcmwl_hostap_bss_apply(const struct schema_Wifi_VIF_Config *v
                                           const struct schema_Wifi_Radio_Config *rconf,
                                           const struct schema_Wifi_Credential_Config *cconf,
                                           const struct schema_Wifi_VIF_Config_flags *vchanged,
+                                          const struct schema_Wifi_VIF_Neighbors *nbors_list,
                                           const struct schema_RADIUS *radius_list,
+                                          size_t n_cconf,
+                                          size_t n_nbors_list,
                                           size_t n_radius_list,
-                                          size_t n_cconf) {}
+                                          const char *bssid) {}
 static inline void bcmwl_hostap_bss_get(const char *bss,
                                         struct schema_Wifi_VIF_State *vstate) {}
+static inline void bcmwl_hostap_nbors_get(const char *bss,
+                                          struct schema_Wifi_VIF_Neighbors *nbors_list,
+                                          int max_nbors_num,
+                                          int *num_nbors_list) {}
 static inline void bcmwl_hostap_radius_get(const char *bss,
                                            struct schema_RADIUS *radius_list,
                                            int max_radius_num,
-                                           int *num_radius_list) {};
+                                           int *num_radius_list) {}
 static inline void bcmwl_hostap_sta_get(const char *bss,
                                         const char *mac,
                                         struct schema_Wifi_Associated_Clients *client) {}

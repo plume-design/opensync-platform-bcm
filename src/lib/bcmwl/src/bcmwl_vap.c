@@ -55,7 +55,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #define BCMWL_VAP_PREALLOC_MAX 8 /* drv hard limit is 16, leave some for wds */
-#define BCMWL_RADIUS_SUPPORTED_MAX 8 /* arbitrary max number of all (A and AA) servers*/
+#define BCMWL_RADIUS_SUPPORTED_MAX 8 /* arbitrary max number of all (A and AA) servers */
+#define BCMWL_NBORS_SUPPORTED_MAX 24 /* max number of neighbors supported for rxkhs */
 
 // some platforms use "wl1.1", some "wl1_1"
 // vif index 0 is just "wl1" not "wl1.0"
@@ -340,7 +341,9 @@ void bcmwl_vap_state_report(const char *ifname)
 {
     struct schema_Wifi_VIF_State vstate;
     struct schema_RADIUS radius_list[BCMWL_RADIUS_SUPPORTED_MAX];
+    struct schema_Wifi_VIF_Neighbors nbors_list[BCMWL_NBORS_SUPPORTED_MAX];
     int num_radius_list = 0;
+    int num_nbors_list = 0;
     const char *phy;
     int r;
     int v;
@@ -349,19 +352,30 @@ void bcmwl_vap_state_report(const char *ifname)
         return;
     if (!bcmwl_ops.op_radius_state)
         return;
+    if (!bcmwl_ops.op_nbors_state)
+        return;
     if (WARN_ON(!bcmwl_parse_vap(ifname, &r, &v)))
         return;
     phy = strfmta("wl%d", r);
 
-    bcmwl_hostap_radius_get(ifname,
-                            radius_list,
-                            BCMWL_RADIUS_SUPPORTED_MAX,
-                            &num_radius_list);
-
     LOGD("vif: %s@%s: updating", ifname, phy);
     if (bcmwl_vap_state(ifname, &vstate)) {
+        const bool is_ap = (strcmp(vstate.mode, "ap") == 0);
+
+        if (is_ap == true) {
+            bcmwl_hostap_radius_get(ifname,
+                                    radius_list,
+                                    BCMWL_RADIUS_SUPPORTED_MAX,
+                                    &num_radius_list);
+            bcmwl_hostap_nbors_get(ifname,
+                                   nbors_list,
+                                   BCMWL_NBORS_SUPPORTED_MAX,
+                                   &num_nbors_list);
+        }
+
         bcmwl_ops.op_vstate(&vstate, phy);
         bcmwl_ops.op_radius_state(radius_list, num_radius_list, ifname);
+        bcmwl_ops.op_nbors_state(nbors_list, num_nbors_list, ifname);
     }
 }
 
@@ -637,7 +651,8 @@ bool bcmwl_vap_update2(const struct schema_Wifi_VIF_Config *vconf,
                        const struct schema_Wifi_VIF_Config_flags *vchanged,
                        int num_cconfs)
 {
-    return bcmwl_vap_update3(vconf, rconf, cconfs, vchanged, NULL, 0, num_cconfs);
+    return bcmwl_vap_update3(vconf, rconf, cconfs, vchanged,
+                             NULL, NULL, num_cconfs, 0, 0);
 }
 
 /* FIXME: The following is intended to deprecate and
@@ -647,13 +662,17 @@ bool bcmwl_vap_update3(const struct schema_Wifi_VIF_Config *vconf,
                        const struct schema_Wifi_Radio_Config *rconf,
                        const struct schema_Wifi_Credential_Config *cconfs,
                        const struct schema_Wifi_VIF_Config_flags *vchanged,
+                       const struct schema_Wifi_VIF_Neighbors *nbors_list,
                        const struct schema_RADIUS *radius_list,
-                       int num_radius_list,
-                       int num_cconfs)
+                       int num_cconfs,
+                       int num_nbors_list,
+                       int num_radius_list)
 {
     const char *vif = vconf->if_name;
     const char *phy = rconf->if_name;
     struct wlc_ssid ssid = {0};
+    static const char *bssid_zero = "00:00:00:00:00:00";
+    char bssid[18] = "00:00:00:00:00:00";
     char *p;
     bool skip_map = false;
     int i, j;
@@ -664,6 +683,9 @@ bool bcmwl_vap_update3(const struct schema_Wifi_VIF_Config *vconf,
         return false;
     if (WARN_ON(!vif || !*vif))
         return false;
+
+    if ((p = WL(vif, "bssid")) && strcasecmp(p, bssid_zero))
+        STRSCPY(bssid, str_tolower(p));
 
     /* FIXME:
      *  - register for netlink events and keep track of
@@ -680,7 +702,8 @@ bool bcmwl_vap_update3(const struct schema_Wifi_VIF_Config *vconf,
 
         if (!vconf->enabled) {
             bcmwl_hostap_bss_apply(vconf, rconf, cconfs, vchanged,
-                                   radius_list, num_radius_list, num_cconfs);
+                                   nbors_list, radius_list, num_cconfs,
+                                   num_nbors_list, num_radius_list, bssid);
             goto report;
         }
 
@@ -860,7 +883,8 @@ bool bcmwl_vap_update3(const struct schema_Wifi_VIF_Config *vconf,
         WARN_ON(!NVU(vif, "airtime_precedence"));
 
     bcmwl_hostap_bss_apply(vconf, rconf, cconfs, vchanged,
-                           radius_list, num_radius_list, num_cconfs);
+                           nbors_list, radius_list, num_cconfs,
+                           num_nbors_list, num_radius_list, bssid);
     bcmwl_roam_later(vconf->if_name);
 
     if (vchanged->wps_pbc || vchanged->wps || vchanged->wps_pbc_key_id)

@@ -235,13 +235,11 @@ bool osn_igmp_write_section(osn_igmp_t *self, FILE *f)
     fprintf(f, "igmp-max-members %d\n", self->max_members);
     fprintf(f, "igmp-fast-leave %d\n", self->fast_leave_enable ? 1 : 0);
     fprintf(f, "igmp-admission-required 0\n");
-    fprintf(f, "igmp-mcast-snoop-exceptions ");
+    fprintf(f, "igmp-mcast-snoop-exceptions");
     for (ii = 0; ii < self->mcast_exceptions_len; ii++)
     {
-        if (ii != self->mcast_exceptions_len - 1)
-            fprintf(f, "%s,", self->mcast_exceptions[ii]);
-        else
-            fprintf(f, "%s", self->mcast_exceptions[ii]);
+        // space delimited
+        fprintf(f, " %s", self->mcast_exceptions[ii]);
     }
     fprintf(f, "\n# End IGMP configuration\n\n");
 

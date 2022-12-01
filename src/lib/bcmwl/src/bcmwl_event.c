@@ -86,7 +86,25 @@ struct bcmwl_event_watcher {
     bool                    removing;
 };
 
+struct sta_assoc_ref {
+    char            ifname[32];
+    os_macaddr_t    hwaddr;
+    ev_timer        timer;
+    ds_tree_node_t  node;
+};
+
+int
+sta_assoc_ref_cmp(const struct sta_assoc_ref *a, const struct sta_assoc_ref *b)
+{
+    int mem_val = memcmp(&a->hwaddr, &b->hwaddr, sizeof(a->hwaddr));
+    int str_val = strncmp(a->ifname, b->ifname, sizeof(a->ifname));
+    if (mem_val != 0)   return mem_val;
+    if (str_val != 0)   return str_val;
+    return 0;
+}
+
 static ds_dlist_t g_watcher_list = DS_DLIST_INIT(struct bcmwl_event_watcher, list);
+static ds_tree_t g_sta_assoc_ref = DS_TREE_INIT((ds_key_cmp_t *)sta_assoc_ref_cmp, struct sta_assoc_ref, node);
 static bcmwl_event_cb_t *g_bcmwl_extra_cb;
 static int g_bcmwl_discard_probereq;
 static ev_async g_nl_async;
@@ -744,6 +762,40 @@ static void bcmwl_event_handle_ap_sta_assoc(const char *ifname,
         bcmwl_ops.op_client(&client, ifname, assoc);
 }
 
+static void bcmwl_event_handle_ap_sta_assoc_debounce(EV_P_ ev_timer *w, int revents)
+{
+    struct sta_assoc_ref *sta_as = (struct sta_assoc_ref *) w->data;
+    if (WARN_ON(!sta_as))
+        return;
+
+    bcmwl_event_handle_ap_sta_assoc(sta_as->ifname, &sta_as->hwaddr);
+    ev_timer_stop(EV_DEFAULT_ &sta_as->timer);
+    ds_tree_remove(&g_sta_assoc_ref, sta_as);
+    FREE(sta_as);
+}
+
+static void bcmwl_event_handle_ap_sta_assoc_schedule(const char *ifname,
+                                                     const os_macaddr_t *hwaddr)
+{
+    struct sta_assoc_ref *sta_as;
+    struct sta_assoc_ref *sta_as_new = CALLOC(1, sizeof(*sta_as_new));
+    STRSCPY_WARN(sta_as_new->ifname, ifname);
+    memcpy(&sta_as_new->hwaddr, hwaddr, sizeof(sta_as_new->hwaddr));
+
+    sta_as = ds_tree_find(&g_sta_assoc_ref, sta_as_new);
+    if (sta_as == NULL) {
+        sta_as = sta_as_new;
+        ds_tree_insert(&g_sta_assoc_ref, sta_as, sta_as);
+        ev_init(&sta_as->timer, bcmwl_event_handle_ap_sta_assoc_debounce);
+        sta_as->timer.data = (void *) sta_as;
+        sta_as->timer.repeat = 1.0;
+    } else {
+        FREE(sta_as_new);
+    }
+    LOGI("delayed additional sta assoc check");
+    ev_timer_again(EV_DEFAULT_ &sta_as->timer);
+}
+
 static void bcmwl_event_war_csa(const char *ifname)
 {
     const char *ovsh = strfmta("%s/../tools/ovsh", target_bin_dir());
@@ -997,6 +1049,7 @@ bool bcmwl_event_handler(const char *ifname,
         case WLC_E_DISASSOC:
         case WLC_E_DISASSOC_IND:
             bcmwl_event_handle_ap_sta_assoc(ifname, hwaddr);
+            bcmwl_event_handle_ap_sta_assoc_schedule(ifname, hwaddr);
             return BCMWL_EVENT_HANDLED;
         case WLC_E_CSA_RECV_IND:
             bcmwl_event_handle_csa_rx_ind(ifname, ev);

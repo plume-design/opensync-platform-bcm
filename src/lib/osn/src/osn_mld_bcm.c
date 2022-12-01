@@ -232,13 +232,11 @@ bool osn_mld_write_section(osn_mld_t *self, FILE *f)
     fprintf(f, "mld-max-members %d\n", self->max_members);
     fprintf(f, "mld-fast-leave %d\n", self->fast_leave_enable ? 1 : 0);
     fprintf(f, "mld-admission-required 0\n");
-    fprintf(f, "mld-mcast-snoop-exceptions ");
+    fprintf(f, "mld-mcast-snoop-exceptions");
     for (ii = 0; ii < self->mcast_exceptions_len; ii++)
     {
-        if (ii != self->mcast_exceptions_len - 1)
-            fprintf(f, "%s,", self->mcast_exceptions[ii]);
-        else
-            fprintf(f, "%s", self->mcast_exceptions[ii]);
+        // space delimited
+        fprintf(f, " %s", self->mcast_exceptions[ii]);
     }
     fprintf(f, "\n# End MLD configuration\n\n");
 

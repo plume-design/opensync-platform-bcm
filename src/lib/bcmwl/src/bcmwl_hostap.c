@@ -321,6 +321,11 @@ bcmwl_hostap_init_bss(const char *bss)
         hapd->wps_success = bcmwl_hostap_hapd_ctrl_wps_success;
         hapd->wps_timeout = bcmwl_hostap_hapd_ctrl_wps_timeout;
         hapd->wps_disable = bcmwl_hostap_hapd_ctrl_wps_disable;
+        hapd->use_driver_rrb_lo = true;
+        /* FIXME - the below options will be determined at runtime
+         * inside hapd.c */
+        hapd->use_reload_rxkhs = true;
+        hapd->use_rxkh_file = true;
         ctrl_enable(&hapd->ctrl);
         hapd = NULL;
     }
@@ -420,9 +425,12 @@ bcmwl_hostap_bss_apply(const struct schema_Wifi_VIF_Config *vconf,
                        const struct schema_Wifi_Radio_Config *rconf,
                        const struct schema_Wifi_Credential_Config *cconf,
                        const struct schema_Wifi_VIF_Config_flags *vchanged,
+                       const struct schema_Wifi_VIF_Neighbors *nbors_list,
                        const struct schema_RADIUS *radius_list,
+                       size_t num_cconf,
+                       size_t num_nbors_list,
                        size_t num_radius_list,
-                       size_t n_cconf)
+                       const char *bssid)
 {
     struct hapd *hapd = hapd_lookup(vconf->if_name);
     struct wpas *wpas = wpas_lookup(vconf->if_name);
@@ -449,12 +457,13 @@ bcmwl_hostap_bss_apply(const struct schema_Wifi_VIF_Config *vconf,
             tmp_vconf.rrm = 0;
         }
 
-        WARN_ON(hapd_conf_gen2(hapd, rconf, &tmp_vconf, radius_list, num_radius_list) < 0);
+        WARN_ON(hapd_conf_gen2(hapd, rconf, &tmp_vconf, nbors_list, radius_list,
+                               num_nbors_list, num_radius_list, bssid) < 0);
         WARN_ON(hapd_conf_apply(hapd) < 0);
     }
 
     if (wpas) {
-        WARN_ON(wpas_conf_gen(wpas, rconf, vconf, cconf, n_cconf) < 0);
+        WARN_ON(wpas_conf_gen(wpas, rconf, vconf, cconf, num_cconf) < 0);
         WARN_ON(wpas_conf_apply(wpas) < 0);
     }
 }
@@ -478,6 +487,18 @@ bcmwl_hostap_bss_get(const char *bss,
         SCHEMA_SET_STR(vstate->mode, "sta");
         wpas_bss_get(wpas, vstate);
     }
+}
+
+void
+bcmwl_hostap_nbors_get(const char *bss,
+                       struct schema_Wifi_VIF_Neighbors *nbors_list,
+                       int max_nbors_num,
+                       int *num_nbors_list)
+{
+    struct hapd *hapd = hapd_lookup(bss);
+    if (WARN_ON(!hapd))
+        return;
+    hapd_lookup_nbors(hapd, nbors_list, max_nbors_num, num_nbors_list);
 }
 
 void

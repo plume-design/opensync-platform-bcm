@@ -111,9 +111,11 @@ bool bcmwl_vap_update3(const struct schema_Wifi_VIF_Config *vconf,
                        const struct schema_Wifi_Radio_Config *rconf,
                        const struct schema_Wifi_Credential_Config *cconfs,
                        const struct schema_Wifi_VIF_Config_flags *vchanged,
+                       const struct schema_Wifi_VIF_Neighbors *nbors_list,
                        const struct schema_RADIUS *radius_list,
-                       int num_radius_list,
-                       int num_cconfs);
+                       int num_cconfs,
+                       int num_nbors_list,
+                       int num_radius_list);
 bool bcmwl_vap_state(const char *ifname,
                      struct schema_Wifi_VIF_State *vstate);
 void bcmwl_vap_state_report(const char *ifname);
