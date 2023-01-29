@@ -124,6 +124,7 @@ bool bcmwl_vap_is_ap(const char *ifname);
 void bcmwl_vap_mac_xfrm(char *addr, int idx, int max);
 bool bcmwl_vap_prealloc(const char *phy, int max_idx, void (*mac_xfrm)(char *addr, int idx, int max));
 void bcmwl_vap_prealloc_all(void);
+void bcmwl_vap_enumerate(void);
 bool bcmwl_vap_update_acl(const struct schema_Wifi_VIF_Config *vconf,
                           const struct schema_Wifi_Radio_Config *rconf,
                           const struct schema_Wifi_VIF_Config_flags *vchanged);

@@ -342,4 +342,19 @@ config BCMWL_HE_FEATURES
         0x40: HE STA ULMU support
         0x80: HE ER SU Rx support
 
+config BCM_PERFORMANCE_BOOST
+    bool "Performance boost"
+    default y
+    help
+        Updates the kernel task priorities, affinities and EEE
+
+config BCM_EEE_DISABLE_ETH_LIST
+    string "The list of interfaces where you would like to disable EEE."
+    default ""
+    help
+        The list of disabled EEE interfaces must be space delimited.
+        By default there is no specified interfaces.
+
+        List example:
+        eth0.vc eth1.vc eth2.vc
 endif # PLATFORM_IS_BCM

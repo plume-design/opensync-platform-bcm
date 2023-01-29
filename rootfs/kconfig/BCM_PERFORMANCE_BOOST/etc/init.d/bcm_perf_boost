@@ -1,0 +1,52 @@
+#!/bin/sh
+
+. /usr/opensync/etc/kconfig
+
+LOG_NAME="${0##*/}"
+
+INTERFACES="$CONFIG_BCM_EEE_DISABLE_ETH_LIST"
+
+log()
+{
+    logger -s -t "$LOG_NAME" $@
+}
+
+bcm_performance_boost()
+{
+    # Setting bcm kernel task priorities and affinities according to
+    # BCM Document 'CPU Allocation for 47622_6755' and eid_bcm_kthreads.txt
+
+    # bcmsw_rx: pin to cpu0, rt-prio 5 RR:
+    pidof bcmsw_rx | xargs -n 1 taskset -p 0x1 | log
+    pgrep 'dhd0_dpc|wfd0-thrd|wfd1-thrd|skb_free_task|bcmsw_rx|fc_task' | xargs -n 1 chrt -r -p 5 | log
+
+    # bcmsw_recycle: rt-prio 5 FIFO:
+    pidof bcmsw_recycle | xargs -n 1 chrt -f -p 5 | log
+
+    # Priorities and affinities for other tasks are handled by /bin/wlaffinity
+
+for IF in $INTERFACES
+do
+    if [ $IF ]
+    then
+        #disabling EEE on kconfig specified interfaces
+        ethctl $IF eee off | log
+
+        # print out current status of eth1
+        ethctl $IF eee | log
+    fi
+done
+}
+
+case "$1" in
+    start|restart)
+        bcm_performance_boost
+        ;;
+
+    stop)
+        ;;
+
+    *)
+        echo "$0: Invalid options: $@"
+        exit 1
+esac

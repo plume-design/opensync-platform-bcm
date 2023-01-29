@@ -182,10 +182,13 @@ bool bcmwl_init_wm(void)
 
 bool bcmwl_init(const struct target_radio_ops *ops)
 {
+    static bool initialized;
+    bcmwl_debounce_init(ops);
+    if (initialized) return true;
+
     LOGI("bcmwl: initializing");
     assert(strexa("which", "wl"));
     assert(strexa("which", "nvram"));
-    bcmwl_debounce_init(ops);
     bcmwl_hostap_init();
     bcmwl_event_init();
     if (WARN_ON(!bcmwl_ioctl_init()))
@@ -193,5 +196,6 @@ bool bcmwl_init(const struct target_radio_ops *ops)
     if (WARN_ON(!bcmwl_acl_init()))
         return false;
 
+    initialized = true;
     return true;
 }

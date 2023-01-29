@@ -22,17 +22,24 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-########################################################################
-#
-# BCM Hardware Acceleration Library
-#
-########################################################################
+##############################################################################
+# BCM flowcache API wrapper
+##############################################################################
+UNIT_DISABLE := $(if $(CONFIG_BCM_FCCTL_HW_ACC),n,y)
 
-UNIT_SRC := $(filter-out src/hw_acc.c,$(UNIT_SRC))
-UNIT_SRC_TOP += $(OVERRIDE_DIR)/src/hw_acc.c
+UNIT_NAME := bcmfc
+UNIT_TYPE := LIB
 
-UNIT_DEPS := src/lib/log
-UNIT_DEPS += src/lib/kconfig
-UNIT_DEPS += src/lib/common
-UNIT_DEPS += src/lib/execsh
-UNIT_DEPS += platform/bcm/src/lib/bcmfc
+UNIT_SRC += src/bcmfc.c
+
+UNIT_CFLAGS := -I$(UNIT_PATH)/inc
+UNIT_CFLAGS += -I$(USERSPACE_DIR)/private/include
+UNIT_CFLAGS += -I$(USERSPACE_DIR)/private/apps/fcctl
+UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/shared/opensource/include/bcm963xx
+UNIT_CFLAGS += -I$(BCM_FSBUILD_DIR)/bcmdrivers/include
+
+UNIT_LDFLAGS += -lfcctl
+
+UNIT_EXPORT_CFLAGS := -I$(UNIT_PATH)/inc
+UNIT_EXPORT_LDFLAGS := $(UNIT_LDFLAGS)
+
