@@ -29,6 +29,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "log.h"
 #include "execsh.h"
 #include "os_util.h"
+#include "kconfig.h"
 
 #include "osn_mcast_bcm.h"
 
@@ -301,6 +302,8 @@ void osn_mcast_ovs_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent)
 {
     osn_mcast_bridge *self = &osn_mcast_bridge_base;
 
+    if (kconfig_enabled(CONFIG_TARGET_USE_NATIVE_BRIDGE)) return;
+
     if (!self->igmp_initialized && !self->mld_initialized)
         return;
 
@@ -348,9 +351,17 @@ static bool osn_mcast_write_mcpd_config(osn_mcast_bridge *self)
     return true;
 }
 
+static bool is_wan_wl_interface(const char* if_name)
+{
+    return strstr(if_name, "wl") != NULL;
+}
+
 void osn_mcast_mcpd_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent)
 {
     osn_mcast_bridge *self = &osn_mcast_bridge_base;
+    char cmd[256];
+
+    if (kconfig_enabled(CONFIG_TARGET_USE_NATIVE_BRIDGE)) return;
 
     /* Apply MCPD configuration */
     if (WARN_ON(osn_mcast_write_mcpd_config(self) == false))
@@ -376,8 +387,23 @@ void osn_mcast_mcpd_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent)
         return;
     }
 
+    /* Setting WAN interface for Archer mcast acceleration, only if not g-wl* or not wl* type */
+    if (!is_wan_wl_interface(self->igmp.mcast_interface))
+    {
+        if (kconfig_enabled(CONFIG_OSN_BACKEND_VLAN_BCM_VLANCTL))
+            snprintf(cmd, sizeof(cmd), "ethswctl -c wan -i %s.vc -o enable", self->igmp.mcast_interface);
+        else
+            snprintf(cmd, sizeof(cmd), "ethswctl -c wan -i %s -o enable", self->igmp.mcast_interface);
+
+        if (cmd_log(cmd) != 0)
+            LOG(ERR, "osn_mcast_mcpd_apply_fn: '%s' failed", cmd);
+    }
+
     if (cmd_log("mcpctl reload") != 0)
         LOG(ERR, "osn_mcast_mcpd_apply_fn: 'mcpctl reload' failed");
+
+    if (cmd_log("mcpctl mcgrpmode firstin") != 0)
+        LOG(ERR, "osn_mcast_mcpd_apply_fn: 'mcpctl mcgrpmode firstin' failed");
 
     return;
 }

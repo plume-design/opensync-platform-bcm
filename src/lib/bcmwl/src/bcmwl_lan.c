@@ -93,7 +93,7 @@ bcmwl_lan_validate(int idx)
     NVS(DUMMY_WL_IFNAME, "ifname", DUMMY_WL_IFNAME);
     NVS(bcmwl_lan(idx), "ifname", DUMMY_WL_IFNAME);
     NVS(bcmwl_lan(idx), "ifnames", DUMMY_WL_IFNAME);
-    br = get_ifname_by_wlmac(NULL, strdup(DUMMY_WL_IFNAME));
+    br = get_ifname_by_wlmac(NULL, strdupa(DUMMY_WL_IFNAME));
     NVU(DUMMY_WL_IFNAME, "ifname");
     NVU(bcmwl_lan(idx), "ifname");
     NVU(bcmwl_lan(idx), "ifnames");

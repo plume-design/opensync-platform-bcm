@@ -340,19 +340,11 @@ bcmwl_vap_state(const char *ifname,
 void bcmwl_vap_state_report(const char *ifname)
 {
     struct schema_Wifi_VIF_State vstate;
-    struct schema_RADIUS radius_list[BCMWL_RADIUS_SUPPORTED_MAX];
-    struct schema_Wifi_VIF_Neighbors nbors_list[BCMWL_NBORS_SUPPORTED_MAX];
-    int num_radius_list = 0;
-    int num_nbors_list = 0;
     const char *phy;
     int r;
     int v;
 
     if (!bcmwl_ops.op_vstate)
-        return;
-    if (!bcmwl_ops.op_radius_state)
-        return;
-    if (!bcmwl_ops.op_nbors_state)
         return;
     if (WARN_ON(!bcmwl_parse_vap(ifname, &r, &v)))
         return;
@@ -362,20 +354,30 @@ void bcmwl_vap_state_report(const char *ifname)
     if (bcmwl_vap_state(ifname, &vstate)) {
         const bool is_ap = (strcmp(vstate.mode, "ap") == 0);
 
+        bcmwl_ops.op_vstate(&vstate, phy);
+
         if (is_ap == true) {
-            bcmwl_hostap_radius_get(ifname,
-                                    radius_list,
-                                    BCMWL_RADIUS_SUPPORTED_MAX,
-                                    &num_radius_list);
-            bcmwl_hostap_nbors_get(ifname,
-                                   nbors_list,
-                                   BCMWL_NBORS_SUPPORTED_MAX,
-                                   &num_nbors_list);
+            if (bcmwl_ops.op_radius_state) {
+                struct schema_RADIUS radius_list[BCMWL_RADIUS_SUPPORTED_MAX];
+                int num_radius_list = 0;
+                bcmwl_hostap_radius_get(ifname,
+                                        radius_list,
+                                        BCMWL_RADIUS_SUPPORTED_MAX,
+                                        &num_radius_list);
+                bcmwl_ops.op_radius_state(radius_list, num_radius_list, ifname);
+            }
+
+            if (bcmwl_ops.op_nbors_state) {
+                struct schema_Wifi_VIF_Neighbors nbors_list[BCMWL_NBORS_SUPPORTED_MAX];
+                int num_nbors_list = 0;
+                bcmwl_hostap_nbors_get(ifname,
+                                       nbors_list,
+                                       BCMWL_NBORS_SUPPORTED_MAX,
+                                       &num_nbors_list);
+                bcmwl_ops.op_nbors_state(nbors_list, num_nbors_list, ifname);
+            }
         }
 
-        bcmwl_ops.op_vstate(&vstate, phy);
-        bcmwl_ops.op_radius_state(radius_list, num_radius_list, ifname);
-        bcmwl_ops.op_nbors_state(nbors_list, num_nbors_list, ifname);
     }
 }
 
@@ -535,6 +537,34 @@ void bcmwl_vap_prealloc_all(void)
             if (bssmax > BCMWL_VAP_PREALLOC_MAX)
                 bssmax = BCMWL_VAP_PREALLOC_MAX;
             bcmwl_vap_prealloc(p->d_name, bssmax - 1, bcmwl_vap_mac_xfrm);
+        }
+    }
+
+    closedir(d);
+}
+
+void bcmwl_vap_enumerate(void)
+{
+    struct dirent *p;
+    DIR *d;
+
+    if (WARN_ON(!(d = opendir("/sys/class/net"))))
+        return;
+
+    LOGD("bcmwl: enumerating vifs and phys");
+    while ((p = readdir(d))) {
+        const char *ifname = p->d_name;
+
+        LOGT("bcmwl: enumerating: considering: %s", ifname);
+
+        if (bcmwl_is_phy(ifname)) {
+            LOGD("bcmwl: enumerating: phy: %s", ifname);
+            evx_debounce_call(bcmwl_radio_state_report, ifname);
+        }
+
+        if (bcmwl_is_vif(ifname)) {
+            LOGD("bcmwl: enumerating: vif: %s", ifname);
+            evx_debounce_call(bcmwl_vap_state_report, ifname);
         }
     }
 

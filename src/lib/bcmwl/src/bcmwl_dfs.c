@@ -566,7 +566,7 @@ bool bcmwl_dfs_bgcac_active(const char *phy, uint8_t chan, const char *ht_mode)
 
 void bcmwl_dfs_bgcac_deactivate(const char *phy)
 {
-    char *apvifs = bcmwl_radio_get_vifs(phy) ?: strdupa("");
+    char *apvifs = strdupafree(bcmwl_radio_get_vifs(phy)) ?: strdupa("");
     const char *apvif = strsep(&apvifs, " ");
     char *ptr;
 
@@ -642,7 +642,7 @@ static bool bcmwl_dfs_get_cac_ready_channels(const char *phy, int *chan, int *bw
 
 static bool bcmwl_dfs_bgcac_get_next_chan(const char *phy, int *c, int *cw)
 {
-    char *apvifs = bcmwl_radio_get_vifs(phy) ?: strdupa("");
+    char *apvifs = strdupafree(bcmwl_radio_get_vifs(phy)) ?: strdupa("");
     const char *apvif = strsep(&apvifs, " ");
     char *ptr;
 
@@ -684,7 +684,7 @@ static bool bcmwl_dfs_bgcac_action_required(const char *phy)
 
 void bcmwl_dfs_bgcac_recalc(const char *phy)
 {
-    char *apvifs = bcmwl_radio_get_vifs(phy) ?: strdupa("");
+    char *apvifs = strdupafree(bcmwl_radio_get_vifs(phy)) ?: strdupa("");
     const char *apvif = strsep(&apvifs, " ");
     char *ptr;
     int c, cw;

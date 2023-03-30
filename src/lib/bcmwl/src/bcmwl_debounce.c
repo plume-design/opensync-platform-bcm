@@ -44,7 +44,11 @@ struct target_radio_ops bcmwl_ops;
 
 void bcmwl_debounce_init(const struct target_radio_ops *ops)
 {
-    memset(&bcmwl_ops, 0, sizeof(bcmwl_ops));
+    static bool zeroed;
+    if (zeroed == false) {
+        memset(&bcmwl_ops, 0, sizeof(bcmwl_ops));
+        zeroed = true;
+    }
     if (ops)
         bcmwl_ops = *ops;
 }

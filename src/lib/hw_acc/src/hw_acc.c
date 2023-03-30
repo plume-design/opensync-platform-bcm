@@ -29,6 +29,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #define _GNU_SOURCE
+#include <stdbool.h>
+#include <stdint.h>
+#include "bcmfc.h"
 #include "hw_acc.h"
 #include "os.h"
 #include "log.h"
@@ -37,19 +40,118 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #define FLOWMGR_CMD_FILE "/proc/driver/flowmgr/cmd"
 
+static void hw_acc_print_flow(char *note, int *flow_id, struct hw_acc_flush_flow_t *flow)
+{
+    LOGD("%s (%d) %s", note, (flow_id) ? *flow_id : -1, \
+        strfmta("%u, %u (%02x:%02x:%02x:%02x:%02x:%02x)@%u.%u.%u.%u:%u -> (%02x:%02x:%02x:%02x:%02x:%02x)@%u.%u.%u.%u:%u", \
+        flow->protocol,flow->ip_version, \
+        flow->src_mac[0], flow->src_mac[1], flow->src_mac[2], flow->src_mac[3], flow->src_mac[4], flow->src_mac[5], \
+        flow->src_ip[0], flow->src_ip[1], flow->src_ip[2], flow->src_ip[3], \
+        flow->src_port, \
+        flow->dst_mac[0], flow->dst_mac[1], flow->dst_mac[2], flow->dst_mac[3], flow->dst_mac[4], flow->dst_mac[5], \
+        flow->dst_ip[0], flow->dst_ip[1], flow->dst_ip[2], flow->dst_ip[3], \
+        flow->dst_port));
+}
+
+bool hw_acc_flush(struct hw_acc_flush_flow_t *flow)
+{
+    const char* s;
+    const char* p;
+    int flowid;
+    struct hw_acc_flush_flow_t flow_entry = {0};
+
+    hw_acc_print_flow("hw_acc_flush: target_flow:", NULL, flow);
+
+    if(flow->ip_version == 6)
+    {
+        LOGD("hw_acc_flush: IPv6 -> flushing all (TODO!)");
+        return bcmfc_flush();
+    }
+
+    char *flows = strexa("cat", "/proc/fcache/nflist", "/proc/fcache/brlist") ?: "";
+    char *line = strstr(flows, "\n\n");
+    while (line)
+    {
+        s = strchr(line, '@');
+        p = strchr(line, '<');
+
+        if (s && p)
+        {
+            //find out how long is the protocol id
+            p -= 3;
+            while ((*p != ' ') && (p > line)) { p--; }
+
+            if (sscanf(s+1, "%06d", &flowid) == 1)
+            {
+                if (sscanf((p+1), "%d  <%03u.%03u.%03u.%03u:%05u> <%03u.%03u.%03u.%03u:%05u>", \
+                        (uint *)&flow_entry.protocol, \
+                        (uint *)&flow_entry.src_ip[0], (uint *)&flow_entry.src_ip[1], (uint *)&flow_entry.src_ip[2], (uint *)&flow_entry.src_ip[3],
+                        (uint *)&flow_entry.src_port, \
+                        (uint *)&flow_entry.dst_ip[0], (uint *)&flow_entry.dst_ip[1], (uint *)&flow_entry.dst_ip[2], (uint *)&flow_entry.dst_ip[3],
+                        (uint *)&flow_entry.dst_port) == 11)
+                {
+                    if (flow_entry.protocol == flow->protocol)
+                    {
+                        /**
+                         * Try and find full match from lan -> wan
+                         */
+                        if ((flow_entry.src_port == flow->src_port) && (flow_entry.dst_port == flow->dst_port) &&
+                            !memcmp(flow_entry.src_ip, flow->src_ip, 4) && \
+                            !memcmp(flow_entry.dst_ip, flow->dst_ip, 4))
+                        {
+                            hw_acc_print_flow("hw_acc_flush: flush_exact:", &flowid, &flow_entry);
+                            bcmfc_flush_flow(flowid);
+                        }
+
+                        /**
+                         * now try and find reverse flow, before nat(), where dst should be our wan IP
+                         */
+                        else if ((flow_entry.src_port == flow->dst_port) && (flow_entry.dst_port == flow->src_port) &&
+                            //!memcmp(flow_entry.src_ip, flow->src_ip, 4) &&
+                            !memcmp(flow_entry.dst_ip, flow->src_ip, 4))
+                        {
+                            hw_acc_print_flow("hw_acc_flush: flush_partial:", &flowid, &flow_entry);
+                            bcmfc_flush_flow(flowid);
+                        }
+                    }
+
+                }
+            }
+        }
+        else
+        {
+            break;
+        }
+
+        line = strstr(s, "\n\n");
+    }
+
+    return true;
+}
+
+bool hw_acc_flush_flow_per_device(int devid)
+{
+    return bcmfc_flush_device(devid);
+}
+
+
 bool hw_acc_flush_flow_per_mac(const char *mac) {
     char cmd[256];
-    int rc;
+    bool rc;
 
     if (kconfig_enabled(CONFIG_BCM_FCCTL_HW_ACC))
     {
-        rc = execsh_log(LOG_SEVERITY_DEBUG, _S(fcctl flush --mac "$1"), (char*)mac);
-        if (rc != 0)
-        {
-            return false;
-        }
-        LOGD("fcctl: flushed mac '%s'", mac);
-        return true;
+        uint8_t macb[6] = {0};
+        sscanf(mac, "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx", \
+           &macb[0], &macb[1],&macb[2], &macb[3], &macb[4], &macb[5]);
+
+        rc = (bcmfc_flush_per_mac(macb) == 0) ? true : false;
+
+        LOGD("fcctl: flush mac %s: %s ", \
+            strfmta("%02x:%02x:%02x:%02x:%02x:%02x", macb[0], macb[1], macb[2], macb[3], macb[4], macb[5]), \
+            (rc == true) ? "OK" : "FAILED");
+
+        return rc;
     }
     if (kconfig_enabled(CONFIG_BCM_FLOW_MGR_HW_ACC))
     {
@@ -69,18 +171,15 @@ bool hw_acc_flush_flow_per_mac(const char *mac) {
 bool hw_acc_flush_all_flows(void)
 {
     char cmd[256];
-    int rc;
+    bool rc;
 
     if (kconfig_enabled(CONFIG_BCM_FCCTL_HW_ACC))
     {
-        rc = execsh_log(LOG_SEVERITY_DEBUG, _S(fcctl flush));
-        if (rc != 0)
-        {
-            return false;
-        }
-        LOGD("fcctl: flushed all flows\n");
-        return true;
-    } 
+        rc = (bcmfc_flush() == 0) ? true : false;
+
+        LOGD("fcctl: flush all flows: %s ", (rc == true) ? "OK" : "FAILED");
+        return rc;
+    }
     if (kconfig_enabled(CONFIG_BCM_FLOW_MGR_HW_ACC))
     {
         snprintf(cmd, sizeof(cmd), "flow_delall");
@@ -94,4 +193,31 @@ bool hw_acc_flush_all_flows(void)
 
     LOGW("hw_acc: hardware acceleration not enabled\n");
     return false;
+}
+
+void hw_acc_config(bool enable)
+{
+    int err;
+    if (kconfig_enabled(CONFIG_BCM_FCCTL_HW_ACC))
+    {
+        err = bcmfc_enable(enable);
+        LOGD("fcctl: %s hw acc %s\n", \
+            (enable) ? "enabled" : "disabled", \
+            (err == 0) ? "OK" : "FAILED");
+    }
+    if (kconfig_enabled(CONFIG_BCM_FLOW_MGR_HW_ACC))
+    {
+        LOGW("Not implemented for CONFIG_BCM_FLOW_MGR_HW_ACC devices.");
+    }
+}
+
+void hw_acc_enable()
+{
+    hw_acc_config(true);
+}
+
+void hw_acc_disable()
+{
+    hw_acc_config(false);
+    hw_acc_flush_all_flows();
 }

@@ -24,26 +24,37 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef TARGET_BCM_H_INCLUDED
-#define TARGET_BCM_H_INCLUDED
+/**
+ * libbcmfc - thin wrapper of fcctl_api for flow-cache
+ * This wrapper resolves problem with the include files conflicts.
+ *
+ */
+#ifndef BCMFC_H_INCLUDED
+#define BCMFC_H_INCLUDED
 
-#include "net/if.h"
+enum bcmfc_flush_action {
+    BCMFC_FLUSH_ACTION_ALL    = (1 << 0),
+    BCMFC_FLUSH_ACTION_FLOW   = (1 << 1),
+    BCMFC_FLUSH_ACTION_DEV    = (1 << 2),
+    BCMFC_FLUSH_ACTION_DSTMAC = (1 << 3),
+    BCMFC_FLUSH_ACTION_SRCMAC = (1 << 4),
+    BCMFC_FLUSH_ACTION_HW     = (1 << 5),
+    BCMFC_FLUSH_ACTION_MAC    =  BCMFC_FLUSH_ACTION_DSTMAC | BCMFC_FLUSH_ACTION_SRCMAC,
+};
 
-#define TARGET_MANAGERS_PID_PATH    "/tmp/dmpid"
-#define TARGET_LOGREAD_FILENAME     "/var/log/messages"
+struct bcmfc_flush_t{
+    enum bcmfc_flush_action action;
+    uint8_t mac[6];
+    int devid;
+    int flowid;
+};
 
-typedef void target_client_record_t;
+int bcmfc_enable(bool enable);
 
-typedef void target_survey_record_t;
+int bcmfc_flush(void);
+int bcmfc_flush_flow(int fc_flowid);
+int bcmfc_flush_device(int device);
+int bcmfc_flush_per_mac(uint8_t* mac);
+int bcmfc_flush_params(struct bcmfc_flush_t *params);
 
-typedef void target_capacity_data_t;
-
-#include "target_common.h"
-
-
-#define TARGET_BIN_PATH             CONFIG_INSTALL_PREFIX"/bin"
-
-#define TARGET_MANAGER_PATH(X)      TARGET_BIN_PATH"/"X
-
-
-#endif /* TARGET_BCM_H_INCLUDED */
+#endif /* BCMFC_H_INCLUDED */

@@ -67,6 +67,22 @@ stop_wireless_driver()
 
 ###############################################################################
 # DESCRIPTION:
+#   Function checks if device supports WPA3
+# INPUT PARAMETER(S):
+#   None.
+# RETURNS:
+#   1   Always.
+# USAGE EXAMPLE(S):
+#   check_wpa3_compatibility
+###############################################################################
+check_wpa3_compatibility()
+{
+    log -deb "bcm_platform_override:check_wpa3_compatibility - WPA3 incompatible"
+    return 1
+}
+
+###############################################################################
+# DESCRIPTION:
 #   Function empties all VIF interfaces by emptying the Wifi_VIF_Config table.
 #   On BCM does not wait for Wifi_VIF_State table to be empty.
 #   Raises exception on fail.
@@ -104,9 +120,9 @@ get_tx_power_from_os()
     local NARGS=1
     [ $# -ne ${NARGS} ] &&
         raise "bcm_platform_override:get_tx_power_from_os requires ${NARGS} input argument(s), $# given" -arg
-    wm2_vif_if_name=$1
+    vif_if_name=$1
 
-    wl -i $wm2_vif_if_name txpwr | awk '{print $1}' | awk -F '.' '{print $1}'
+    wl -i $vif_if_name txpwr | awk '{print $1}' | awk -F '.' '{print $1}'
 }
 
 ###############################################################################
@@ -125,13 +141,13 @@ check_tx_chainmask_at_os_level()
     local NARGS=2
     [ $# -ne ${NARGS} ] &&
         raise "bcm_platform_override:check_tx_chainmask_at_os_level requires ${NARGS} input argument(s), $# given" -arg
-    wm2_tx_chainmask=$1
-    wm2_if_name=$2
+    tx_chainmask=$1
+    if_name=$2
 
     log "bcm_platform_override:check_tx_chainmask_at_os_level - Checking Radio TX Chainmask for interface '$wm2_if_name' at OS - LEVEL2"
-    wait_for_function_response 0 "wl -a $wm2_if_name txchain | grep -F $wm2_tx_chainmask" &&
-        log -deb "bcm_platform_override:check_tx_chainmask_at_os_level - Tx Chainmask '$wm2_tx_chainmask' is set at OS - LEVEL2 - Success" ||
-        raise "FAIL: Tx Chainmask '$wm2_tx_chainmask' is not set at OS - LEVEL2" -l "bcm_platform_override:check_tx_chainmask_at_os_level" -tc
+    wait_for_function_response 0 "wl -a $if_name txchain | grep -F $tx_chainmask" &&
+        log -deb "bcm_platform_override:check_tx_chainmask_at_os_level - Tx Chainmask '$tx_chainmask' is set at OS - LEVEL2 - Success" ||
+        raise "FAIL: Tx Chainmask '$tx_chainmask' is not set at OS - LEVEL2" -l "bcm_platform_override:check_tx_chainmask_at_os_level" -tc
 
     return 0
 }
@@ -153,13 +169,13 @@ check_beacon_interval_at_os_level()
     local NARGS=2
     [ $# -ne ${NARGS} ] &&
         raise "bcm_platform_override:check_beacon_interval_at_os_level requires ${NARGS} input argument(s), $# given" -arg
-    wm2_bcn_int=$1
-    wm2_vif_if_name=$2
+    bcn_int=$1
+    vif_if_name=$2
 
     log "bcm_platform_override:check_beacon_interval_at_os_level - Checking Beacon interval at OS - LEVEL2"
-    wait_for_function_response 0 "wl -a $wm2_vif_if_name bi | grep -F $wm2_bcn_int" &&
-        log -deb "bcm_platform_override:check_beacon_interval_at_os_level - Beacon interval '$wm2_bcn_int' for '$wm2_vif_if_name' is set at OS - LEVEL2 - Success" ||
-        raise "FAIL: Beacon interval '$wm2_bcn_int' for '$wm2_vif_if_name' is not set at OS - LEVEL2" -l "bcm_platform_override:check_beacon_interval_at_os_level" -tc
+    wait_for_function_response 0 "wl -a $vif_if_name bi | grep -F $bcn_int" &&
+        log -deb "bcm_platform_override:check_beacon_interval_at_os_level - Beacon interval '$bcn_int' for '$vif_if_name' is set at OS - LEVEL2 - Success" ||
+        raise "FAIL: Beacon interval '$bcn_int' for '$vif_if_name' is not set at OS - LEVEL2" -l "bcm_platform_override:check_beacon_interval_at_os_level" -tc
 
     return 0
 }
@@ -179,9 +195,9 @@ get_channel_from_os()
     local NARGS=1
     [ $# -ne ${NARGS} ] &&
         raise "bcm_platform_override:get_channel_from_os requires ${NARGS} input argument(s), $# given" -arg
-    wm2_vif_if_name=$1
+    vif_if_name=$1
 
-    wl -a $wm2_vif_if_name channel | grep -F "current mac channel" | cut -f2
+    wl -a $vif_if_name channel | grep -F "current mac channel" | cut -f2
 }
 
 ###############################################################################
@@ -200,10 +216,10 @@ get_ht_mode_from_os()
     local NARGS=2
     [ $# -ne ${NARGS} ] &&
         raise "bcm_platform_override:get_ht_mode_from_os requires ${NARGS} input argument(s), $# given" -arg
-    wm2_vif_if_name=$1
-    wm2_channel=$2
+    vif_if_name=$1
+    channel=$2
 
-    chanspec_str=$(wl -a "$wm2_vif_if_name" chanspec | cut -d' ' -f1)
+    chanspec_str=$(wl -a "$vif_if_name" chanspec | cut -d' ' -f1)
     echo $chanspec_str | grep -q "/160"
     if [ $? -eq 0 ]; then
         echo "HT160"
@@ -219,7 +235,7 @@ get_ht_mode_from_os()
         echo "HT40"
         exit 0
     fi
-    echo $chanspec_str | grep -qw "$wm2_channel"
+    echo $chanspec_str | grep -qw "$channel"
     if [ $? -eq 0 ]; then
         echo "HT20"
         exit 0
@@ -281,7 +297,7 @@ check_sta_send_csa_message()
     gw_csa_channel=$2
     ht_mode=$3
 
-    wm_csa_log_grep="$LOGREAD | grep -i 'csa completed ($gw_csa_channel'"
+    wm_csa_log_grep="$LOGREAD | grep -i 'csa completed' | grep -i '$gw_csa_channel'"
     wait_for_function_response 0 "${wm_csa_log_grep}" 90 &&
         log "bcm_platform_override:check_sta_send_csa_message : 'csa completed' message found in logs for channel:${gw_csa_channel} with HT mode: ${ht_mode} - Success" ||
         raise "FAIL: Failed to find 'csa completed' message in logs for channel: ${gw_csa_channel} with HT mode: ${ht_mode}" -l "bcm_platform_override:check_sta_send_csa_message" -tc

@@ -988,14 +988,17 @@ static bool process_event_callback(
     bsal_event_t event;
     client_t *client;
 
+    memset(&event, 0, sizeof(event));
+    STRSCPY(event.ifname, ifname);
+
     /*
      * BM code is not resilient to events overrun. In such case its state may
      * get silently corrupted. Therefore, it's safer to fail-fast BM.
      */
     if (!client_hwaddr && !data) {
-        LOGE(LOG_PREFIX"Event overrun, exiting");
-        ev_break(EV_DEFAULT_ EVBREAK_ALL);
-        return true;
+        event.type = BSAL_EVENT_SOCKET_OVERRUN;
+        proc_event_res = PROC_EVENT_NEW_BSAL_EVENT;
+        goto leave;
     }
 
     if (is_event_ignored(ntohl(bcm_event->event.event_type))) {
@@ -1014,9 +1017,6 @@ static bool process_event_callback(
 
     LOGT(LOG_PREFIX"Processing event! :: ifname=%s client_hwaddr="PRI(os_macaddr_t)" %d",
          ifname, FMT(os_macaddr_pt, client_hwaddr), ntohl(bcm_event->event.event_type));
-
-    memset(&event, 0, sizeof(event));
-    STRSCPY(event.ifname, ifname);
 
     switch (ntohl(bcm_event->event.event_type))
     {
@@ -1463,8 +1463,6 @@ bool bcm_bsal_init(
         struct ev_loop *loop,
         bsal_event_cb_t callback)
 {
-    struct target_radio_ops bcm_ops;
-
     LOGD(LOG_PREFIX"init");
 
     if (_bcm_bsal_initialized)
@@ -1473,11 +1471,9 @@ bool bcm_bsal_init(
         goto error;
     }
 
-    memset(&bcm_ops, 0, sizeof(bcm_ops));
-
     bcmwl_event_setup_extra_cb(process_event_callback);
 
-    if (!bcmwl_init(&bcm_ops))
+    if (!bcmwl_init(NULL))
     {
         LOGE(LOG_PREFIX"Failed to initialize bcmwl");
         goto error;

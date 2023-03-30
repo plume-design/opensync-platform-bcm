@@ -56,14 +56,17 @@ target_radio_init_uapsd_war(void)
     WL("wl0.1", "wme_apsd", "0");
     WL("wl0.2", "wme_apsd", "1");
     WL("wl0.3", "wme_apsd", "0");
+    WL("wl0.6", "wme_apsd", "1");
     WL("wl1", "wme_apsd", "0");
     WL("wl1.1", "wme_apsd", "0");
     WL("wl1.2", "wme_apsd", "1");
     WL("wl1.3", "wme_apsd", "0");
+    WL("wl1.6", "wme_apsd", "1");
     WL("wl2", "wme_apsd", "0");
     WL("wl2.1", "wme_apsd", "0");
     WL("wl2.2", "wme_apsd", "1");
     WL("wl2.3", "wme_apsd", "0");
+    WL("wl2.6", "wme_apsd", "1");
 }
 
 static void
@@ -79,9 +82,15 @@ target_radio_init_steer_war(void)
     WL("wl0.2", "rrm", "+2");
     WL("wl1.2", "rrm", "+2");
     WL("wl2.2", "rrm", "+2");
+    WL("wl0.6", "rrm", "+2");
+    WL("wl1.6", "rrm", "+2");
+    WL("wl2.6", "rrm", "+2");
     WL("wl0.2", "wnm", "+1");
     WL("wl1.2", "wnm", "+1");
     WL("wl2.2", "wnm", "+1");
+    WL("wl0.6", "wnm", "+1");
+    WL("wl1.6", "wnm", "+1");
+    WL("wl2.6", "wnm", "+1");
 }
 
 static void
@@ -127,6 +136,7 @@ target_radio_init(const struct target_radio_ops *ops)
     if (WARN_ON(!bcmwl_init_wm()))
         return false;
     bcmwl_vap_prealloc_all();
+    bcmwl_vap_enumerate();
     target_bcmwl_wps_set_script();
     target_radio_init_mbo();
     target_radio_init_uapsd_war();

@@ -32,3 +32,6 @@ UNIT_TYPE := FUT
 UNIT_DIR := shell/lib/override/
 
 UNIT_FILE := bcm_platform_override.sh
+UNIT_FILE += bcm947622dvt_lib_override.sh
+UNIT_FILE += pp403z_lib_override.sh
+UNIT_FILE += pp443z_lib_override.sh
