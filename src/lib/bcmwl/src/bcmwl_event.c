@@ -199,7 +199,7 @@ static void bcmwl_event_setup_bpf(const char *ifname, int fd)
     }
 }
 
-static int bcmwl_event_get_dropped(int fd)
+int bcmwl_event_get_dropped(int fd)
 {
     struct tpacket_stats stats;
     socklen_t buflen = sizeof(stats);
@@ -805,6 +805,7 @@ static void bcmwl_event_war_csa(const char *ifname)
     const char *rchan;
     char *p;
     int c;
+    int cc;
     int w;
 
     if (!bcmwl_is_phy(ifname))
@@ -814,7 +815,7 @@ static void bcmwl_event_war_csa(const char *ifname)
     if ((WARN_ON(!(p = WL(ifname, "bss"))) || strcmp(p, "up")))
         return;
 
-    bcmwl_radio_chanspec_extract(chanspec, &c, &w);
+    bcmwl_radio_chanspec_extract(chanspec, &c, &cc, &w);
 
     if ((rchan = strexa(ovsh, "-r", "s", "Wifi_Radio_Config", "channel",
                         "-w", strfmta("channel!=%d", c),

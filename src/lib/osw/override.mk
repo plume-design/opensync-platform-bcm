@@ -22,16 +22,7 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-UNIT_NAME := fut_platform_bcm_lib_override
-
-UNIT_DISABLE := n
-
-# Template type:
-UNIT_TYPE := FUT
-# Output directory
-UNIT_DIR := shell/lib/override/
-
-UNIT_FILE := bcm_platform_override.sh
-UNIT_FILE += bcm947622dvt_lib_override.sh
-UNIT_FILE += pp403z_lib_override.sh
-UNIT_FILE += pp443z_lib_override.sh
+ifeq ($(CONFIG_BCM_USE_HOSTAP),y)
+UNIT_SRC_TOP += $(OVERRIDE_DIR)/src/osw_plat_bcm.c
+UNIT_DEPS += $(LAYER_DIR)/src/lib/bcmwl
+endif

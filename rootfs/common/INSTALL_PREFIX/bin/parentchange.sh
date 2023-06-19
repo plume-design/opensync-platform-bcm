@@ -102,6 +102,7 @@ recreate_sta_vap() {
 	rsn_pairwise_tkip=$(ovsh s -Ur Wifi_VIF_Config rsn_pairwise_tkip -w mode==sta | sed 1q | rtrim | grep .) || die "Failed to get rsn_pairwise_tkip"
 	rsn_pairwise_ccmp=$(ovsh s -Ur Wifi_VIF_Config rsn_pairwise_ccmp -w mode==sta | sed 1q | rtrim | grep .) || die "Failed to get rsn_pairwise_ccmp"
 	pmf=$(ovsh s -Ur Wifi_VIF_Config pmf -w mode==sta | sed 1q | rtrim | grep .) || die "Failed to get pmf"
+	multi_ap=$(ovsh s -Ur Wifi_VIF_Config multi_ap -w mode==sta | sed 1q | rtrim | grep .) || die "Failed to get multi_ap"
 
 	for i in $(ovsh s -Ur Wifi_Radio_Config if_name)
 	do
@@ -127,6 +128,7 @@ recreate_sta_vap() {
 		"rsn_pairwise_tkip:=$rsn_pairwise_tkip" \
 		"rsn_pairwise_ccmp:=$rsn_pairwise_ccmp" \
 		"pmf:=$pmf" \
+		"multi_ap:=$multi_ap" \
 		vif_radio_idx:=0)
 
 	ovsh u Wifi_Radio_Config -w if_name==$radio vif_configs::"$(

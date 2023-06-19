@@ -525,6 +525,7 @@ static proc_event_res_t process_event_probereq_msg_rx(
     uint8_t dsss_param_ie_len;
     const uint8_t *dsss_param_ie_channel;
     time_t snr_time;
+    unsigned int probe_req_filter_delay = CLIENT_PROBE_REQ_FILTER_PERIOD;
 
     rx_data = (const wl_event_rx_frame_data_t*) (event_raw + 1);
     hdr = (const struct dot11_management_header*) (rx_data + 1);
@@ -558,13 +559,14 @@ static proc_event_res_t process_event_probereq_msg_rx(
     /* Look for DSSS Parameter Set IE */
     do {
         int chan;
+        int centerchan;
         int width;
 
         if (!tlv_find_element(payload, payload_size, DOT11_MNG_DS_PARMS_ID,
             &dsss_param_ie_len, &dsss_param_ie_channel))
             break;
 
-        if (!bcmwl_radio_get_chanspec(event_raw->event.ifname, &chan, &width))
+        if (!bcmwl_radio_get_chanspec(event_raw->event.ifname, &chan, &centerchan, &width))
             break;
 
         LOGT(LOG_PREFIX"%s: probreq_msg_rx addr="PRI(os_macaddr_t)" dsss_param_cur_chan=%d",
@@ -573,21 +575,14 @@ static proc_event_res_t process_event_probereq_msg_rx(
         if (chan != *dsss_param_ie_channel)
             break;
 
-        /*
-         * At this point, based on information in DSSS Parameter Set IE, we know
-         * that STA sent probe on the same channel AP is listening. It's safe
-         * to skip probe filtering and report BSAL event immediately.
-         */
-        fill_bsal_probe_req_event(event, client, probe_snr, ssid_null);
-        return PROC_EVENT_NEW_BSAL_EVENT;
+        probe_req_filter_delay = 0;
     } while (0);
 
     // Update client state
     probe_add(client, probe_snr, snr_time, ssid_null);
     if (!ev_is_active(&client->probe_req_filter_timer))
     {
-        ev_timer_set(&client->probe_req_filter_timer,
-                     CLIENT_PROBE_REQ_FILTER_PERIOD, 0);
+        ev_timer_set(&client->probe_req_filter_timer, probe_req_filter_delay, 0);
         ev_timer_start(_ev_loop, &client->probe_req_filter_timer);
     }
 

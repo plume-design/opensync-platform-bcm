@@ -44,6 +44,7 @@ typedef struct
     uint8_t rrm_caps[DOT11_RRM_CAP_LEN];
     int rssi;
     int nf;
+    bool multi_ap;
     uint8_t max_chwidth;
     uint8_t max_streams;
     uint8_t max_mcs;

@@ -199,14 +199,15 @@ bcmwl_roam_prep(const char *ifname)
 {
     const char *p;
     int c;
+    int cc;
     int w;
 
     WARN_ON(!WL(ifname, "bss", "down"));
 
     if ((p = NVG(ifname, "chanspec")) && strlen(p)) {
         LOGD("roam: %s: chanspec '%s' found, syncing", ifname, p);
-        bcmwl_radio_chanspec_extract(p, &c, &w);
-        if (WARN_ON(!bcmwl_radio_channel_set(ifname, c, strfmta("HT%d", w))))
+        bcmwl_radio_chanspec_extract(p, &c, &cc, &w);
+        if (WARN_ON(!bcmwl_radio_channel_set(ifname, c, cc, strfmta("HT%d", w))))
             return false;
     }
 

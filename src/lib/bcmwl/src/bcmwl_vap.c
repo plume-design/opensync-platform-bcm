@@ -154,6 +154,7 @@ bcmwl_vap_get_status(const char *ifname, struct wl_status *status)
             if ((p = WL(ifname, "chanspec")))
                 bcmwl_radio_chanspec_extract(p,
                                              &status->channel,
+                                             &status->center_channel,
                                              &status->width_mhz);
         }
 
@@ -727,6 +728,10 @@ bool bcmwl_vap_update3(const struct schema_Wifi_VIF_Config *vconf,
         WARN_ON(!NVS(vif, "plume_bss_enabled", vconf->enabled ? "1" : "0"));
         WARN_ON(!WL(vif, "bss", "down"));
 
+        if (rconf->bcn_int != 0) {
+            WARN_ON(!WL(vif, "bi", strfmta("%d", rconf->bcn_int)));
+        }
+
         /* Start/stop background CAC */
         bcmwl_dfs_bgcac_recalc(phy);
 
@@ -851,7 +856,9 @@ bool bcmwl_vap_update3(const struct schema_Wifi_VIF_Config *vconf,
     if (vchanged->enabled || vchanged->mode) {
         if (!strcmp(vconf->mode, "ap")) {
             if (rconf->channel_exists && rconf->ht_mode_exists)
-                WARN_ON(!bcmwl_radio_channel_set(phy, rconf->channel, rconf->ht_mode));
+                WARN_ON(!bcmwl_radio_channel_set(phy, rconf->channel,
+                                                 rconf->center_freq0_chan,
+                                                 rconf->ht_mode));
             WARN_ON(!WL(vif, "bss", "up"));
         }
     }

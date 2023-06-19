@@ -120,6 +120,8 @@ static radio_chanwidth_t wl80211_scan_chanwidth_get(const wl80211_scan_record_t 
             return RADIO_CHAN_WIDTH_80MHZ;
         case 160:
             return RADIO_CHAN_WIDTH_160MHZ;
+        case 320:
+            return RADIO_CHAN_WIDTH_320MHZ;
     }
 
     return RADIO_CHAN_WIDTH_NONE;
@@ -159,6 +161,7 @@ static bool wl80211_scan_results_convert(
         }
         entry->chan         = record->chan_control;
         entry->chanwidth    = wl80211_scan_chanwidth_get(record);
+        entry->c_freq0_chan = record->chan_center;
         STRSCPY(entry->ssid, record->ssid);
         STRSCPY(bssid, record->bssid);
         STRSCPY(entry->bssid, str_tolower(bssid));

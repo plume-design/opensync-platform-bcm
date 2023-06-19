@@ -67,8 +67,10 @@ bool        bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
 bool        bcmwl_radio_state(const char *phyname,
                               struct schema_Wifi_Radio_State *rstate);
 void        bcmwl_radio_state_report(const char *ifname);
-void        bcmwl_radio_chanspec_extract(const char *chanspec, int *chan, int *width);
-bool        bcmwl_radio_channel_set(const char *phy, int channel, const char *ht_mode);
+void        bcmwl_radio_chanspec_extract(const char *chanspec, int *chan,
+                                         int *centerchan, int *width);
+bool        bcmwl_radio_channel_set(const char *phy, int channel,
+                                    int centerchannel, const char *ht_mode);
 int         bcmwl_radio_get_ap_active_cnt(const char *phy);
 bool        bcmwl_radio_chanspec_get(const char *phyname, int *channel, int *ht_mode);
 bool        bcmwl_radio_band_get(const char *phyname, char *band, ssize_t band_len);
@@ -94,6 +96,7 @@ struct wl_status
     char ssid[32 + 1];
     int rssi;
     int channel;
+    int center_channel;
     int width_mhz;
     int is_up;
     int is_sta;  /* if false, it's an ap */
@@ -234,7 +237,7 @@ void bcmwl_radio_radar_get(const char *phyname, struct schema_Wifi_Radio_State *
 char* bcmwl_radio_get_vifs(const char *phy);
 void bcmwl_radio_channels_get(const char *phyname, struct schema_Wifi_Radio_State *rstate);
 const char* bcmwl_channel_state(enum bcmwl_chan_state state);
-bool bcmwl_radio_get_chanspec(const char *phy, int *chan, int *width);
+bool bcmwl_radio_get_chanspec(const char *phy, int *chan, int *centerchan, int *width);
 int bcmwl_get_current_channels(const char *phyname, int *chan, int size);
 void bcmwl_radio_fallback_parents_set(const char *phyname, const struct schema_Wifi_Radio_Config *rconf);
 void bcmwl_radio_fallback_parents_get(const char *phyname, struct schema_Wifi_Radio_State *rstate);

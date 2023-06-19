@@ -54,6 +54,7 @@ DEFINES += -DBCM_WLIMPL=$(BCM_WLIMPL)
 # DRIVER_VERSION contains implXX, so strip away non-numeric
 # characters and compare against the threshold version.
 OVS_PACKAGE_VER := $(shell sed -n '/^APP/{s/^.*-//p;q}' $(USERSPACE_DIR)/public/apps/openvswitch/Makefile)
+SDK_OPENVSWITCH_PATH := $(USERSPACE_DIR)/public/apps/openvswitch/openvswitch-$(OVS_PACKAGE_VER)
 SDK_NEW_INC_PATHS_SINCE = 53
 SDK_DRV_VER = $(if $(strip $(DRIVER_VERSION_REAL)),$(DRIVER_VERSION_REAL),$(DRIVER_VERSION))
 SDK_NEW_INC_PATHS = $(shell test $(shell echo $(SDK_DRV_VER) | tr -dc 0-9) -ge $(SDK_NEW_INC_PATHS_SINCE) && echo y || echo n)
@@ -71,8 +72,6 @@ else
 SDK_INCLUDES += -I$(BRCMDRIVERS_DIR)/broadcom/net/wl/$(DRIVER_VERSION)/main/src/common/include
 endif
 SDK_INCLUDES += -I$(BRCMDRIVERS_DIR)/broadcom/net/wl/$(DRIVER_VERSION)/main/src/shared/bcmwifi/include
-SDK_INCLUDES += -I$(USERSPACE_DIR)/public/apps/openvswitch/openvswitch-$(OVS_PACKAGE_VER)
-SDK_INCLUDES += -I$(USERSPACE_DIR)/public/apps/openvswitch/openvswitch-$(OVS_PACKAGE_VER)/include
 
 INCLUDES     += $(SDK_INCLUDES)
 

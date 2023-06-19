@@ -234,6 +234,28 @@ int bcmwl_chanspec_get_primary(const int cs)
                 case WL_CHANSPEC_CTL_SB_UUU: return chan + 14;
             }
             return -1;
+#ifdef WL_CHANSPEC_BW_320
+        case WL_CHANSPEC_BW_320:
+            switch (sb) {
+                case WL_CHANSPEC_CTL_SB_LLLLL: return chan - 30;
+                case WL_CHANSPEC_CTL_SB_LLLLU: return chan - 26;
+                case WL_CHANSPEC_CTL_SB_LLLUL: return chan - 22;
+                case WL_CHANSPEC_CTL_SB_LLLUU: return chan - 18;
+                case WL_CHANSPEC_CTL_SB_LLULL: return chan - 14;
+                case WL_CHANSPEC_CTL_SB_LLULU: return chan - 10;
+                case WL_CHANSPEC_CTL_SB_LLUUL: return chan - 6;
+                case WL_CHANSPEC_CTL_SB_LLUUU: return chan - 2;
+                case WL_CHANSPEC_CTL_SB_LULLL: return chan + 2;
+                case WL_CHANSPEC_CTL_SB_LULLU: return chan + 6;
+                case WL_CHANSPEC_CTL_SB_LULUL: return chan + 10;
+                case WL_CHANSPEC_CTL_SB_LULUU: return chan + 14;
+                case WL_CHANSPEC_CTL_SB_LUULL: return chan + 18;
+                case WL_CHANSPEC_CTL_SB_LUULU: return chan + 22;
+                case WL_CHANSPEC_CTL_SB_LUUUL: return chan + 26;
+                case WL_CHANSPEC_CTL_SB_LUUUU: return chan + 30;
+            }
+            return -1;
+#endif
     }
 
     return -1;
@@ -246,6 +268,9 @@ int bcmwl_chanspec_get_bw_mhz(const int cs)
         case WL_CHANSPEC_BW_40: return 40;
         case WL_CHANSPEC_BW_80: return 80;
         case WL_CHANSPEC_BW_160: return 160;
+#ifdef WL_CHANSPEC_BW_320
+        case WL_CHANSPEC_BW_320: return 320;
+#endif
     }
 
     return 0;

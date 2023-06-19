@@ -82,6 +82,7 @@ bcmwl_cim_parse_v3_v4_us_v2(struct bcmwl_cim *arr,
         if (WARN_ON(!cim)) continue;
 
         cim->channel = chan;
+        cim->chanspec = conv->dtoh16(sample->chanspec);
         cim->usec.total = conv->dtoh64(sample->total_tm);
         cim->usec.tx = conv->dtoh64(sample->ccastats_us[CCASTATS_TXDUR]);
         cim->usec.rx = conv->dtoh64(sample->ccastats_us[CCASTATS_OBSS])

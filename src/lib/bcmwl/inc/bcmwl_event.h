@@ -55,6 +55,7 @@ bool    bcmwl_event_handler(const char *ifname,
                             os_macaddr_t *hwaddr,
                             void *event);
 void    bcmwl_event_setup_extra_cb(bcmwl_event_cb_t cb);
+int     bcmwl_event_get_dropped(int fd);
 int     bcmwl_event_socket_open(const char *ifname);
 int     bcmwl_event_socket_close(int fd);
 void    bcmwl_event_discard_probereq(void);

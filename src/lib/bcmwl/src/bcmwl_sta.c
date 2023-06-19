@@ -436,10 +436,13 @@ static void bcmwl_sta_get_sta_info_v8(
 {
 #if WL_STA_VER >= 8
     const sta_info_t *v8 = buf;
+    const uint32 flags = conv->dtoh32(v8->flags);
+    const bool map = flags & WL_STA_MAP;
 
     if (conv->dtoh16(v8->ver) < 8)
         return;
 
+    sta_info->multi_ap = map;
     memcpy(sta_info->rrm_caps, v8->rrm_capabilities, DOT11_RRM_CAP_LEN);
 #endif
 }

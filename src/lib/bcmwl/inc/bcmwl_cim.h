@@ -29,6 +29,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 struct bcmwl_cim {
     int channel;
+    int chanspec;
     int glitch;
     int nf;
     struct {

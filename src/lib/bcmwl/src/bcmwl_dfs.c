@@ -359,7 +359,7 @@ static const int* bcmwl_radio_get_cac_state_from_line(
 {
     char *ptr;
     char *block;
-    int c, cw;
+    int c, cc, cw;
 
     if (!line)
         return NULL;
@@ -376,6 +376,7 @@ static const int* bcmwl_radio_get_cac_state_from_line(
         *time_elapsed_ms = 0;
     c = -1;
     cw = -1;
+    cc = -1;
 
     LOGT("from_line \'%s\'", line);
     while ((block = strsep(&ptr, ","))) {
@@ -397,7 +398,7 @@ static const int* bcmwl_radio_get_cac_state_from_line(
         if (strstr(block, "chanspec:")) {
             if (strstr(block, "chanspec: none"))
                 return NULL;
-            bcmwl_radio_chanspec_extract(block + strlen("chanspec:") + 1, &c, &cw);
+            bcmwl_radio_chanspec_extract(block + strlen("chanspec:") + 1, &c, &cc, &cw);
         }
     }
 
@@ -539,7 +540,7 @@ bool bcmwl_radio_is_dfs_channel(const char *phy, uint8_t chan, const char *ht_mo
 bool bcmwl_dfs_bgcac_active(const char *phy, uint8_t chan, const char *ht_mode)
 {
     char *ptr;
-    int c, cw, bw;
+    int c, cc, cw, bw;
 
     bw = bcmwl_radio_ht_mode_to_int(ht_mode);
 
@@ -554,7 +555,7 @@ bool bcmwl_dfs_bgcac_active(const char *phy, uint8_t chan, const char *ht_mode)
     if (WARN_ON(!ptr))
         return false;
 
-    bcmwl_radio_chanspec_extract(ptr, &c, &cw);
+    bcmwl_radio_chanspec_extract(ptr, &c, &cc, &cw);
     if (chan != c)
         return false;
 
@@ -587,7 +588,7 @@ static bool bcmwl_dfs_get_cac_ready_channels(const char *phy, int *chan, int *bw
      * On Cyrus we can't change BW and cloud using 60/108/124.
      */
     int cw80[] = {60, 108, 124};
-    int c, cw;
+    int c, cc, cw;
     int channel;
     char *ptr;
     char *line;
@@ -597,7 +598,7 @@ static bool bcmwl_dfs_get_cac_ready_channels(const char *phy, int *chan, int *bw
     if (WARN_ON(!ptr))
         return false;
 
-    if (!bcmwl_radio_get_chanspec(phy, &c, &cw)) {
+    if (!bcmwl_radio_get_chanspec(phy, &c, &cc, &cw)) {
         LOGI("%s bgcac no current chanspec", phy);
         return false;
     }
