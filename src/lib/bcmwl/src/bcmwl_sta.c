@@ -327,6 +327,10 @@ static void bcmwl_sta_get_sta_info_v4(
     sta_info->capabilities = conv->dtoh16(v4->cap);
     sta_info->tx_total_bytes = conv->dtoh64(v4->tx_tot_bytes);
     sta_info->rx_total_bytes = conv->dtoh64(v4->rx_tot_bytes);
+    sta_info->tx_total_pkts = conv->dtoh64(v4->tx_tot_pkts);
+    sta_info->rx_total_pkts = conv->dtoh64(v4->rx_tot_pkts);
+    sta_info->tx_total_retries = conv->dtoh64(v4->tx_pkts_retried);
+    sta_info->rx_total_retries = conv->dtoh64(v4->rx_pkts_retried);
 
     sta_info->nf = v4->nf[0];
     sta_info->rssi = v4->rssi[0];
@@ -575,10 +579,111 @@ bcmwl_sta_arr_sub(unsigned long long *arr, size_t arr_len, unsigned long long bu
 static inline unsigned int
 bcmwl_sta_pktq_version(void)
 {
-#ifdef PKTQ_LOG_V06_HEADINGS_SIZE
+#if defined(PKTQ_STATS_DATA_STRUCT_VERSION)
+    return PKTQ_STATS_DATA_STRUCT_VERSION;
+#elif defined(PKTQ_LOG_V06_HEADINGS_SIZE)
     return 6;
 #else
     return 4;
+#endif
+}
+
+/* starting from pktq stats version 7 the older versioned _v0x_t
+ * structures are no longer provided, only the "current" structure is provided
+ * and a new define is introduced to check the version:
+ * PKTQ_STATS_DATA_STRUCT_VERSION
+ */
+#if defined(PKTQ_STATS_DATA_STRUCT_VERSION) && (PKTQ_STATS_DATA_STRUCT_VERSION > 7)
+#warning PKTQ_STATS_DATA_STRUCT_VERSION > 7 not yet implemented
+#endif
+
+int bcmwl_sta_get_tx_avg_rate_v7_mu(const wl_iov_pktq_log_t *resp,
+                                    int i,
+                                    const struct bcmwl_ioctl_num_conv *conv,
+                                    struct bcmwl_sta_pktq_stats *stats)
+{
+#if defined(PKTQ_STATS_DATA_STRUCT_VERSION) && (PKTQ_STATS_DATA_STRUCT_VERSION == 7)
+    const mac_log_mu_counters_t *c;
+    int n;
+
+    if (resp->version != 7)
+        return -1;
+    if ((resp->req.addr_type[i] & 0x7F) != 'M')
+        return -1;
+
+    n = NUMPRIO;
+    c = resp->pktq_log.v07.counters[i].mu;
+
+    for (; n; n--, c++) {
+        stats->mumimo += conv->dtoh32(c->su_count[MAC_LOG_MU_VHTMU]);
+        stats->mumimo += conv->dtoh32(c->su_count[MAC_LOG_MU_HEMMU]);
+        stats->mumimo += conv->dtoh32(c->su_count[MAC_LOG_MU_HEMOM]);
+        stats->mumimo += conv->dtoh32(c->su_count[MAC_LOG_MU_EHTMMU]);
+        stats->mumimo += conv->dtoh32(c->su_count[MAC_LOG_MU_EHTMOM]);
+        stats->muofdma += conv->dtoh32(c->su_count[MAC_LOG_MU_HEMOM]);
+        stats->muofdma += conv->dtoh32(c->su_count[MAC_LOG_MU_HEOMU]);
+        stats->muofdma += conv->dtoh32(c->su_count[MAC_LOG_MU_EHTMOM]);
+        stats->muofdma += conv->dtoh32(c->su_count[MAC_LOG_MU_EHTOMU]);
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_26]) * 26;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_52]) * 52;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_106]) * 106;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_242]) * 242;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_484]) * 484;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_996]) * 996;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_2x996]) * 996 * 2;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_4x996]) * 996 * 4;
+    }
+
+    LOGT("%s: %llu/%llu/%llu", __func__, stats->mumimo, stats->muofdma, stats->tones);
+    return 0;
+#else
+    /* if it reports v7 but headers didn't say it is
+     * supported then something is clearly wrong with the
+     * headers at build time and it needs to be addressed.
+     */
+    WARN_ON(resp->version == 7);
+    return -1;
+#endif
+}
+
+int bcmwl_sta_get_tx_avg_rate_v7(const wl_iov_pktq_log_t *resp,
+                                 int i,
+                                 const struct bcmwl_ioctl_num_conv *conv,
+                                 struct bcmwl_sta_pktq_stats *stats)
+{
+#if defined(PKTQ_STATS_DATA_STRUCT_VERSION) && (PKTQ_STATS_DATA_STRUCT_VERSION == 7)
+    const pktq_log_counters_t *c;
+    int n;
+
+    if (resp->version != 7)
+        return -1;
+    if ((resp->req.addr_type[i] & 0x7F) != 'A' &&
+        (resp->req.addr_type[i] & 0x7F) != 'N')
+        return -1;
+
+    n = NUMPRIO;
+    c = resp->pktq_log.v07.counters[i].pktq;
+
+    for (; n; n--, c++) {
+        stats->phyrate += conv->dtoh64(c->txrate_main) / 10;
+        stats->acked += conv->dtoh32(c->acked);
+        stats->retry += conv->dtoh32(c->retry);
+        stats->bw += conv->dtoh64(c->bandwidth);
+        stats->nss[0] += conv->dtoh32(c->nss[0]);
+        stats->nss[1] += conv->dtoh32(c->nss[1]);
+        stats->nss[2] += conv->dtoh32(c->nss[2]);
+        stats->nss[3] += conv->dtoh32(c->nss[3]);
+    }
+
+    LOGT("%s: %llu/%llu/%llu/%llu/%llu.%llu.%llu.%.llu", __func__, stats->phyrate, stats->acked, stats->retry, stats->bw, stats->nss[0], stats->nss[1], stats->nss[2], stats->nss[3]);
+    return 0;
+#else
+    /* if it reports v7 but headers didn't say it is
+     * supported then something is clearly wrong with the
+     * headers at build time and it needs to be addressed.
+     */
+    WARN_ON(resp->version == 7);
+    return -1;
 #endif
 }
 
@@ -618,7 +723,7 @@ int bcmwl_sta_get_tx_avg_rate_v6_mu(const wl_iov_pktq_log_t *resp,
     return 0;
 #else
     /* if it reports v6 but headers didn't say it is
-     * supported then somethimg is clearly wrong with the
+     * supported then something is clearly wrong with the
      * headers at build time and it needs to be addressed.
      */
     WARN_ON(resp->version == 6);
@@ -659,7 +764,7 @@ int bcmwl_sta_get_tx_avg_rate_v6(const wl_iov_pktq_log_t *resp,
     return 0;
 #else
     /* if it reports v6 but headers didn't say it is
-     * supported then somethimg is clearly wrong with the
+     * supported then something is clearly wrong with the
      * headers at build time and it needs to be addressed.
      */
     WARN_ON(resp->version == 6);
@@ -672,6 +777,12 @@ int bcmwl_sta_get_tx_avg_rate_v5(const wl_iov_pktq_log_t *resp,
                                  const struct bcmwl_ioctl_num_conv *conv,
                                  struct bcmwl_sta_pktq_stats *stats)
 {
+    /* starting from pktq stats version 7 the older
+     * structures are no longer provided and a new
+     * define is introduced to check the version:
+     * PKTQ_STATS_DATA_STRUCT_VERSION
+     */
+#if !defined(PKTQ_STATS_DATA_STRUCT_VERSION)
     const pktq_log_counters_v05_t *c;
     int n;
 
@@ -692,6 +803,10 @@ int bcmwl_sta_get_tx_avg_rate_v5(const wl_iov_pktq_log_t *resp,
 
     LOGT("%s: %llu/%llu/%llu", __func__, stats->phyrate, stats->acked, stats->retry);
     return 0;
+#else
+    WARN_ON(resp->version == 5);
+    return -1;
+#endif
 }
 
 int bcmwl_sta_get_tx_avg_rate_v4(const wl_iov_pktq_log_t *resp,
@@ -699,6 +814,12 @@ int bcmwl_sta_get_tx_avg_rate_v4(const wl_iov_pktq_log_t *resp,
                                  const struct bcmwl_ioctl_num_conv *conv,
                                  struct bcmwl_sta_pktq_stats *stats)
 {
+    /* starting from pktq stats version 7 the older
+     * structures are no longer provided and a new
+     * define is introduced to check the version:
+     * PKTQ_STATS_DATA_STRUCT_VERSION
+     */
+#if !defined(PKTQ_STATS_DATA_STRUCT_VERSION)
     const pktq_log_counters_v04_t *c;
     int n;
 
@@ -719,6 +840,10 @@ int bcmwl_sta_get_tx_avg_rate_v4(const wl_iov_pktq_log_t *resp,
 
     LOGT("%s: %llu/%llu/%llu", __func__, stats->phyrate, stats->acked, stats->retry);
     return 0;
+#else
+    WARN_ON(resp->version == 4);
+    return -1;
+#endif
 }
 
 int bcmwl_sta_get_tx_avg_rate(const char *ifname,
@@ -727,8 +852,21 @@ int bcmwl_sta_get_tx_avg_rate(const char *ifname,
 {
     const struct bcmwl_ioctl_num_conv *conv;
     struct bcmwl_sta_pktq_stats stats = {0};
+#ifdef PKTQ_STATS_DATA_STRUCT_VERSION
+    wl_iov_pktq_req_t req;
+    wl_iov_pktq_req_t *req_params = &req;
+    wl_iov_pktq_req_t *req_extra_params = &req;
+#else
     wl_iov_mac_full_params_t req;
+    wl_iov_mac_params_t *req_params = &req.params;
+    wl_iov_mac_extra_params_t *req_extra_params = &req.extra_params;
+#endif
     wl_iov_pktq_log_t resp;
+#ifdef PKTQ_STATS_DATA_STRUCT_VERSION
+    wl_iov_pktq_req_t *resp_params = &resp.req;
+#else
+    wl_iov_mac_params_t *resp_params = &resp.params;
+#endif
     unsigned long long sum_nss_su = 0;
     unsigned long long sum_nss;
     unsigned long max_nss;
@@ -748,33 +886,41 @@ int bcmwl_sta_get_tx_avg_rate(const char *ifname,
     if (WARN_ON(!(conv = bcmwl_ioctl_lookup_num_conv(ifname))))
         return -1;
 
-    req.params.addr_type[0] = 'A';
-    req.params.addr_type[1] = 'N';
-    req.params.addr_type[2] = 'M';
-    req.extra_params.addr_info[0] = 1 << 31; /* log auto bit, ie. all tids */
-    req.extra_params.addr_info[1] = 1 << 31; /* log auto bit, ie. all tids */
-    req.extra_params.addr_info[2] = 1 << 31; /* log auto bit, ie. all tids */
+    req_params->addr_type[0] = 'A';
+    req_params->addr_type[1] = 'N';
+    req_params->addr_type[2] = 'M';
+    req_extra_params->addr_info[0] = 1 << 31; /* log auto bit, ie. all tids */
+    req_extra_params->addr_info[1] = 1 << 31; /* log auto bit, ie. all tids */
+    req_extra_params->addr_info[2] = 1 << 31; /* log auto bit, ie. all tids */
     sscanf(mac, "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
-           &req.params.ea[0].octet[0], &req.params.ea[0].octet[1],
-           &req.params.ea[0].octet[2], &req.params.ea[0].octet[3],
-           &req.params.ea[0].octet[4], &req.params.ea[0].octet[5]);
-    memcpy(&req.params.ea[1], &req.params.ea[0], sizeof(req.params.ea[0]));
-    memcpy(&req.params.ea[2], &req.params.ea[0], sizeof(req.params.ea[0]));
-    req.params.num_addrs = 2;
-    req.params.num_addrs += pktq_ver >= 6 ? 1 : 0;
-    req.params.num_addrs |= pktq_ver << 8;
-    req.params.num_addrs = conv->dtoh32(req.params.num_addrs);
+           &req_params->ea[0].octet[0], &req_params->ea[0].octet[1],
+           &req_params->ea[0].octet[2], &req_params->ea[0].octet[3],
+           &req_params->ea[0].octet[4], &req_params->ea[0].octet[5]);
+    memcpy(&req_params->ea[1], &req_params->ea[0], sizeof(req_params->ea[0]));
+    memcpy(&req_params->ea[2], &req_params->ea[0], sizeof(req_params->ea[0]));
+    req_params->num_addrs = 2;
+    req_params->num_addrs += pktq_ver >= 6 ? 1 : 0;
+#if defined(PKTQ_STATS_DATA_STRUCT_VERSION) && (PKTQ_STATS_DATA_STRUCT_VERSION >= 7)
+    req.version = PKTQ_STATS_DATA_STRUCT_VERSION;
+#else
+    req_params->num_addrs |= pktq_ver << 8;
+    req_params->num_addrs = conv->dtoh32(req_params->num_addrs);
+#endif
 
     LOGT("%s: %s: pktq_stats addr=0x%08x\n",
-         ifname, mac, conv->dtoh32(req.params.num_addrs));
+         ifname, mac, conv->dtoh32(req_params->num_addrs));
 
     if (WARN_ON(!bcmwl_GIOV(ifname, "pktq_stats", &req, &resp)))
         return -1;
 
     resp.version = conv->dtoh32(resp.version);
-    resp.params.num_addrs = conv->dtoh32(resp.params.num_addrs);
+    resp_params->num_addrs = conv->dtoh32(resp_params->num_addrs);
 
-    for (i = 0; i < resp.params.num_addrs; i++) {
+    for (i = 0; i < resp_params->num_addrs; i++) {
+        if (bcmwl_sta_get_tx_avg_rate_v7_mu(&resp, i, conv, &stats) == 0)
+            continue;
+        if (bcmwl_sta_get_tx_avg_rate_v7(&resp, i, conv, &stats) == 0)
+            continue;
         if (bcmwl_sta_get_tx_avg_rate_v6_mu(&resp, i, conv, &stats) == 0)
             continue;
         if (bcmwl_sta_get_tx_avg_rate_v6(&resp, i, conv, &stats) == 0)

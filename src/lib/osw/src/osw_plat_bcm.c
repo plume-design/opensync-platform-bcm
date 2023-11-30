@@ -344,44 +344,6 @@ osw_plat_bcm_vif_each(struct osw_plat_bcm *m,
     nl_80211_vif_each(nl, NULL, osw_plat_bcm_vif_each_cb, &arg);
 }
 
-static void
-osw_plat_bcm_sta_each_cb(const struct nl_80211_sta *info,
-                         void *priv)
-{
-    struct osw_plat_bcm_sta_each_arg *arg = priv;
-    struct osw_plat_bcm_vif *vif = arg->vif;
-    struct osw_plat_bcm *m = vif->m;
-    struct nl_80211_sub *sub = m->nl_sub;
-    if (WARN_ON(sub == NULL)) return;
-
-    struct osw_plat_bcm_sta *sta = nl_80211_sub_sta_get_priv(sub, info);
-    if (WARN_ON(sta == NULL)) return;
-
-    arg->fn(arg->vif, sta, arg->priv);
-}
-
-static void
-osw_plat_bcm_sta_each(struct osw_plat_bcm_vif *vif,
-                      osw_plat_bcm_sta_each_fn_t *fn,
-                      void *priv)
-{
-    struct osw_plat_bcm_sta_each_arg arg = {
-        .vif = vif,
-        .fn = fn,
-        .priv = priv,
-    };
-
-    struct osw_plat_bcm *m = vif->m;
-    struct osw_drv_nl80211_ops *nl_ops = m->nl_ops;
-    if (nl_ops == NULL) return;
-
-    struct nl_80211 *nl = nl_ops->get_nl_80211_fn(nl_ops);
-    if (nl == NULL) return;
-
-    const uint32_t ifindex = vif->info->ifindex;
-    nl_80211_sta_each(nl, ifindex, osw_plat_bcm_sta_each_cb, &arg);
-}
-
 static const struct nl_80211_phy *
 osw_plat_bcm_vif_into_phy_nl(struct osw_plat_bcm_vif *vif)
 {
@@ -523,6 +485,18 @@ osw_plat_bcm_conf_enable_phys(struct osw_drv_conf *drv_conf)
             WARN_ON(WL(phy_name, "up") == NULL);
         }
     }
+}
+
+static void
+osw_plat_bcm_conf_vif_ap_enabled(struct osw_drv_phy_config *phy,
+                                 struct osw_drv_vif_config *vif)
+{
+    if (vif->enabled_changed == false) return;
+
+    const char *vif_name = vif->vif_name;
+    const char *arg = vif->enabled ? "up" : "down";
+
+    WARN_ON(!WL(vif_name, "bss", arg));
 }
 
 static void
@@ -723,6 +697,7 @@ osw_plat_bcm_conf_each_vif(struct osw_drv_phy_config *phy,
 
     switch (vif->vif_type) {
         case OSW_VIF_AP:
+            osw_plat_bcm_conf_vif_ap_enabled(phy, vif);
             osw_plat_bcm_conf_vif_ap_mcast2ucast(phy, vif);
             osw_plat_bcm_conf_vif_ap_acl(phy, vif);
             osw_plat_bcm_conf_vif_ap_acl_policy(phy, vif);
@@ -916,15 +891,12 @@ osw_plat_bcm_vif_stats_set_cb(struct osw_plat_bcm *m,
 }
 
 static void
-osw_plat_bcm_sta_tx_avg_cb(struct osw_plat_bcm_vif *vif,
-                           struct osw_plat_bcm_sta *sta,
-                           void *priv)
+osw_plat_bcm_sta_tx_avg(struct osw_plat_bcm_vif *vif,
+                        const struct osw_hwaddr *sta_addr)
 {
     const char *vif_name = vif->info->name;
     const char *phy_name = osw_plat_bcm_vif_into_phy_name(vif);
-    const os_macaddr_t *hwaddr = &sta->info->addr;
-    const struct osw_hwaddr *sta_addr = osw_hwaddr_from_cptr_unchecked(hwaddr->addr);
-    if (phy_name == NULL) return;
+    const os_macaddr_t *hwaddr = (const os_macaddr_t *)sta_addr->octet;
 
     bcmwl_sta_info_t info = {0};
     const bool found = bcmwl_sta_get_sta_info(vif_name, hwaddr, &info);
@@ -947,6 +919,10 @@ osw_plat_bcm_sta_tx_avg_cb(struct osw_plat_bcm_vif *vif,
     const uint32_t retry = rate.tried - mpdu;
     const uint32_t tx_bytes = info.tx_total_bytes;
     const uint32_t rx_bytes = info.rx_total_bytes;
+    const uint32_t tx_pkts = info.tx_total_pkts;
+    const uint32_t rx_pkts = info.rx_total_pkts;
+    const uint32_t tx_retries = info.tx_total_retries;
+    const uint32_t rx_retries = info.rx_total_retries;
 
     struct osw_plat_bcm *m = vif->m;
     struct osw_drv *drv = m->drv_nl80211;
@@ -961,11 +937,13 @@ osw_plat_bcm_sta_tx_avg_cb(struct osw_plat_bcm_vif *vif,
         osw_tlv_put_u32(&t, OSW_STATS_STA_SNR_DB, snr);
         if (mpdu > 0) {
             osw_tlv_put_u32(&t, OSW_STATS_STA_TX_RATE_MBPS, tx_mbps);
-            osw_tlv_put_u32_delta(&t, OSW_STATS_STA_TX_FRAMES, mpdu);
-            osw_tlv_put_u32_delta(&t, OSW_STATS_STA_TX_RETRIES, retry);
         }
         osw_tlv_put_u32(&t, OSW_STATS_STA_TX_BYTES, tx_bytes);
+        osw_tlv_put_u32(&t, OSW_STATS_STA_TX_FRAMES, tx_pkts);
+        osw_tlv_put_u32(&t, OSW_STATS_STA_TX_RETRIES, tx_retries);
         osw_tlv_put_u32(&t, OSW_STATS_STA_RX_BYTES, rx_bytes);
+        osw_tlv_put_u32(&t, OSW_STATS_STA_RX_FRAMES, rx_pkts);
+        osw_tlv_put_u32(&t, OSW_STATS_STA_RX_RETRIES, rx_retries);
         osw_tlv_end_nested(&t, off);
 
         LOGT(LOG_PREFIX_STA(phy_name, vif_name, sta_addr,
@@ -1014,8 +992,6 @@ osw_plat_bcm_sta_rx_avg_cb(const char *vif_name,
         osw_tlv_put_string(&t, OSW_STATS_STA_VIF_NAME, vif_name);
         osw_tlv_put_hwaddr(&t, OSW_STATS_STA_MAC_ADDRESS, sta_addr);
         osw_tlv_put_u32(&t, OSW_STATS_STA_RX_RATE_MBPS, rx_mbps);
-        osw_tlv_put_u32_delta(&t, OSW_STATS_STA_RX_FRAMES, mpdu);
-        osw_tlv_put_u32_delta(&t, OSW_STATS_STA_RX_RETRIES, retry);
         osw_tlv_end_nested(&t, off);
 
         LOGT(LOG_PREFIX_STA(phy_name, vif_name, sta_addr,
@@ -1039,7 +1015,26 @@ osw_plat_bcm_vif_stats_run_sta(struct osw_plat_bcm_phy *phy,
 
     LOGT(LOG_PREFIX_VIF(phy_name, vif_name, "stats: running: sta"));
 
-    osw_plat_bcm_sta_each(vif, osw_plat_bcm_sta_tx_avg_cb, vif);
+    /* Can't really rely on nl_80211 object mapping because
+     * the driver does not properly advertise station
+     * add/del events. It does allow dumping them but that
+     * can't be easily handled here for iteration.
+     */
+    char *assoclist = WL(vif_name, "assoclist") ?: "";
+    char *line;
+    while ((line = strsep(&assoclist, "\r\n")) != NULL) {
+        const char *identifier = strsep(&line, " ");
+        const bool wrong_identifier = (identifier == NULL)
+                                   || (strcmp(identifier, "assoclist") != 0);
+        if (wrong_identifier) continue;
+
+        const char *macstr = strsep(&line, "") ?: "";
+        struct osw_hwaddr addr;
+        const bool invalid_macstr = (osw_hwaddr_from_cstr(macstr, &addr) == false);
+        if (invalid_macstr) continue;
+
+        osw_plat_bcm_sta_tx_avg(vif, &addr);
+    }
 
     const bool rx_err = bcmwl_sta_get_rx_avg_rate(vif_name, osw_plat_bcm_sta_rx_avg_cb, vif);
     WARN_ON(rx_err);
@@ -1280,7 +1275,14 @@ osw_plat_bcm_get_vif_state_supplement_wds(const char *phy_name,
     const bool is_not_wds = (strstr(vif_name, "wds") != vif_name);
     if (is_not_wds) return;
 
-    state->exists = os_nif_is_up((char *)vif_name, &state->enabled);
+    bool is_up;
+    state->exists = os_nif_is_up((char *)vif_name, &is_up);
+    if (state->exists) {
+        const enum osw_vif_status status = is_up
+                                         ? OSW_VIF_ENABLED
+                                         : OSW_VIF_DISABLED;
+        osw_vif_status_set(&state->status, status);
+    }
     state->vif_type = OSW_VIF_AP_VLAN;
 
     os_macaddr_t mac;
@@ -1422,7 +1424,7 @@ osw_plat_bcm_phy_fix_channels(const struct nl_80211_phy *info)
      * list reported over nl80211 is not constrained
      * properly to the regulatory and factory limits. It
      * gets updated when first interface is brought up. If
-     * the interace is up then it is already correct.
+     * the interface is up then it is already correct.
      */
     const bool chanlist_possibly_wrong = (is_up == false);
     if (chanlist_possibly_wrong) {
@@ -2672,7 +2674,7 @@ osw_plat_bcm_fix_phy_dfs(const char *phy_name,
         }
 
         if (cs->dfs_nol_remaining_seconds != nol_rem_seconds) {
-            LOGT(LOG_PREFIX_PHY(phy_name, "dfs: "OSW_CHANNEL_FMT" nol remaning seconds: %d -> %d",
+            LOGT(LOG_PREFIX_PHY(phy_name, "dfs: "OSW_CHANNEL_FMT" nol remaining seconds: %d -> %d",
                                 OSW_CHANNEL_ARG(c),
                                 cs->dfs_nol_remaining_seconds,
                                 nol_rem_seconds));
@@ -2703,6 +2705,20 @@ osw_plat_bcm_fix_phy_state_cb(struct osw_drv_nl80211_hook *hook,
     osw_plat_bcm_fix_phy_regulatory(phy_name, state);
     osw_plat_bcm_fix_phy_dfs(phy_name, state);
     osw_plat_bcm_fix_phy_radar(phy_name, state);
+}
+
+static void
+osw_plat_bcm_fix_vif_ap_enabled(const char *phy_name,
+                                const char *vif_name,
+                                struct osw_drv_vif_state *state)
+{
+    const char *buf = WL(vif_name, "bss");
+    if (WARN_ON(buf == NULL)) return;
+    const bool is_up = (strcmp(buf, "up") == 0);
+    const enum osw_vif_status status = is_up
+                                     ? OSW_VIF_ENABLED
+                                     : OSW_VIF_DISABLED;
+    osw_vif_status_set(&state->status, status);
 }
 
 static void
@@ -2933,6 +2949,7 @@ osw_plat_bcm_fix_vif_ap_state(const char *phy_name,
     (void)ap;
 
     osw_plat_bcm_fix_vif_channel(phy_name, vif_name, &state->u.ap.channel);
+    osw_plat_bcm_fix_vif_ap_enabled(phy_name, vif_name, state);
     osw_plat_bcm_fix_vif_ap_mcast2ucast(phy_name, vif_name, state);
     osw_plat_bcm_fix_vif_ap_acl(phy_name, vif_name, state);
     osw_plat_bcm_fix_vif_ap_acl_policy(phy_name, vif_name, state);

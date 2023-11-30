@@ -24,6 +24,7 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# {# jinja-parse #}
 #
 # Collect BCM info
 #
@@ -140,6 +141,14 @@ collect_flowmgr()
     fi
 }
 
+collect_debug_monitor()
+{
+    if [ -e {{INSTALL_PREFIX}}/log_archive/debug_monitor/* ]; then
+        mkdir -p "$LOGPULL_TMP_DIR/debug_monitor"
+        mv {{INSTALL_PREFIX}}/log_archive/debug_monitor/* "$LOGPULL_TMP_DIR/debug_monitor"
+    fi
+}
+
 collect_platform_bcm()
 {
     collect_bcmwl
@@ -148,6 +157,7 @@ collect_platform_bcm()
 #    collect_flowcache
 #    collect_archer
     collect_flowmgr
+    collect_debug_monitor
 }
 
 collect_platform_bcm

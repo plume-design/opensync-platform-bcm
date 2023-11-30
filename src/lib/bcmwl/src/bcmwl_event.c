@@ -1145,7 +1145,7 @@ static void bcmwl_event_nl_handle(const void *const buf, unsigned int len)
     const struct nlmsghdr *hdr;
     const struct rtattr *attr;
     int attrlen;
-    int hdrlen;
+    unsigned hdrlen;
 
     util_nl_each_msg_type(buf, len, hdr, hdrlen, RTM_NEWLINK) {
         util_nl_each_attr_type(hdr, attr, attrlen, IFLA_IFNAME) {

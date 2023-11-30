@@ -40,6 +40,10 @@ typedef struct
     uint16_t capabilities;
     uint64_t rx_total_bytes;
     uint64_t tx_total_bytes;
+    uint64_t rx_total_pkts;
+    uint64_t tx_total_pkts;
+    uint64_t rx_total_retries;
+    uint64_t tx_total_retries;
     bool is_btm_supported;
     uint8_t rrm_caps[DOT11_RRM_CAP_LEN];
     int rssi;

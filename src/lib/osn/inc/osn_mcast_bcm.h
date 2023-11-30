@@ -111,6 +111,8 @@ typedef struct
     int                         mcpd_retry;
     ev_debounce                 ovs_debounce;
     int                         ovs_retry;
+    ev_debounce                 native_debounce;
+    int                         native_retry;
     bool                        igmp_initialized;
     osn_igmp_t                  igmp;
     bool                        mld_initialized;

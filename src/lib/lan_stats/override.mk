@@ -33,3 +33,11 @@ UNIT_CFLAGS += -I$(SDK_OPENVSWITCH_PATH)
 # needed for openvswitch/compiler.h
 UNIT_CFLAGS += -I$(SDK_OPENVSWITCH_PATH)/include
 
+# required by openvswitch-2.17.3/include/linux/netlink.h,
+# so that it does not clash with
+# toolchains/.../sysroot/usr/include/linux/netlink.h
+UNIT_CFLAGS += -include config.h
+# Alternatively this also works:
+# UNIT_CFLAGS += -DHAVE_NLA_BITFIELD32=1
+# but including the openvswitch/config.h seems a better solution
+

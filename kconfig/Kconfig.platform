@@ -342,6 +342,20 @@ config BCMWL_HE_FEATURES
         0x40: HE STA ULMU support
         0x80: HE ER SU Rx support
 
+config BCMWL_EHT_FEATURES
+    string "wl eht features flags"
+    default "7"
+    help
+        Using -1 will enable all features that a radio supports
+        wl eht features [<features mask>] - query or enable/disable EHT sub-features
+        0x01: EHT 6G support
+        0x02: EHT 5G support
+        0x04: EHT 2G support
+        0x08: EHT DL OFDMA support
+        0x10: EHT UL OFDMA support
+        0x20: EHT DL MU-MIMO support
+        0x40: EHT UL MU-MIMO support
+
 config BCM_PERFORMANCE_BOOST
     bool "Performance boost"
     default y
@@ -357,4 +371,10 @@ config BCM_EEE_DISABLE_ETH_LIST
 
         List example:
         eth0 eth1 eth2
+
+config BCM_SPEEDTEST_RT_RUNTIME
+    int "RT_RUNTIME value"
+    default 95000
+    help
+        Sets the RT_RUNTIME for speedtest priority.
 endif # PLATFORM_IS_BCM

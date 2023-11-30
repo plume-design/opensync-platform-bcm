@@ -26,42 +26,13 @@
 
 # {# jinja-parse #}
 
-# run a command with increased process priority
-# and temporarily elevated system rt_runtime
+echo -n "Configuring BCM debug_monitor... "
 
-RT_RUNTIME={{ CONFIG_BCM_SPEEDTEST_RT_RUNTIME }}
-CHRT_PRIO="-r 5"
-SIGNALS="INT HUP TERM EXIT QUIT"
+# reboot device as recovery
+{% if CONFIG_OSP_REBOOT_CLI_OVERRIDE -%}
+nvram set "recovery_script=/sbin/reboot -Rtype=crash -Rreason=fw-trap"
+{%- else -%}
+nvram set "recovery_script=/sbin/reboot"
+{%- endif %}
 
-restore_rt_runtime()
-{
-    RET=$?
-    if [ -n "$ORIG_RT_RUNTIME" ]; then
-        logger "[$PPID]: $0: restoring sched_rt_runtime to $ORIG_RT_RUNTIME"
-        echo "$ORIG_RT_RUNTIME" > /proc/sys/kernel/sched_rt_runtime_us
-    fi
-    trap - $SIGNALS
-    exit $RET
-}
-
-# temporarily elevate sched_rt_runtime
-ORIG_RT_RUNTIME=$(grep "BRCM_SCHED_RT_RUNTIME=" /etc/build_profile 2>/dev/null | cut -d= -f2)
-if [ -n "$ORIG_RT_RUNTIME" -a "$RT_RUNTIME" -gt "$ORIG_RT_RUNTIME" ]; then
-    logger "[$PPID]: $0: elevating sched_rt_runtime to $RT_RUNTIME"
-    trap restore_rt_runtime $SIGNALS
-    echo "$RT_RUNTIME" > /proc/sys/kernel/sched_rt_runtime_us
-else
-    logger "[$PPID]: $0: WARNING: not changing sched_rt_runtime $ORIG_RT_RUNTIME to $RT_RUNTIME"
-fi
-
-# if args start with - pass them to chrt
-if [ "${1:0:1}" = "-" ]; then
-    CHRT_PRIO=
-fi
-
-# run command with increased prio
-logger "[$PPID]: $0: /usr/bin/chrt $CHRT_PRIO $*"
-/usr/bin/chrt $CHRT_PRIO "$@"
-
-# restore original sched_rt_runtime
-restore_rt_runtime
+echo "done."

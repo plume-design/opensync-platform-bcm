@@ -26,42 +26,22 @@
 
 # {# jinja-parse #}
 
-# add default internal bridge
-{%- if CONFIG_TARGET_USE_WAN_BRIDGE %}
-# Add offset to a MAC address
-mac_set_local_bit()
-{
-    local MAC="$1"
+case "$1" in
+	start)
+		echo "Starting BCM debug_monitor..."
 
-    # ${MAC%%:*} - first digit in MAC address
-    # ${MAC#*:} - MAC without first digit
-    printf "%02X:%s" $(( 0x${MAC%%:*} | 0x2 )) "${MAC#*:}"
-}
-{%- endif %}
+		# debug_monitor prerequisites
+		mkdir -p /tmp/dm/
+		mkdir -p {{INSTALL_PREFIX}}/log_archive/debug_monitor/
 
-# Get the MAC address of an interface
-mac_get()
-{
-    ifconfig "$1" | grep -o -E '([A-F0-9]{2}:){5}[A-F0-9]{2}'
-}
+		debug_monitor {{INSTALL_PREFIX}}/log_archive/debug_monitor/ 2>&1 | logger -t debug_monitor &
+		exit 0
+		;;
 
-MAC_ETH0=$(mac_get eth0)
-{%- if CONFIG_TARGET_USE_WAN_BRIDGE %}
-# Set the local bit on eth0
-MAC_BRHOME=$(mac_set_local_bit ${MAC_ETH0})
-{%- else %}
-MAC_BRHOME=$MAC_ETH0
-{%- endif %}
+	*)
+		echo "$0: unrecognized or unsupported option $1"
+		exit 1
+		;;
 
-{%- if CONFIG_TARGET_USE_WAN_BRIDGE %}
-echo "Adding WAN bridge with MAC address $MAC_ETH0"
-ovs-vsctl add-br {{ CONFIG_TARGET_WAN_BRIDGE_NAME }}
-ovs-vsctl set bridge {{ CONFIG_TARGET_WAN_BRIDGE_NAME }} other-config:hwaddr="$MAC_ETH0"
-ovs-vsctl set int {{ CONFIG_TARGET_WAN_BRIDGE_NAME }} mtu_request=1500
-{%- endif %}
-
-echo "Adding LAN bridge with MAC address $MAC_BRHOME"
-ovs-vsctl add-br {{ CONFIG_TARGET_LAN_BRIDGE_NAME }}
-ovs-vsctl set bridge {{ CONFIG_TARGET_LAN_BRIDGE_NAME }} other-config:hwaddr="$MAC_BRHOME"
-ovs-ofctl add-flow {{ CONFIG_TARGET_LAN_BRIDGE_NAME }} table=0,priority=50,dl_type=0x886c,actions=local
+esac
 

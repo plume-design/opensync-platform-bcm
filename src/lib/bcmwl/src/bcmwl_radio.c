@@ -187,8 +187,9 @@ bool bcmwl_radio_is_dhd(const char *ifname)
 static const char* bcmwl_radio_get_hwmode(const char *dphy)
 {
     const int feat = atoi(CONFIG_BCMWL_HE_FEATURES);
+    const int eht_feat = atoi(CONFIG_BCMWL_EHT_FEATURES);
 
-    if (atoi(WL(dphy, "eht", "enab") ?: "0"))
+    if (atoi(WL(dphy, "eht", "enab") ?: "0") && atoi(WL(dphy, "eht", "features") ?: "0") == eht_feat)
         return "11be";
     if (atoi(WL(dphy, "he", "enab") ?: "0") && atoi(WL(dphy, "he", "features") ?: "0") == feat)
         return "11ax";
@@ -217,6 +218,7 @@ static const char* bcmwl_radio_get_hwname(const char *dphy)
         "0x6710", "bcm6710",
         "0x6715", "bcm6715",
         "0x6717", "bcm6717",
+        "0x6726", "bcm6726",
         "0x6756", "bcm6756",
         NULL, NULL,
     };
@@ -842,14 +844,15 @@ bool bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
         const char *he;
         const char *eht;
         const char *he_features;
+        const char *eht_features;
     } modes[] = {
-        { "11be", "-1", "1", "1", "1", CONFIG_BCMWL_HE_FEATURES },
-        { "11ax", "-1", "1", "1", "0", CONFIG_BCMWL_HE_FEATURES },
-        { "11ac", "-1", "1", "0", "0", "0" },
-        { "11n",  "-1", "0", "0", "0", "0" },
-        { "11g",  "0",  "0", "0", "0", "0" },
-        { "11b",  "0",  "0", "0", "0", "0" },
-        { "11a",  "0",  "0", "0", "0", "0" },
+        { "11be", "-1", "1", "1", "1", CONFIG_BCMWL_HE_FEATURES, CONFIG_BCMWL_EHT_FEATURES },
+        { "11ax", "-1", "1", "1", "0", CONFIG_BCMWL_HE_FEATURES, "0" },
+        { "11ac", "-1", "1", "0", "0", "0", "0" },
+        { "11n",  "-1", "0", "0", "0", "0", "0" },
+        { "11g",  "0",  "0", "0", "0", "0", "0" },
+        { "11b",  "0",  "0", "0", "0", "0", "0" },
+        { "11a",  "0",  "0", "0", "0", "0", "0" },
     };
     size_t i;
     char *p;
@@ -877,8 +880,10 @@ bool bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
                 WARN_ON(!WL(phy, "he", "enab", modes[i].he));
                 WARN_ON(!WL(phy, "he", "features", modes[i].he_features));
             }
-            if (WL(phy, "eht", "enab") != NULL)
+            if (WL(phy, "eht", "enab") != NULL) {
                 WARN_ON(!WL(phy, "eht", "enab", modes[i].eht));
+                WARN_ON(!WL(phy, "eht", "features", modes[i].eht_features));
+            }
         }
 
         /* If rchanged->enabled is true then the radio will

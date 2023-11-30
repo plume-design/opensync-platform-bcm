@@ -117,6 +117,26 @@ target_radio_init_mbo(void)
 }
 
 static void
+target_radio_init_probresp_sw_war(void)
+{
+    struct dirent *p;
+    DIR *d;
+
+    /* pre-11be drivers support probresp_sw iovar per phy.
+     * This previously was part of opensync interface
+     * initialization procedure. Since 11be driver removed
+     * support for probresp_sw making it default behavior
+     * run this iovar here instead.
+     */
+    for (d = opendir("/sys/class/net"); d && (p = readdir(d)); )
+        if (bcmwl_is_phy(p->d_name))
+            WL(p->d_name, "probresp_sw", "1");
+
+    if (!WARN_ON(!d))
+        closedir(d);
+}
+
+static void
 target_bcmwl_wps_set_script(void)
 {
     char wps_script[64] = { 0 };
@@ -141,6 +161,7 @@ target_radio_init(const struct target_radio_ops *ops)
     target_radio_init_mbo();
     target_radio_init_uapsd_war();
     target_radio_init_steer_war();
+    target_radio_init_probresp_sw_war();
 
     return true;
 }

@@ -205,9 +205,6 @@ bool bcmwl_acl_is_synced(const char *ifname)
     const char *str;
     char *acl;
 
-    str = WL(ifname, "probresp_sw");
-    if (str && atoi(str) != 1)
-        return false;
     str = WL(ifname, "authresp_mac_filter");
     if (str && atoi(str) != 1)
         return false;
@@ -231,9 +228,6 @@ bool bcmwl_acl_commit(const char *ifname)
         return false;
     WL(ifname, "authresp_mac_filter", "1");
     if (WARN_ON(!WL(ifname, "probresp_mac_filter", "1")))
-        goto out;
-    if (atoi(WL(ifname, "probresp_sw") ?: "0") != 1 &&
-        WARN_ON(!WL(ifname, "probresp_sw", "1")))
         goto out;
     if (WARN_ON(!(acl = strdupafree(bcmwl_acl_merge(ifname, &policy)))))
         goto out;

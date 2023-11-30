@@ -26,6 +26,9 @@
 SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/public/include
 SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/public/include/protobuf-c
 
+SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/kernel/$(PROFILE_ARCH)/include/
+SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/kernel/include/
+
 INCLUDES     +=   $(SDK_INCLUDES)
 INCLUDES     += -I$(BCM_BUILD_ROOT)/bcmdrivers/broadcom/net/wl/$(DRIVER_VERSION)/main/src/common/include
 INCLUDES     += -I$(BCM_BUILD_ROOT)/bcmdrivers/broadcom/net/wl/$(DRIVER_VERSION)/main/src/include
@@ -58,6 +61,8 @@ $(info TARGET=$(TARGET))
 $(info INCLUDES=$(INCLUDES))
 $(info DEFINES=$(DEFINES))
 $(info SDK_ROOTFS=$(SDK_ROOTFS))
+$(info KERNEL_ARCH=$(KERNEL_ARCH))
+$(info PROFILE_ARCH=$(PROFILE_ARCH))
 $(info -----------------)
 endif
 

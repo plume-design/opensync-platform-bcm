@@ -29,6 +29,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 /* std libc */
 #include <stdio.h>
 #include <errno.h>
+#include <glob.h>
 #include <sys/types.h>
 #include <dirent.h>
 #include <net/if.h>
@@ -52,6 +53,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 /* local */
 #define MODULE_ID LOG_MODULE_ID_TARGET
 #define BCMWL_HOSTAP_DFS_SCAN_FAILURES_KEEPAPUP 3
+#define BCMWL_HOSTAP_DFS_SCAN_FAILURES_BSSDOWN 6
 
 static ev_async g_nl_async;
 static ev_io g_nl_io;
@@ -71,6 +73,41 @@ bcmwl_hostap_bss_report(const char *bss)
     phy = strfmta("wl%d", r);
     evx_debounce_call(bcmwl_vap_state_report, bss);
     evx_debounce_call(bcmwl_radio_state_report, phy);
+}
+
+static void
+bcmwl_hostap_all_local_bss_down(struct wpas *wpas)
+{
+    const char *bss = wpas->ctrl.bss;
+    int r;
+    int v;
+    if (WARN_ON(!bcmwl_parse_vap(bss, &r, &v)))
+        return;
+
+    glob_t g;
+    const char *pattern = strfmta("/sys/class/net/wl%d.*", r);
+    const int err = glob(pattern, 0, NULL, &g);
+    if (err) return;
+
+    size_t i;
+    for (i = 0; i < g.gl_pathc; i++) {
+        char *path = strdupa(g.gl_pathv[i]);
+        char *if_name = basename(path);
+        if (if_name == NULL) continue;
+        WL(if_name, "bss", "down");
+    }
+    globfree(&g);
+}
+
+static void
+bcmwl_hostap_all_local_bss_down_maybe(struct wpas *wpas)
+{
+    if (g_scan_failures < BCMWL_HOSTAP_DFS_SCAN_FAILURES_BSSDOWN) return;
+
+    LOGI("%s: trying to disable all local bsses (scan failures=%d)",
+         wpas->ctrl.bss, g_scan_failures);
+
+    bcmwl_hostap_all_local_bss_down(wpas);
 }
 
 static void
@@ -226,6 +263,7 @@ bcmwl_hostap_wpas_scan_failed(struct wpas *wpas, int status)
 {
     g_scan_failures++;
     bcmwl_hostap_disable_keep_ap_up_maybe(wpas);
+    bcmwl_hostap_all_local_bss_down_maybe(wpas);
 }
 
 /* helpers */
@@ -326,6 +364,7 @@ bcmwl_hostap_init_bss(const char *bss)
          * inside hapd.c */
         hapd->use_reload_rxkhs = true;
         hapd->use_rxkh_file = true;
+        hapd->use_op_class = false;
         ctrl_enable(&hapd->ctrl);
         hapd = NULL;
     }
@@ -367,7 +406,7 @@ bcmwl_hostap_nl_io(EV_P_ ev_io *io, int events)
         return;
     }
 
-    for (nlh = (void *)buf; NLMSG_OK(nlh, n); nlh = NLMSG_NEXT(nlh, n))
+    for (nlh = (void *)buf; NLMSG_OK(nlh, (unsigned)n); nlh = NLMSG_NEXT(nlh, n))
         if (nlh->nlmsg_type == RTM_NEWLINK)
             for (rta = IFLA_RTA(NLMSG_DATA(nlh)), len = IFLA_PAYLOAD(nlh);
                  RTA_OK(rta, len);

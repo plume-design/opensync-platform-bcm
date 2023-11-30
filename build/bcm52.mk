@@ -73,13 +73,20 @@ SDK_INCLUDES += -I$(BRCMDRIVERS_DIR)/broadcom/net/wl/$(DRIVER_VERSION)/main/src/
 endif
 SDK_INCLUDES += -I$(BRCMDRIVERS_DIR)/broadcom/net/wl/$(DRIVER_VERSION)/main/src/shared/bcmwifi/include
 
+SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/kernel/$(PROFILE_ARCH)/include/
+SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/kernel/include/
+
 INCLUDES     += $(SDK_INCLUDES)
 
 HOSTAP_HEADERS := -I$(BRCMDRIVERS_DIR)/broadcom/net/wl/$(DRIVER_VERSION)/main/components/opensource/router_tools/hostapd/src/common
 
 # libnl3 (netlink lib) available only together with hostap
 ifeq ($(CONFIG_BCM_USE_HOSTAP),y)
+ifneq ($(wildcard $(BCM_FSBUILD_DIR)/public/include/libnl3/netlink/netlink.h),)
+LIBNL3_HEADERS = -I$(BCM_FSBUILD_DIR)/public/include/libnl3
+else
 LIBNL3_HEADERS = -I$(BRCMDRIVERS_DIR)/broadcom/net/wl/$(DRIVER_VERSION)/main/components/opensource/router_tools/libnl/install/include/libnl3
+endif
 export LIBNL3_HEADERS
 endif
 
@@ -119,6 +126,8 @@ $(info DEFINES=$(DEFINES))
 $(info SDK_ROOTFS=$(SDK_ROOTFS))
 $(info DRIVER_VERSION=$(DRIVER_VERSION))
 $(info BRCMDRIVERS_DIR=$(BRCMDRIVERS_DIR))
+$(info KERNEL_ARCH=$(KERNEL_ARCH))
+$(info PROFILE_ARCH=$(PROFILE_ARCH))
 $(info -----------------)
 endif
 
