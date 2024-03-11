@@ -290,8 +290,11 @@ int bcmwl_chanspec_get_center_freq(const int cs)
             break;
 #ifdef WL_CHANSPEC_BAND_6G
         case WL_CHANSPEC_BAND_6G:
+            if (c == 2)
+                return 5925 + (5 * c);
             if (c >= 1 && c <= 233)
                 return 5950 + (5 * c);
+            break;
 #endif
     }
     return 0;

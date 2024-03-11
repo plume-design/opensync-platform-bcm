@@ -24,21 +24,65 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+#include <stdlib.h>
+#include <stdio.h>
 #include <stdint.h>
-#include <stddef.h>
+#include <fcntl.h>
+#include <unistd.h>
 
-#pragma message("WARNING: using default empty secure boot keys")
+#include "log.h"
+#include "ovsdb.h"
+#include "const.h"
+#include "memutil.h"
+#include "osp_temp.h"
+#include "wl80211_device.h"
 
-uint16_t key_mid = 0x0000;
+#define BCM_CPU_TEMP_FILE "/sys/class/thermal/thermal_zone0/temp"
 
-uint32_t key_kroe_fld[8] = {
-    0, 0, 0, 0,
-    0, 0, 0, 0
-};
 
-uint32_t key_hmid_rot_fld_pub[8] = {
-    0, 0, 0, 0,
-    0, 0, 0, 0
-};
+int osp_temp_get_temperature_cpu(const char *if_name, int *temp)
+{
+    int rv = -1;
+    int fd = -1;
+    char buf[128] = { 0 };
 
-const char *key_keystore = NULL;
+    fd = open(BCM_CPU_TEMP_FILE, O_RDONLY);
+    if (fd < 0)
+    {
+        LOGE("Could not open cpu temperature file: %s", BCM_CPU_TEMP_FILE);
+        goto err;
+    }
+
+    rv = read(fd, buf, sizeof(buf));
+    if (rv < 0)
+    {
+        LOGE("Could not read cpu temperature: %d", rv);
+        goto err;
+    }
+
+    rv = sscanf(buf, "%d\n", temp);
+    if (rv != 1)
+    {
+        LOGE("Could not parse cpu temperature: %d", rv);
+        goto err;
+    }
+
+    *temp /= 1000;
+    rv = 0;
+
+err:
+    if (fd >= 0)
+    {
+        close(fd);
+    }
+    return rv;
+}
+
+int osp_temp_get_temperature_wl(const char *if_name, int *temp)
+{
+    bool rv;
+
+    rv = wl80211_device_temp_results_get(if_name, temp);
+
+    return rv ? 0 : 1;
+}

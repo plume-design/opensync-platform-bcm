@@ -23,23 +23,13 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ##############################################################################
-# BCM Secure boot
+#
+# OSP layer library override
+#
 ##############################################################################
-UNIT_NAME := bcmsb
-UNIT_TYPE := LIB
 
-UNIT_SRC += $(if $(CONFIG_BCM_SECURE_BOOT_LIB),src/bcmsb.c)
-UNIT_SRC += $(if $(CONFIG_BCM_SECURE_BOOT_LIB),src/bcmsb_keys.c)
+UNIT_SRC_TOP += $(OVERRIDE_DIR)/src/osp_temp_platform.c
 
-UNIT_DEPS += src/lib/kconfig
-UNIT_DEPS += src/lib/common
+UNIT_CFLAGS += -I$(OVERRIDE_DIR)/inc
 
-UNIT_CFLAGS := -I$(UNIT_PATH)/inc
-UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/shared/opensource/include/bcm963xx
-UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/shared/broadcom/include/bcm963xx/
-UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/targets/$(PROFILE)/fs.build/bcmdrivers/include
-
-UNIT_LDFLAGS :=
-
-UNIT_EXPORT_CFLAGS := -I$(UNIT_PATH)/inc
-UNIT_EXPORT_LDFLAGS :=
+UNIT_DEPS   += $(LAYER_DIR)/src/lib/wl80211

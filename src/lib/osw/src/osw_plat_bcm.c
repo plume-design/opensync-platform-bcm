@@ -93,6 +93,17 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     OSW_HWADDR_ARG(sta_addr), \
     ##__VA_ARGS__)
 
+#define OSW_PLAT_BCM_CHSPEC_CENTER(cs) (CHSPEC_CHANNEL(cs) >> WL_CHANSPEC_CHAN_SHIFT)
+#define OSW_PLAT_BCM_CHSPEC_BW(cs) (CHSPEC_BW(cs) >> WL_CHANSPEC_BW_SHIFT)
+#define OSW_PLAT_BCM_CHSPEC_FIRST(cs) (OSW_PLAT_BCM_CHSPEC_CENTER(cs) - (1 << (OSW_PLAT_BCM_CHSPEC_BW(cs) - 1)) + 2)
+#define OSW_PLAT_BCM_CHSPEC_LAST(cs) (OSW_PLAT_BCM_CHSPEC_CENTER(cs) + (1 << (OSW_PLAT_BCM_CHSPEC_BW(cs) - 1)) - 2)
+
+/* Does not support 80+80 by design. */
+#define OSW_PLAT_BCM_CHSPEC_FOREACH_SBC(c, cs) \
+        for (c = OSW_PLAT_BCM_CHSPEC_FIRST(cs); \
+             c > 0 && c <= OSW_PLAT_BCM_CHSPEC_LAST(cs); \
+             c += 4)
+
 struct osw_plat_bcm {
     struct osw_state_observer state_obs;
     struct osw_drv_nl80211_ops *nl_ops;
@@ -100,7 +111,6 @@ struct osw_plat_bcm {
     struct osw_hostap *hostap;
     struct osw_hostap_hook *hostap_hook;
     struct osw_drv *drv_nl80211;
-    struct osw_conf_mutator conf_mut;
     struct nl_conn *nl_conn;
     struct nl_conn_subscription *nl_conn_sub;
     struct nl_80211_sub *nl_sub;
@@ -483,6 +493,7 @@ osw_plat_bcm_conf_enable_phys(struct osw_drv_conf *drv_conf)
                 LOGI(LOG_PREFIX_PHY(phy_name, "enabling after reconfig"));
             }
             WARN_ON(WL(phy_name, "up") == NULL);
+            WARN_ON(os_nif_up((const char *)phy_name, true) == false);
         }
     }
 }
@@ -497,6 +508,17 @@ osw_plat_bcm_conf_vif_ap_enabled(struct osw_drv_phy_config *phy,
     const char *arg = vif->enabled ? "up" : "down";
 
     WARN_ON(!WL(vif_name, "bss", arg));
+}
+
+static void
+osw_plat_bcm_conf_vif_ap_ssid(struct osw_drv_phy_config *phy,
+                              struct osw_drv_vif_config *vif)
+{
+    struct osw_drv_vif_config_ap *ap = &vif->u.ap;
+    if (ap->ssid_changed == false) return;
+
+    const char *vif_name = vif->vif_name;
+    WARN_ON(!WL(vif_name, "ssid", ap->ssid.buf));
 }
 
 static void
@@ -578,21 +600,21 @@ osw_plat_bcm_conf_vif_ap_mode(struct osw_drv_phy_config *phy,
     WARN_ON(WL(vif_name, "he", "enab", strfmta("%d", mode->he_enabled)) == NULL);
 
     {
-        uint32_t btm = strtol(WL(vif_name, "btm") ?: "0", NULL, 16);
-        btm &= OSW_PLAT_BCM_BTM_BIT;
+        uint32_t btm = strtol(WL(vif_name, "wnm") ?: "0", NULL, 16);
+        btm &= ~OSW_PLAT_BCM_BTM_BIT;
         if (ap->mode.wnm_bss_trans) {
             btm |= OSW_PLAT_BCM_BTM_BIT;
         }
-        WARN_ON(WL(vif_name, "btm", strfmta("%x", btm)) != NULL);
+        WARN_ON(WL(vif_name, "wnm", strfmta("%x", btm)) == NULL);
     }
 
     {
         uint32_t rrm = strtol(WL(vif_name, "rrm") ?: "0", NULL, 16);
-        rrm &= OSW_PLAT_BCM_RRM_BIT;
+        rrm &= ~OSW_PLAT_BCM_RRM_BIT;
         if (ap->mode.rrm_neighbor_report) {
             rrm |= OSW_PLAT_BCM_RRM_BIT;
         }
-        WARN_ON(WL(vif_name, "rrm", strfmta("%x", rrm)) != NULL);
+        WARN_ON(WL(vif_name, "rrm", strfmta("%x", rrm)) == NULL);
         WL(vif_name, "rrm_nbr_static_disabled", "1");
     }
 }
@@ -697,7 +719,6 @@ osw_plat_bcm_conf_each_vif(struct osw_drv_phy_config *phy,
 
     switch (vif->vif_type) {
         case OSW_VIF_AP:
-            osw_plat_bcm_conf_vif_ap_enabled(phy, vif);
             osw_plat_bcm_conf_vif_ap_mcast2ucast(phy, vif);
             osw_plat_bcm_conf_vif_ap_acl(phy, vif);
             osw_plat_bcm_conf_vif_ap_acl_policy(phy, vif);
@@ -709,6 +730,27 @@ osw_plat_bcm_conf_each_vif(struct osw_drv_phy_config *phy,
             break;
         case OSW_VIF_STA:
             osw_plat_bcm_conf_vif_sta_multi_ap(phy, vif);
+            break;
+        case OSW_VIF_UNDEFINED:
+            break;
+    }
+}
+
+static void
+osw_plat_bcm_conf_each_vif_when_phy_enabled(struct osw_drv_phy_config *phy,
+                                            struct osw_drv_vif_config *vif)
+{
+    (void)phy;
+    (void)vif;
+
+    switch (vif->vif_type) {
+        case OSW_VIF_AP:
+            osw_plat_bcm_conf_vif_ap_ssid(phy, vif);
+            osw_plat_bcm_conf_vif_ap_enabled(phy, vif);
+            break;
+        case OSW_VIF_AP_VLAN:
+            break;
+        case OSW_VIF_STA:
             break;
         case OSW_VIF_UNDEFINED:
             break;
@@ -764,6 +806,20 @@ osw_plat_bcm_conf_each_phy(struct osw_drv_conf *drv_conf)
 }
 
 static void
+osw_plat_bcm_conf_each_phy_enabled(struct osw_drv_conf *drv_conf)
+{
+    size_t i;
+    for (i = 0; i < drv_conf->n_phy_list; i++) {
+        struct osw_drv_phy_config *phy = &drv_conf->phy_list[i];
+        size_t j;
+        for (j = 0; j < phy->vif_list.count; j++) {
+            struct osw_drv_vif_config *vif = &phy->vif_list.list[j];
+            osw_plat_bcm_conf_each_vif_when_phy_enabled(phy, vif);
+        }
+    }
+}
+
+static void
 osw_plat_bcm_pre_request_config_cb(struct osw_drv_nl80211_hook *hook,
                                    struct osw_drv_conf *drv_conf,
                                    void *priv)
@@ -774,6 +830,7 @@ osw_plat_bcm_pre_request_config_cb(struct osw_drv_nl80211_hook *hook,
     osw_plat_bcm_conf_disable_phys(drv_conf);
     osw_plat_bcm_conf_each_phy(drv_conf);
     osw_plat_bcm_conf_enable_phys(drv_conf);
+    osw_plat_bcm_conf_each_phy_enabled(drv_conf);
 }
 
 static void
@@ -1488,6 +1545,27 @@ osw_plat_bcm_phy_removed_cb(const struct nl_80211_phy *info,
 
     phy->info = NULL;
     phy->m = NULL;
+}
+
+static void
+osw_plat_bcm_vif_wl_init_rrm(const char *vif_name)
+{
+    int ri;
+    int vi;
+    const bool parse_err = (bcmwl_parse_vap(vif_name, &ri, &vi) == false);
+    if (parse_err) return;
+    switch (vi) {
+        case 2:
+        case 6:
+            /* Best-effort enable on an interface if the phy
+             * is down. It should be down when system boots.
+             * Otherwise it should leave it untouched in
+             * practice.
+             */
+            WL(vif_name, "rrm", "+2");
+            WL(vif_name, "wnm", "+1");
+            break;
+    }
 }
 
 static void
@@ -2348,6 +2426,7 @@ osw_plat_bcm_vif_added_cb(const struct nl_80211_vif *info,
 
     const char *vif_name = info->name;
     osw_plat_bcm_vif_wl_init(vif_name);
+    osw_plat_bcm_vif_wl_init_rrm(vif_name);
 }
 
 static void
@@ -2658,7 +2737,7 @@ osw_plat_bcm_fix_phy_dfs(const char *phy_name,
             const wl_dfs_sub_status_t *sub = &dfs.all.dfs_sub_status[j];
             int each_20mhz_chan;
 
-            FOREACH_20_SB(sub->chanspec, each_20mhz_chan) {
+            OSW_PLAT_BCM_CHSPEC_FOREACH_SBC(each_20mhz_chan, sub->chanspec) {
                 if (each_20mhz_chan == chan) {
                     state = osw_plat_bcm_into_dfs_state(info, sub);
                 }
@@ -3017,32 +3096,6 @@ osw_plat_bcm_fix_vif_state_cb(struct osw_drv_nl80211_hook *hook,
 }
 
 static void
-osw_plat_bcm_conf_mutate_cb(struct osw_conf_mutator *mutator,
-                            struct ds_tree *phy_tree)
-{
-    struct osw_conf_phy *phy;
-
-    ds_tree_foreach(phy_tree, phy) {
-        struct osw_conf_vif *vif;
-        const char *phy_name = phy->phy_name;
-
-        ds_tree_foreach(&phy->vif_tree, vif) {
-            const char *vif_name = vif->vif_name;
-            const bool is_primary = (strcmp(phy_name, vif_name) == 0);
-            if (is_primary) {
-                /* Primary interface on non-dongle drivers
-                 * must be kept UP. Otherwise scans, and
-                 * other things will stop working. This
-                 * applies it to all because it won't hurt
-                 * the dongle.
-                 */
-                vif->enabled = true;
-            }
-        }
-    }
-}
-
-static void
 osw_plat_bcm_init_wl(void)
 {
     bcmwl_vap_prealloc_all();
@@ -3115,12 +3168,6 @@ osw_plat_bcm_start(struct osw_plat_bcm *m)
         .sta_conf_mutate_fn = osw_plat_bcm_sta_conf_mutate_cb,
     };
 
-    static const struct osw_conf_mutator conf_mut = {
-        .name = __FILE__,
-        .type = OSW_CONF_TAIL,
-        .mutate_fn = osw_plat_bcm_conf_mutate_cb,
-    };
-
     m->loop = OSW_MODULE_LOAD(osw_ev);
     if (m->loop == NULL) return;
 
@@ -3149,9 +3196,6 @@ osw_plat_bcm_start(struct osw_plat_bcm *m)
 
     osw_plat_bcm_event_init(m);
     osw_plat_bcm_nl_init(m);
-
-    m->conf_mut = conf_mut;
-    osw_conf_register_mutator(&m->conf_mut);
 
     osw_state_register_observer(&m->state_obs);
 }

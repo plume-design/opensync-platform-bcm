@@ -25,6 +25,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include <net/if.h>
+#include <string.h>
 
 #include "log.h"
 #include "execsh.h"
@@ -49,10 +50,9 @@ static char set_static_mrouter[] = _S(ovs-vsctl set Port "$1" other_config:mcast
 static char set_max_groups[] = _S(ovs-vsctl set Bridge "$1" other_config:mcast-snooping-table-size="$2");
 static char set_igmp_age[] = _S(ovs-vsctl set Bridge "$1" other_config:mcast-snooping-aging-time="$2");
 
-/* Native bridge igmp snooping config */
-static char set_mcast_snooping_native[] = _S(echo "$1" > /sys/devices/virtual/net/"$2"/bridge/multicast_snooping);
-static char set_fast_leave_native[] = _S(for file in /sys/devices/virtual/net/"$1"/lower*/brport/multicast_fast_leave; \
-                                            do echo "$2" > "$file"; done);
+/* Broadcom snooping tool configuration */
+static char set_mcast_igmp_snooping_native[] = _S(bcmmcastctl mode -i "$1" -p 1 -m "$2");
+static char set_mcast_mld_snooping_native[] = _S(bcmmcastctl mode -i "$1" -p 2 -m "$2");
 
 static char set_mcast_igmp_snooping_l2l_native[] = _S(bcmmcastctl l2l -i "$1" -p 1 -e "$2");
 static char set_mcast_mld_snooping_l2l_native[] = _S(bcmmcastctl l2l -i "$1" -p 2 -e "$2");
@@ -213,35 +213,38 @@ static bool osn_mcast_native_deconfigure(osn_mcast_bridge *self)
         return true;
 
     /* Disable snooping */
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_snooping_native, "0", self->snooping_bridge);
+    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_igmp_snooping_native, self->snooping_bridge, "0");
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
     {
-        LOG(INFO, "osn_mcast_native_deconfigure: Cannot disable snooping on bridge %s",
+        LOG(INFO, "osn_mcast_native_deconfigure: Cannot disable igmp snooping on bridge %s",
                 self->snooping_bridge);
     }
 
-    /* Disable fast leave */
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_fast_leave_native, self->snooping_bridge, "0");
+    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_mld_snooping_native, self->snooping_bridge, "0");
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
     {
-        LOG(INFO, "osn_mcast_native_deconfigure: Cannot disable fast leave on bridge %s",
+        LOG(INFO, "osn_mcast_native_deconfigure: Cannot disable mld snooping on bridge %s",
                 self->snooping_bridge);
     }
 
-    /* Disable l2l igmp snooping */
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_igmp_snooping_l2l_native, self->snooping_bridge, "0");
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+    /* Don't configure l2l snooping for SDK 5.04L02 or newer */
+    if (BCM_SDK_VERSION < 0x50402)
     {
-        LOG(INFO, "osn_mcast_native_deconfigure: Cannot disable igmp l2l on bridge %s",
-            self->snooping_bridge);
-    }
+        /* Disable l2l igmp snooping */
+        status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_igmp_snooping_l2l_native, self->snooping_bridge, "0");
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        {
+            LOG(INFO, "osn_mcast_native_deconfigure: Cannot disable igmp l2l on bridge %s",
+                self->snooping_bridge);
+        }
 
-    /* Disable l2l snooping */
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_mld_snooping_l2l_native, self->snooping_bridge, "0");
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-    {
-        LOG(INFO, "osn_mcast_native_deconfigure: Cannot disable mld l2l on bridge %s",
-            self->snooping_bridge);
+        /* Disable l2l snooping */
+        status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_mld_snooping_l2l_native, self->snooping_bridge, "0");
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        {
+            LOG(INFO, "osn_mcast_native_deconfigure: Cannot disable mld l2l on bridge %s",
+                self->snooping_bridge);
+        }
     }
 
     self->snooping_bridge[0] = '\0';
@@ -398,17 +401,25 @@ bool osn_mcast_apply_native_config(osn_mcast_bridge *self)
         return true;
 
     /* Enable/disable snooping */
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_snooping_native, snooping_enabled ? "1" : "0",
-                        snooping_bridge);
+    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_igmp_snooping_native, snooping_bridge, snooping_enabled ? "2" : "0");
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
     {
-        LOG(ERR, "osn_mcast_apply_native_config: Error enabling/disabling snooping, command failed for %s",
+        LOG(ERR, "osn_mcast_apply_native_config: Error enabling/disabling igmp snooping, command failed for %s",
+                snooping_bridge);
+        return false;
+    }
+
+    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_mld_snooping_native, snooping_bridge, snooping_enabled ? "2" : "0");
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+    {
+        LOG(ERR, "osn_mcast_apply_native_config: Error enabling/disabling mld snooping, command failed for %s",
                 snooping_bridge);
         return false;
     }
     STRSCPY_WARN(self->snooping_bridge, snooping_bridge);
 
-    if (igmp->snooping_enabled && !igmp->proxy_enabled)
+    /* Don't configure l2l snooping for SDK 5.04L02 or newer */
+    if (BCM_SDK_VERSION < 0x50402 && igmp->snooping_enabled && !igmp->proxy_enabled)
     {
         status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_igmp_snooping_l2l_native, snooping_bridge, snooping_enabled ? "1" : "0");
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
@@ -419,7 +430,8 @@ bool osn_mcast_apply_native_config(osn_mcast_bridge *self)
         }
     }
 
-    if (mld->snooping_enabled && !mld->proxy_enabled)
+    /* Don't configure l2l snooping for SDK 5.04L02 or newer */
+    if (BCM_SDK_VERSION < 0x50402 && mld->snooping_enabled && !mld->proxy_enabled)
     {
         status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_mld_snooping_l2l_native, snooping_bridge, snooping_enabled ? "1" : "0");
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
@@ -428,16 +440,6 @@ bool osn_mcast_apply_native_config(osn_mcast_bridge *self)
                 snooping_bridge);
             return false;
         }
-    }
-
-    /* Enable/disable fast leave */
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_fast_leave_native, snooping_bridge,
-                        fast_leave_enable ? "1" : "0");
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-    {
-        LOG(ERR, "osn_mcast_apply_native_config: Error enabling/disabling fast leave, command failed for %s",
-                snooping_bridge);
-        return false;
     }
 
     return true;
@@ -517,9 +519,21 @@ static bool is_wan_wl_interface(const char* if_name)
     return strstr(if_name, "wl") != NULL;
 }
 
+static char* get_wan_from_mcast_interface(const char* mcast_interface)
+{
+    /*
+     * The WAN interface for which multicast should be accelerated either has
+     * the same name as the multicast interface or is followed by "." and a postfix
+     * in case the multicast interface is a VLAN interface.
+     */
+    char *tmp = STRDUP(mcast_interface);
+    return strtok(tmp, ".");
+}
+
 void osn_mcast_mcpd_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent)
 {
     osn_mcast_bridge *self = &osn_mcast_bridge_base;
+    char *wan_interface;
     char cmd[256];
 
     /* Apply MCPD configuration */
@@ -549,10 +563,14 @@ void osn_mcast_mcpd_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent)
     /* Setting WAN interface for Archer mcast acceleration, only if not g-wl* or not wl* type */
     if (!is_wan_wl_interface(self->igmp.mcast_interface))
     {
+        wan_interface = get_wan_from_mcast_interface(self->igmp.mcast_interface);
         if (kconfig_enabled(CONFIG_OSN_BACKEND_VLAN_BCM_VLANCTL))
-            snprintf(cmd, sizeof(cmd), "ethswctl -c wan -i %s.vc -o enable", self->igmp.mcast_interface);
+            snprintf(cmd, sizeof(cmd), "ethswctl -c wan -i %s.vc -o enable", wan_interface);
         else
-            snprintf(cmd, sizeof(cmd), "ethswctl -c wan -i %s -o enable", self->igmp.mcast_interface);
+            snprintf(cmd, sizeof(cmd), "ethswctl -c wan -i %s -o enable", wan_interface);
+        FREE(wan_interface);
+
+        LOG(TRACE, "osn_mcast_mcpd_apply_fn: Setting multicast acceleration on WAN interface: '%s'", cmd);
 
         if (cmd_log(cmd) != 0)
             LOG(ERR, "osn_mcast_mcpd_apply_fn: '%s' failed", cmd);

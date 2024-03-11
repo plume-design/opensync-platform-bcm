@@ -24,21 +24,10 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include <stdint.h>
-#include <stddef.h>
+#ifndef OSP_TEMP_PLATFORM_H_INCLUDED
+#define OSP_TEMP_PLATFORM_H_INCLUDED
 
-#pragma message("WARNING: using default empty secure boot keys")
+int osp_temp_get_temperature_wl(const char *if_name, int *temp);
+int osp_temp_get_temperature_cpu(const char *if_name, int *temp);
 
-uint16_t key_mid = 0x0000;
-
-uint32_t key_kroe_fld[8] = {
-    0, 0, 0, 0,
-    0, 0, 0, 0
-};
-
-uint32_t key_hmid_rot_fld_pub[8] = {
-    0, 0, 0, 0,
-    0, 0, 0, 0
-};
-
-const char *key_keystore = NULL;
+#endif /* OSP_TEMP_PLATFORM_H_INCLUDED */

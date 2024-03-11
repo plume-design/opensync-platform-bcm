@@ -45,28 +45,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "bcmsb.h"
 #include "bcmsb_keys.h"
+#include "memutil.h"
+#include "util.h"
 
 
 #define DEVNAME_SOTP        "/dev/sotp"
 #define DEVNAME_OTP         "/dev/otp"
-
-/*
- * Compare buffer against given bytes value
- */
-static bool memcmp_b(const uint8_t *buff, uint8_t value, size_t sz)
-{
-    size_t i = 0;
-
-    while (i < sz)
-    {
-        if (buff[i++] != value)
-        {
-            return false;
-        }
-    }
-
-    return true;
-}
 
 static bool is_keys_empty(void)
 {
