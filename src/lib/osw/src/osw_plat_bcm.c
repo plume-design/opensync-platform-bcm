@@ -1161,10 +1161,10 @@ osw_plat_bcm_cim_to_tlv(const char *phy_name,
         const uint64_t active_msec = active_usec / 1000;
         osw_tlv_put_u32(t, OSW_STATS_CHAN_ACTIVE_MSEC, active_msec);
 
-        const uint32_t tx = cim->usec.tx;
-        const uint32_t rx = cim->usec.rx;
-        const uint32_t inbss = cim->usec.rx_self;
-        const uint32_t busy = cim->usec.busy;
+        const uint32_t tx = cim->usec.tx / 1000;
+        const uint32_t rx = cim->usec.rx / 1000;
+        const uint32_t inbss = cim->usec.rx_self / 1000;
+        const uint32_t busy = cim->usec.busy / 1000;
 
         const size_t off2 = osw_tlv_put_nested(t, OSW_STATS_CHAN_CNT_MSEC);
         osw_tlv_put_u32(t, OSW_STATS_CHAN_CNT_TX, tx);
