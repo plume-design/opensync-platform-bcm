@@ -352,3 +352,19 @@ void bcm_qos_id_put(int qid)
     bcm_qos_queue_list[qid].qq_tag = NULL;
 }
 
+bool osn_qos_notify_event_set(osn_qos_t *self, osn_qos_event_fn_t *event_fn_cb)
+{
+    (void)self;
+    (void)event_fn_cb;
+
+    /*
+     * This implementation backend does not support QoS event reporting.
+     * (There is no need for event reporting on this platform-specific implementation.)
+     */
+    return false;
+}
+
+bool osn_qos_is_qdisc_based(osn_qos_t *self)
+{
+    return false;
+}

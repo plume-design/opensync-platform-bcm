@@ -1,0 +1,10 @@
+#!/bin/sh
+
+set -e
+
+ROOTFS="$1"
+OSPKG_INFO_DIR="$ROOTFS/OSPKG_INFO"
+OSPKG_INFO="$OSPKG_INFO_DIR/ospkg.info"
+
+ln -sf ../init.d/ospkg_bootcomplete ${ROOTFS}/etc/rc3.d/S99ospkg_bootcomplete
+

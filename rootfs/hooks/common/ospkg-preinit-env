@@ -1,0 +1,28 @@
+#!/bin/sh
+
+set -e
+ROOTFS=$1
+PKG_ROOTFS="$ROOTFS/ospkg/builtin/fs"
+
+# create required mountpoints
+mkdir -p "${ROOTFS}/rootfs_data"
+mkdir -p "${ROOTFS}/root"
+
+# run /etc/preinit before rc.d
+# insert a sysinit entry into inittab, in front of all others
+cp -a "$ROOTFS/etc/inittab" "$ROOTFS/etc/inittab.tmp"
+echo "::sysinit:/etc/preinit" > "$ROOTFS/etc/inittab"
+cat "$ROOTFS/etc/inittab.tmp" >> "$ROOTFS/etc/inittab"
+rm "$ROOTFS/etc/inittab.tmp"
+
+# copy preinit script and hooks
+cp -a "$PKG_ROOTFS/etc/preinit" "$ROOTFS/etc/"
+cp -a "$PKG_ROOTFS/etc/preinit.d" "$ROOTFS/etc/"
+
+# create a preinit.d/25mount-fs
+ln -sf ../init.d/mount-fs.sh "$ROOTFS/etc/preinit.d/25mount-fs"
+# create a dummy rc3.d/S25mount-fs to prevent the link being
+# created by buildFS from fs.src
+cp -a "$PKG_ROOTFS/etc/init.d/dummy" "$ROOTFS/etc/init.d"
+ln -sf ../init.d/dummy "$ROOTFS/etc/rc3.d/S25mount-fs"
+

@@ -578,6 +578,7 @@ static bool wl_set_event_mask(const char *ifname,
     int return_code;
 
     snprintf(cmd, sizeof(cmd), "wlctl -i %s %s %s", ifname, wl_opt, mask_hex_str);
+    if (!is_input_shell_safe(cmd)) return false;
     fp = popen(cmd, "r");
     if (!fp)
     {
@@ -1226,6 +1227,7 @@ bool bcmwl_event_mask_get(const char *ifname, bcmwl_event_mask_t *mask)
      * "event_msgs_ext" command gets whole bit vector.
      */
     snprintf(cmd, sizeof(cmd), "wlctl -i %s event_msgs_ext", ifname);
+    if (!is_input_shell_safe(cmd)) return false;
     fp = popen(cmd, "r");
     if (!fp)
     {

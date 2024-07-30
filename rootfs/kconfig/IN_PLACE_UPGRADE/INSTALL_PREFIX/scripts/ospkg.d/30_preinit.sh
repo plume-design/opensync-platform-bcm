@@ -1,3 +1,4 @@
+
 # Copyright (c) 2017, Plume Design Inc. All rights reserved.
 # 
 # Redistribution and use in source and binary forms, with or without
@@ -23,46 +24,20 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/public/include
-SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/public/include/protobuf-c
+# functions:
+# - mount_overlay_partition
+# - mount_overlay_filesystem
+# are defined by opensync_functions.sh
+# which is included by ospkg
 
-SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/kernel/$(PROFILE_ARCH)/include/
-SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/kernel/include/
+ospkg_preinit_mount_overlay()
+{
+    if ! mount_overlay_partition ; then
+        return 1
+    fi
 
-INCLUDES     +=   $(SDK_INCLUDES)
-INCLUDES     += -I$(BCM_BUILD_ROOT)/bcmdrivers/broadcom/net/wl/$(DRIVER_VERSION)/main/src/common/include
-INCLUDES     += -I$(BCM_BUILD_ROOT)/bcmdrivers/broadcom/net/wl/$(DRIVER_VERSION)/main/src/include
-INCLUDES     += -I$(BCM_BUILD_ROOT)/bcmdrivers/broadcom/net/wl/$(DRIVER_VERSION)/main/src/shared/bcmwifi/include/
+    local PKG_LAYER=$(ospkg_mount_active_layer "/overlay/upper")
 
-DEFINES      += -Wno-strict-aliasing
-DEFINES      += -Wno-unused-but-set-variable
-DEFINES      += -Wno-deprecated-declarations
-DEFINES      += -Wno-clobbered
-
-OS_LDFLAGS   += -L$(BCM_FSBUILD_DIR)/lib
-OS_LDFLAGS   += -L$(BCM_FSBUILD_DIR)/public/lib
-OS_LDFLAGS   += -L$(TARGET_FS)/lib
-
-SDK_ROOTFS   :=   $(INSTALL_DIR)
-
-
-ifeq ($(V),1)
-$(info --- BCM ENV ---)
-$(info PROFILE=$(PROFILE))
-$(info BRCM_BOARD_ID=$(BRCM_BOARD_ID))
-$(info BRCM_BOARD=$(BRCM_BOARD))
-$(info BCM_BUILD_ROOT=$(BCM_BUILD_ROOT))
-$(info BCM_FSBUILD_DIR=$(BCM_FSBUILD_DIR))
-$(info INSTALL_DIR=$(INSTALL_DIR))
-$(info TARGET_FS=$(TARGET_FS))
-$(info --- PLUME ENV ---)
-$(info PLATFORM=$(PLATFORM))
-$(info TARGET=$(TARGET))
-$(info INCLUDES=$(INCLUDES))
-$(info DEFINES=$(DEFINES))
-$(info SDK_ROOTFS=$(SDK_ROOTFS))
-$(info KERNEL_ARCH=$(KERNEL_ARCH))
-$(info PROFILE_ARCH=$(PROFILE_ARCH))
-$(info -----------------)
-endif
+    mount_overlay_filesystem "$PKG_LAYER"
+}
 

@@ -1,0 +1,8 @@
+#!/bin/sh
+# {# jinja-parse #}
+CONFIG_IN_PLACE_UPGRADE={{CONFIG_IN_PLACE_UPGRADE}}
+
+if [ "$CONFIG_IN_PLACE_UPGRADE" = "y" ]; then
+    /ospkg/tools/ospkg preinit_mount_overlay
+fi
+

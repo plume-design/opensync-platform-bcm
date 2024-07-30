@@ -1,0 +1,11 @@
+#!/bin/sh
+
+echo "preinit: starting"
+for X in /etc/preinit.d/[0-9]*; do
+    if [ -x "$X" ]; then
+        echo "$X start"
+        "$X" start
+    fi
+done
+echo "preinit: done"
+

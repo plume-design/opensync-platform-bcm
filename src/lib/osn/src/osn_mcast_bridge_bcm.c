@@ -572,7 +572,7 @@ void osn_mcast_mcpd_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent)
 
         LOG(TRACE, "osn_mcast_mcpd_apply_fn: Setting multicast acceleration on WAN interface: '%s'", cmd);
 
-        if (cmd_log(cmd) != 0)
+        if (cmd_log_check_safe(cmd) != 0)
             LOG(ERR, "osn_mcast_mcpd_apply_fn: '%s' failed", cmd);
     }
 

@@ -1,0 +1,21 @@
+#!/bin/sh
+# {# jinja-parse #}
+INSTALL_PREFIX={{INSTALL_PREFIX}}
+START=99
+
+start()
+{
+    $INSTALL_PREFIX/tools/ospkg boot_complete
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+
+    *)
+        echo "$0: unrecognized option $1"
+        exit 1
+        ;;
+esac
+

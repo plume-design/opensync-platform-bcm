@@ -1,3 +1,5 @@
+#!/bin/sh
+
 # Copyright (c) 2017, Plume Design Inc. All rights reserved.
 # 
 # Redistribution and use in source and binary forms, with or without
@@ -22,47 +24,12 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+ifname=$1
 
-SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/public/include
-SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/public/include/protobuf-c
+OVSH=$CONFIG_INSTALL_PREFIX/tools/ovsh
 
-SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/kernel/$(PROFILE_ARCH)/include/
-SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/kernel/include/
-
-INCLUDES     +=   $(SDK_INCLUDES)
-INCLUDES     += -I$(BCM_BUILD_ROOT)/bcmdrivers/broadcom/net/wl/$(DRIVER_VERSION)/main/src/common/include
-INCLUDES     += -I$(BCM_BUILD_ROOT)/bcmdrivers/broadcom/net/wl/$(DRIVER_VERSION)/main/src/include
-INCLUDES     += -I$(BCM_BUILD_ROOT)/bcmdrivers/broadcom/net/wl/$(DRIVER_VERSION)/main/src/shared/bcmwifi/include/
-
-DEFINES      += -Wno-strict-aliasing
-DEFINES      += -Wno-unused-but-set-variable
-DEFINES      += -Wno-deprecated-declarations
-DEFINES      += -Wno-clobbered
-
-OS_LDFLAGS   += -L$(BCM_FSBUILD_DIR)/lib
-OS_LDFLAGS   += -L$(BCM_FSBUILD_DIR)/public/lib
-OS_LDFLAGS   += -L$(TARGET_FS)/lib
-
-SDK_ROOTFS   :=   $(INSTALL_DIR)
-
-
-ifeq ($(V),1)
-$(info --- BCM ENV ---)
-$(info PROFILE=$(PROFILE))
-$(info BRCM_BOARD_ID=$(BRCM_BOARD_ID))
-$(info BRCM_BOARD=$(BRCM_BOARD))
-$(info BCM_BUILD_ROOT=$(BCM_BUILD_ROOT))
-$(info BCM_FSBUILD_DIR=$(BCM_FSBUILD_DIR))
-$(info INSTALL_DIR=$(INSTALL_DIR))
-$(info TARGET_FS=$(TARGET_FS))
-$(info --- PLUME ENV ---)
-$(info PLATFORM=$(PLATFORM))
-$(info TARGET=$(TARGET))
-$(info INCLUDES=$(INCLUDES))
-$(info DEFINES=$(DEFINES))
-$(info SDK_ROOTFS=$(SDK_ROOTFS))
-$(info KERNEL_ARCH=$(KERNEL_ARCH))
-$(info PROFILE_ARCH=$(PROFILE_ARCH))
-$(info -----------------)
-endif
-
+if ! $OVSH -r s Wifi_VIF_State -w if_name==$ifname enabled | grep -q true
+then
+    log_warn "$ifname: Wifi_VIF_Config::enabled != Wifi_VIF_State::enabled"
+    exit 1
+fi

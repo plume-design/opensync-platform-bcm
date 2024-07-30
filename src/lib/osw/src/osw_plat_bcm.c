@@ -54,6 +54,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <nl_conn.h>
 #include <nl_80211.h>
 #include <nl_cmd_task.h>
+#include <ff_lib.h>
 
 /* osw */
 #include <osw_drv.h>
@@ -438,6 +439,46 @@ osw_plat_bcm_vif_report_sta_changed(struct osw_plat_bcm_vif *vif,
     osw_drv_report_sta_changed(drv, phy_name, vif_name, sta_addr);
 }
 
+#define OSW_PLAT_BCM_BTM_BIT 0x1
+#define OSW_PLAT_BCM_RRM_BIT 0x2
+
+static bool
+osw_plat_bcm_conf_is_btm_changed(const struct osw_drv_vif_config *vif)
+{
+    const char *vif_name = vif->vif_name;
+    uint32_t btm = strtol(WL(vif_name, "wnm") ?: "0", NULL, 16);
+    const bool enabled = btm & OSW_PLAT_BCM_BTM_BIT;
+    return vif->u.ap.mode.wnm_bss_trans == enabled;
+}
+
+static bool
+osw_plat_bcm_conf_is_rrm_changed(struct osw_drv_vif_config *vif)
+{
+    const char *vif_name = vif->vif_name;
+    uint32_t rrm = strtol(WL(vif_name, "rrm") ?: "0", NULL, 16);
+    const bool enabled = rrm & OSW_PLAT_BCM_RRM_BIT;
+    return vif->u.ap.mode.rrm_neighbor_report == enabled;
+}
+
+static bool
+osw_plat_bcm_conf_need_vif_ap_disable(struct osw_drv_vif_config *vif)
+{
+    if (vif->u.ap.mode_changed)
+    {
+        const bool btm_matching = osw_plat_bcm_conf_is_btm_changed(vif);
+
+        const bool rrm_matching = osw_plat_bcm_conf_is_rrm_changed(vif);
+
+        const bool need_down = (rrm_matching == false)
+            || (btm_matching == false);
+        if (need_down) return true;
+    }
+
+    if (vif->u.ap.multi_ap_changed)
+        return true;
+    return false;
+}
+
 static bool
 osw_plat_bcm_conf_need_phy_disable(struct osw_drv_phy_config *phy)
 {
@@ -446,9 +487,7 @@ osw_plat_bcm_conf_need_phy_disable(struct osw_drv_phy_config *phy)
         struct osw_drv_vif_config *vif = &phy->vif_list.list[i];
         switch (vif->vif_type) {
             case OSW_VIF_AP:
-                if (vif->u.ap.mode_changed)
-                    return true;
-                if (vif->u.ap.multi_ap_changed)
+                if (osw_plat_bcm_conf_need_vif_ap_disable(vif))
                     return true;
                 break;
             case OSW_VIF_AP_VLAN:
@@ -581,9 +620,6 @@ osw_plat_bcm_conf_vif_ap_acl_policy(struct osw_drv_phy_config *phy,
             break;
     }
 }
-
-#define OSW_PLAT_BCM_BTM_BIT 0x1
-#define OSW_PLAT_BCM_RRM_BIT 0x2
 
 static void
 osw_plat_bcm_conf_vif_ap_mode(struct osw_drv_phy_config *phy,
@@ -790,6 +826,15 @@ osw_plat_bcm_conf_phy_radar(struct osw_drv_phy_config *phy)
 }
 
 static void
+osw_plat_bcm_conf_phy_enabled(struct osw_drv_phy_config *phy)
+{
+    if (phy->enabled_changed) {
+        WARN_ON(!WL(phy->phy_name, "radio", phy->enabled ? "on" : "off"));
+        WARN_ON(!WL(phy->phy_name, phy->enabled ? "up" : "down"));
+    }
+}
+
+static void
 osw_plat_bcm_conf_each_phy(struct osw_drv_conf *drv_conf)
 {
     size_t i;
@@ -802,6 +847,7 @@ osw_plat_bcm_conf_each_phy(struct osw_drv_conf *drv_conf)
         }
         osw_plat_bcm_conf_phy_txchain(phy);
         osw_plat_bcm_conf_phy_radar(phy);
+        osw_plat_bcm_conf_phy_enabled(phy);
     }
 }
 
@@ -1568,9 +1614,25 @@ osw_plat_bcm_vif_wl_init_rrm(const char *vif_name)
     }
 }
 
+/* Experimental feature flag "enable_ofdma" that enables DL OFDMA and UL OFDMA
+ * HE flags:
+ * 0x04: HE DL OFDMA support
+ * 0x08: HE UL OFDMA support
+ * EHT flags:
+ * 0x08: EHT DL OFDMA support
+ * 0x10: EHT UL OFDMA support
+ */
+
+#define HE_OFDMA_BITS 0x0c
+#define EHT_OFDMA_BITS 0x18
+
 static void
 osw_plat_bcm_vif_wl_init(const char *vif_name)
 {
+    const int enable_ofdma = ff_is_flag_enabled("enable_ofdma");
+    const int updated_he = (atoi(CONFIG_BCMWL_HE_FEATURES) & ~HE_OFDMA_BITS) | (enable_ofdma ? HE_OFDMA_BITS : 0);
+    const int updated_eht = (atoi(CONFIG_BCMWL_EHT_FEATURES) & ~EHT_OFDMA_BITS) | (enable_ofdma ? EHT_OFDMA_BITS : 0);
+
     if (bcmwl_is_vif(vif_name)) {
         WARN_ON(WL(vif_name, "mbo", "ap_enable", "0") == NULL);
     }
@@ -1579,6 +1641,8 @@ osw_plat_bcm_vif_wl_init(const char *vif_name)
         WL(vif_name, "bw_cap", "2g", "0xff");
         WL(vif_name, "bw_cap", "5g", "0xff");
         WL(vif_name, "bw_cap", "6g", "0xff");
+        WL(vif_name, "he", "features", strfmta("%d", updated_he));
+        WL(vif_name, "eht", "features", strfmta("%d", updated_eht));
         WARN_ON(WL(vif_name, "dfs_handle_radar_onsta", "1") == NULL);
         WARN_ON(WL(vif_name, "keep_ap_up", "1") == NULL);
         WARN_ON(WL(vif_name, "mpc", "0") == NULL);
@@ -2775,11 +2839,19 @@ osw_plat_bcm_fix_phy_radar(const char *phy_name,
 }
 
 static void
+osw_plat_bcm_fix_phy_enabled(const char *phy_name,
+                             struct osw_drv_phy_state *state)
+{
+    state->enabled = atoi(WL(phy_name, "isup") ?: "0") != 0;
+}
+
+static void
 osw_plat_bcm_fix_phy_state_cb(struct osw_drv_nl80211_hook *hook,
                               const char *phy_name,
                               struct osw_drv_phy_state *state,
                               void *priv)
 {
+    osw_plat_bcm_fix_phy_enabled(phy_name, state);
     osw_plat_bcm_fix_phy_txchain(phy_name, state);
     osw_plat_bcm_fix_phy_regulatory(phy_name, state);
     osw_plat_bcm_fix_phy_dfs(phy_name, state);

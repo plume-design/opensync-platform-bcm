@@ -60,6 +60,8 @@ bool bcmwl_sta_deauth(
     snprintf(cmd, sizeof(cmd), "wl -i %s deauthenticate "PRI(os_macaddr_t)" %d",
              ifname, FMT(os_macaddr_t, *mac), reason);
 
+    if (!is_input_shell_safe(cmd)) return false;
+
     fp = popen(cmd, "r");
     if (!fp)
     {
@@ -325,9 +327,9 @@ static void bcmwl_sta_get_sta_info_v4(
 
     sta_info->is_authorized = (conv->dtoh32(v4->flags) & WL_STA_AUTHO);
     sta_info->capabilities = conv->dtoh16(v4->cap);
-    sta_info->tx_total_bytes = conv->dtoh64(v4->tx_tot_bytes);
+    sta_info->tx_total_bytes = conv->dtoh64(v4->tx_ucast_bytes);
     sta_info->rx_total_bytes = conv->dtoh64(v4->rx_tot_bytes);
-    sta_info->tx_total_pkts = conv->dtoh64(v4->tx_tot_pkts);
+    sta_info->tx_total_pkts = conv->dtoh64(v4->tx_pkts);
     sta_info->rx_total_pkts = conv->dtoh64(v4->rx_tot_pkts);
     sta_info->tx_total_retries = conv->dtoh64(v4->tx_pkts_retried);
     sta_info->rx_total_retries = conv->dtoh64(v4->rx_pkts_retried);

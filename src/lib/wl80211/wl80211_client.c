@@ -706,6 +706,8 @@ static void wl80211_client_mcs_stats_get(
              macaddr[0], macaddr[1], macaddr[2], macaddr[3], macaddr[4],
              macaddr[5]);
 
+    if (!is_input_shell_safe(cmd)) return;
+
     f = popen(cmd, "r");
     if (!f)
     {
@@ -1079,6 +1081,8 @@ static void wl80211_client_assoclist_cb(
             macaddr[0], macaddr[1], macaddr[2],
             macaddr[3], macaddr[4], macaddr[5]);
 
+    if (!is_input_shell_safe(cmd)) return;
+
     LOG(TRACE,
         "Initiating %s command '%s'",
         radio_get_name_from_type(client_ctx->radio_cfg->type),
@@ -1242,6 +1246,8 @@ bool wl80211_client_list_get(
     snprintf(cmd, sizeof(cmd) - 1,
             WL80211_CLIENT_LIST_GET,
             ifname);
+
+    if (!is_input_shell_safe(cmd)) return false;
 
     LOG(TRACE,
         "Initiating %s command '%s'",

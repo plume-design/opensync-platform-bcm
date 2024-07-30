@@ -62,6 +62,7 @@ SDK_NEW_INC_PATHS = $(shell test $(shell echo $(SDK_DRV_VER) | tr -dc 0-9) -ge $
 SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/public/include
 SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/gpl/include
 SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/public/include/protobuf-c
+SDK_INCLUDES += -I$(BCM_FSBUILD_DIR)/public/include/libev
 SDK_INCLUDES += -I$(BRCMDRIVERS_DIR)/broadcom/net/wl/$(DRIVER_VERSION)/main/src/include/
 ifeq ($(SDK_NEW_INC_PATHS),y)
 # Add core/src/lib/common/inc first for duplicate naming of monitor.h
@@ -100,15 +101,19 @@ DEFINES      += -Wno-clobbered
 # Do not treat #warning as errors
 DEFINES      += -Wno-error=cpp
 #DEFINES      += -Os
-LDFLAGS      += -Wl,-rpath-link=$(BCM_FSBUILD_DIR)/lib
-LDFLAGS      += -Wl,-rpath-link=$(BCM_FSBUILD_DIR)/public/lib
-LDFLAGS      += -Wl,-rpath-link=$(BCM_FSBUILD_DIR)/gpl/lib
-LDFLAGS      += -L$(BCM_FSBUILD_DIR)/lib
-LDFLAGS      += -L$(BCM_FSBUILD_DIR)/public/lib
-LDFLAGS      += -L$(BCM_FSBUILD_DIR)/gpl/lib
-LDFLAGS      += -L$(INSTALL_DIR)/usr/lib
-LDFLAGS      += -L$(INSTALL_DIR)/lib/gpl
+OS_LDFLAGS   += -Wl,-rpath-link=$(BCM_FSBUILD_DIR)/lib
+OS_LDFLAGS   += -Wl,-rpath-link=$(BCM_FSBUILD_DIR)/public/lib
+OS_LDFLAGS   += -Wl,-rpath-link=$(BCM_FSBUILD_DIR)/gpl/lib
+OS_LDFLAGS   += -L$(BCM_FSBUILD_DIR)/lib
+OS_LDFLAGS   += -L$(BCM_FSBUILD_DIR)/public/lib
+OS_LDFLAGS   += -L$(BCM_FSBUILD_DIR)/gpl/lib
+OS_LDFLAGS   += -L$(INSTALL_DIR)/usr/lib
+OS_LDFLAGS   += -L$(INSTALL_DIR)/lib/gpl
 SDK_ROOTFS   := $(INSTALL_DIR)
+SDK_DIR       = $(BCM_BUILD_ROOT)
+
+SDK_MKSQUASHFS_CMD = $(HOSTTOOLS_DIR)/mksquashfs
+SDK_MKSQUASHFS_ARGS = -noappend -all-root -comp xz
 
 ifeq ($(V),1)
 $(info --- BCM ENV ---)
@@ -118,7 +123,8 @@ $(info BRCM_BOARD=$(BRCM_BOARD))
 $(info BCM_FSBUILD_DIR=$(BCM_FSBUILD_DIR))
 $(info INSTALL_DIR=$(INSTALL_DIR))
 $(info TARGET_FS=$(TARGET_FS))
-$(info --- PLUME ENV ---)
+$(info HOSTTOOLS_DIR=$(HOSTTOOLS_DIR))
+$(info --- OpenSync ENV ---)
 $(info PLATFORM=$(PLATFORM))
 $(info TARGET=$(TARGET))
 $(info INCLUDES=$(INCLUDES))
@@ -128,6 +134,7 @@ $(info DRIVER_VERSION=$(DRIVER_VERSION))
 $(info BRCMDRIVERS_DIR=$(BRCMDRIVERS_DIR))
 $(info KERNEL_ARCH=$(KERNEL_ARCH))
 $(info PROFILE_ARCH=$(PROFILE_ARCH))
+$(info SDK_DIR=$(SDK_DIR))
 $(info -----------------)
 endif
 

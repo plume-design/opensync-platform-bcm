@@ -475,6 +475,7 @@ bool wl80211_scan_channel(
     if (wl80211_have_wl_escanresults() == false)
     {
         // Run scan command
+        if (!is_input_shell_safe(cmd)) return false;
         file_desc = popen(cmd, "r");
         if (!file_desc) {
             return false;
@@ -497,6 +498,7 @@ bool wl80211_scan_channel(
             scan_retry_cnt++;
         }
 
+        if (!is_input_shell_safe(cmd)) return false;
         file_desc = popen(cmd, "r");
         if (!file_desc) {
             return false;
