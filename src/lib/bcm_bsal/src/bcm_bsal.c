@@ -540,7 +540,6 @@ static proc_event_res_t process_event_probereq_msg_rx(
 
     payload_size = ntohl(event_raw->event.datalen);
     payload_size -= sizeof(wl_event_rx_frame_data_t) + sizeof(struct dot11_management_header);
-    payload_size -= 4; // FIXME: FCS at the end?
 
     if (payload_size <= 0)
     {
@@ -871,7 +870,6 @@ static proc_event_res_t process_event_assoc_reassoc_ind(
     LOGD(LOG_PREFIX"%s: assoc_ind/reassoc_ind addr="PRI(os_macaddr_t), client->ifname, FMT(os_macaddr_t, client->hwaddr));
 
     payload_size = ntohl(event_raw->event.datalen);
-    payload_size -= 4; // FIXME FCS at the end?
 
     if (payload_size <= 0)
     {
