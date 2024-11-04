@@ -63,6 +63,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <osw_drv_nl80211.h>
 #include <osw_hostap.h>
 #include <osw_drv_common.h>
+#include <osw_time.h>
 #include <osw_timer.h>
 #include <osw_conf.h>
 #include <osw_util.h>
@@ -94,6 +95,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     OSW_HWADDR_ARG(sta_addr), \
     ##__VA_ARGS__)
 
+#include "osw_plat_bcm_dfs_sta_war.c.h"
+
 #define OSW_PLAT_BCM_CHSPEC_CENTER(cs) (CHSPEC_CHANNEL(cs) >> WL_CHANSPEC_CHAN_SHIFT)
 #define OSW_PLAT_BCM_CHSPEC_BW(cs) (CHSPEC_BW(cs) >> WL_CHANSPEC_BW_SHIFT)
 #define OSW_PLAT_BCM_CHSPEC_FIRST(cs) (OSW_PLAT_BCM_CHSPEC_CENTER(cs) - (1 << (OSW_PLAT_BCM_CHSPEC_BW(cs) - 1)) + 2)
@@ -106,6 +109,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
              c += 4)
 
 struct osw_plat_bcm {
+    struct osw_plat_bcm_dfs_sta_war *dfs_sta_war;
     struct osw_state_observer state_obs;
     struct osw_drv_nl80211_ops *nl_ops;
     struct osw_drv_nl80211_hook *nl_hook;
@@ -460,6 +464,30 @@ osw_plat_bcm_conf_is_rrm_changed(struct osw_drv_vif_config *vif)
     return vif->u.ap.mode.rrm_neighbor_report == enabled;
 }
 
+static int
+osw_plat_bcm_parse_beacon_rate(const char *vif_name)
+{
+    const char *rspec = WL(vif_name, "force_bcn_rspec");
+    if (WARN_ON(rspec == NULL)) return 0;
+
+    char *tmp = strdupa(strpbrk(rspec, "1234567890") ?: "");
+    const char *beacon_rate_500kbps = strsep(&tmp, " ");
+
+    if (WARN_ON(beacon_rate_500kbps == NULL)) return 0;
+
+    return atoi(beacon_rate_500kbps);
+}
+
+static bool
+osw_plat_bcm_conf_is_beacon_rate_changed(struct osw_drv_vif_config *vif)
+{
+    const char *vif_name = vif->vif_name;
+
+    const int rate = osw_plat_bcm_parse_beacon_rate(vif_name);
+
+    return vif->u.ap.mode.beacon_rate.u.legacy == osw_rate_legacy_from_halfmbps(rate);
+}
+
 static bool
 osw_plat_bcm_conf_need_vif_ap_disable(struct osw_drv_vif_config *vif)
 {
@@ -469,8 +497,11 @@ osw_plat_bcm_conf_need_vif_ap_disable(struct osw_drv_vif_config *vif)
 
         const bool rrm_matching = osw_plat_bcm_conf_is_rrm_changed(vif);
 
+        const bool beacon_rate_matching = osw_plat_bcm_conf_is_beacon_rate_changed(vif);
+
         const bool need_down = (rrm_matching == false)
-            || (btm_matching == false);
+            || (btm_matching == false)
+            || (beacon_rate_matching == false);
         if (need_down) return true;
     }
 
@@ -731,6 +762,57 @@ osw_plat_bcm_conf_vif_ap_multi_ap(struct osw_drv_phy_config *phy,
 }
 
 static void
+osw_plat_bcm_conf_vif_ap_beacon_rate(struct osw_drv_phy_config *phy,
+                                  struct osw_drv_vif_config *vif)
+{
+    const struct osw_drv_vif_config_ap *ap = &vif->u.ap;
+    if (ap->mode_changed == false) return;
+
+    const char *vif_name = vif->vif_name;
+    const uint32_t beacon_rate = ap->mode.beacon_rate.u.legacy;
+    const int bcn_rate = osw_rate_legacy_to_halfmbps(beacon_rate);
+    WARN_ON(WL(vif_name, "force_bcn_rspec", strfmta("%d", bcn_rate)) == NULL);
+}
+
+static const char*
+osw_plat_bcm_get_mcast_cmd(const enum osw_band band)
+{
+    switch (band) {
+        case OSW_BAND_2GHZ:
+            return "2g_mrate";
+        case OSW_BAND_5GHZ:
+            return "5g_mrate";
+        case OSW_BAND_6GHZ:
+            return "6g_mrate";
+        case OSW_BAND_UNDEFINED:
+            return NULL;
+    }
+    return NULL;
+}
+
+static void
+osw_plat_bcm_conf_vif_ap_mcast_rate(struct osw_drv_phy_config *phy,
+                                  struct osw_drv_vif_config *vif)
+{
+    const struct osw_drv_vif_config_ap *ap = &vif->u.ap;
+    if (ap->mode_changed == false) return;
+    const char *vif_name = vif->vif_name;
+    const uint32_t mcast_rate = ap->mode.mcast_rate;
+    const enum osw_band band = osw_channel_to_band(&ap->channel);
+    const char *cmd = osw_plat_bcm_get_mcast_cmd(band);
+    if (WARN_ON(cmd == NULL)) return;
+    const int mcast_r = osw_rate_legacy_to_halfmbps(mcast_rate);
+    if (mcast_r == 11) {
+        const float mcast_mbps = (float) osw_rate_legacy_to_halfmbps(mcast_rate)/2;
+        WARN_ON(WL(vif_name, cmd, strfmta("%.1f", mcast_mbps)) == NULL);
+    }
+    else {
+         WARN_ON(WL(vif_name, cmd, strfmta("%d", mcast_r/2)) == NULL);
+    }
+}
+
+
+static void
 osw_plat_bcm_conf_vif_sta_multi_ap(struct osw_drv_phy_config *phy,
                                    struct osw_drv_vif_config *vif)
 {
@@ -761,6 +843,8 @@ osw_plat_bcm_conf_each_vif(struct osw_drv_phy_config *phy,
             osw_plat_bcm_conf_vif_ap_mode(phy, vif);
             osw_plat_bcm_conf_vif_ap_channel(phy, vif);
             osw_plat_bcm_conf_vif_ap_multi_ap(phy, vif);
+            osw_plat_bcm_conf_vif_ap_beacon_rate(phy, vif);
+            osw_plat_bcm_conf_vif_ap_mcast_rate(phy, vif);
             break;
         case OSW_VIF_AP_VLAN:
             break;
@@ -3034,6 +3118,78 @@ osw_plat_bcm_fix_vif_ap_multi_ap(const char *phy_name,
 }
 
 static void
+osw_plat_bcm_fix_vif_ap_beacon_rate(const char *phy_name,
+                                 const char *vif_name,
+                                 struct osw_drv_vif_state *state)
+{
+    struct osw_drv_vif_state_ap *ap = &state->u.ap;
+
+    const int halfmbps = osw_plat_bcm_parse_beacon_rate(vif_name);
+    if (halfmbps == 0) return;
+    const enum osw_rate_legacy rate = osw_rate_legacy_from_halfmbps(halfmbps);
+    ap->mode.beacon_rate.type = OSW_BEACON_RATE_ABG;
+    ap->mode.beacon_rate.u.legacy = rate;
+
+}
+
+static void
+osw_plat_bcm_fix_vif_ap_mcast_rate(const char *phy_name,
+                                 const char *vif_name,
+                                 struct osw_drv_vif_state *state)
+{
+    struct osw_drv_vif_state_ap *ap = &state->u.ap;
+    const enum osw_band band = osw_channel_to_band(&ap->channel);
+    const char *cmd = osw_plat_bcm_get_mcast_cmd(band);
+
+    if (WARN_ON(cmd == NULL)) return;
+
+    const char *rspec = WL(vif_name, cmd);
+
+    if (WARN_ON(rspec == NULL)) return;
+
+    if (!strcmp(rspec, "auto")) {
+        ap->mode.mcast_rate = OSW_RATE_UNSPEC;
+        return;
+    }
+
+    char *tmp = strdupa(strpbrk(rspec, "1234567890") ?: "");
+    const char *mcast_rate = strsep(&tmp, " ");
+
+    if (WARN_ON(mcast_rate == NULL)) return;
+
+    const int value = atof(mcast_rate)*2;
+
+    ap->mode.mcast_rate = osw_rate_legacy_from_halfmbps(value);
+
+}
+
+static void
+osw_plat_bcm_fix_vif_ap_mgmt_rate(const char *phy_name,
+                                 const char *vif_name,
+                                 struct osw_drv_vif_state *state)
+{
+    struct osw_drv_vif_state_ap *ap = &state->u.ap;
+    size_t i;
+    int min = 500;
+    for (i = 0; i < OSW_RATE_COUNT; i++) {
+        if (ap->mode.basic_rates & osw_rate_legacy_bit(i)) {
+            if (osw_rate_legacy_to_halfmbps(i) == 0) {
+                continue;
+            }
+            if (min > osw_rate_legacy_to_halfmbps(i)) {
+                min = osw_rate_legacy_to_halfmbps(i);
+            }
+        }
+    }
+    if (min == 500) {
+        ap->mode.mgmt_rate = OSW_RATE_UNSPEC;
+    }
+    else {
+        ap->mode.mgmt_rate = osw_rate_legacy_from_halfmbps(min);
+    }
+}
+
+static void
 osw_plat_bcm_fix_vif_sta_multi_ap_networks(const char *phy_name,
                                            const char *vif_name,
                                            struct osw_drv_vif_state *state)
@@ -3107,6 +3263,9 @@ osw_plat_bcm_fix_vif_ap_state(const char *phy_name,
     osw_plat_bcm_fix_vif_ap_mode(phy_name, vif_name, state);
     osw_plat_bcm_fix_vif_ap_neigh(phy_name, vif_name, state);
     osw_plat_bcm_fix_vif_ap_multi_ap(phy_name, vif_name, state);
+    osw_plat_bcm_fix_vif_ap_beacon_rate(phy_name, vif_name, state);
+    osw_plat_bcm_fix_vif_ap_mcast_rate(phy_name, vif_name, state);
+    osw_plat_bcm_fix_vif_ap_mgmt_rate(phy_name, vif_name, state);
 
     ap->mode.wnm_bss_trans = strtol(WL(vif_name, "wnm") ?: "0", NULL, 16) & OSW_PLAT_BCM_BTM_BIT;
     ap->mode.rrm_neighbor_report = strtol(WL(vif_name, "rrm") ?: "0", NULL, 16) & OSW_PLAT_BCM_RRM_BIT;
@@ -3244,6 +3403,8 @@ osw_plat_bcm_start(struct osw_plat_bcm *m)
     if (m->loop == NULL) return;
 
     osw_plat_bcm_init_wl();
+
+    m->dfs_sta_war = osw_plat_bcm_dfs_sta_war_new();
 
     m->nl_ops = OSW_MODULE_LOAD(osw_drv_nl80211);
     if (m->nl_ops == NULL) return;
