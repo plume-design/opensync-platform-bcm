@@ -342,4 +342,10 @@ config BCMWL_HE_FEATURES
         0x40: HE STA ULMU support
         0x80: HE ER SU Rx support
 
+config BCM_SPEEDTEST_RT_RUNTIME
+    int "RT_RUNTIME value"
+    default 95000
+    help
+        Sets the RT_RUNTIME for speedtest priority.
+
 endif # PLATFORM_IS_BCM

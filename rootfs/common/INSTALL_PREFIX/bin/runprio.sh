@@ -24,11 +24,12 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# {# jinja-parse #}
 
 # run a command with increased process priority
 # and temporarily elevated system rt_runtime
 
-RT_RUNTIME=95000
+RT_RUNTIME={{ CONFIG_BCM_SPEEDTEST_RT_RUNTIME }}
 CHRT_PRIO="-r 5"
 SIGNALS="INT HUP TERM EXIT QUIT"
 

@@ -216,7 +216,7 @@ bool bcmwl_acl_is_synced(const char *ifname)
         return false;
     if (atoi(str) != 1)
         return false;
-    if (WARN_ON(!(acl = bcmwl_acl_merge(ifname, &policy))))
+    if (WARN_ON(!(acl = strdupafree(bcmwl_acl_merge(ifname, &policy)))))
         return false;
     return bcmwl_acl_cmp(ifname, policy, acl);
 }
@@ -235,7 +235,7 @@ bool bcmwl_acl_commit(const char *ifname)
     if (atoi(WL(ifname, "probresp_sw") ?: "0") != 1 &&
         WARN_ON(!WL(ifname, "probresp_sw", "1")))
         goto out;
-    if (WARN_ON(!(acl = bcmwl_acl_merge(ifname, &policy))))
+    if (WARN_ON(!(acl = strdupafree(bcmwl_acl_merge(ifname, &policy)))))
         goto out;
     ok = true;
     if (bcmwl_acl_cmp(ifname, policy, acl))

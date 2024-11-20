@@ -610,6 +610,21 @@ void bcmwl_radio_state_report(const char *ifname)
         bcmwl_ops.op_rstate(&rstate);
 }
 
+static bool bcmwl_cap_is_supported(const char *phy, const char *cap)
+{
+    char *i, *p;
+
+    p = WL(phy, "cap");
+    if (!p)
+        return false;
+
+    while ((i = strsep(&p, " ")))
+        if (!strcmp(i, cap))
+            return true;
+
+    return false;
+}
+
 /* FIXME: The following is intended to deprecate and
  * eventually replace bcmwl_radio_update().
  */
@@ -674,6 +689,10 @@ bool bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
                 WARN_ON(!WL(phy, "bw_cap", "5g", "0xff"));
             if (strstr(rconf->freq_band, "6G"))
                 WARN_ON(!WL(phy, "bw_cap", "6g", "0xff"));
+            if (bcmwl_cap_is_supported(phy, "dyn160")) {
+                LOGI("%s: disabling extnssbw", phy);
+                WARN_ON(!WL(phy, "dyn160", "0"));
+            }
         }
         if ((p = WL(phy, "chanspec")) && (p = strsep(&p, " ")))
             WARN_ON(!WL(phy, "chanspec", p));
