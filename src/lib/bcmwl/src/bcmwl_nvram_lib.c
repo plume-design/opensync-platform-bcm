@@ -85,3 +85,20 @@ bool bcmwl_nvram_set(const char *ifname,
 
     return true;
 }
+
+bool bcmwl_nvram_set_flag(const char *ifname,
+                          const char *name,
+                          const int bit,
+                          const bool value)
+{
+    char key[256];
+    int err;
+
+    snprintf(key, sizeof(key), "%s_%s", ifname, name);
+    err = wlcsm_nvram_set_bitflag(key, bit, value ? 1 : 0);
+    LOGT("%s: (err=%d) '%s' = '%s'", __func__, err, key, value ? "true" : "(none)");
+    if (err)
+        return false;
+
+    return true;
+}

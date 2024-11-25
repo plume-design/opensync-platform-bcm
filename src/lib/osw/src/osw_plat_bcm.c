@@ -75,6 +75,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <bcmwl_cim.h>
 #include <bcmwl_ioctl.h>
 #include <bcmwl_event.h>
+#include <bcmwl_nvram.h>
 
 #define LOG_PREFIX(fmt, ...) \
     "osw: plat: bcm: " fmt, \
@@ -96,6 +97,13 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     ##__VA_ARGS__)
 
 #include "osw_plat_bcm_dfs_sta_war.c.h"
+#define AUTH_TYPE_TC        0
+#define AUTH_TYPE_ONLINE    1
+#define AUTH_TYPE_HTTP      2
+#define AUTH_TYPE_DNS       3
+
+#define HSPOTAP_STOP() strexa("/sbin/start-stop-daemon", "-K", "-p", "/var/run/hspotap.pid")
+#define HSPOTAP_RUN() strexa("/sbin/start-stop-daemon", "-S", "-t", "-p", "/var/run/hspotap.pid", "-x", "/bin/hspotap", "-b", "-m")
 
 #define OSW_PLAT_BCM_CHSPEC_CENTER(cs) (CHSPEC_CHANNEL(cs) >> WL_CHANSPEC_CHAN_SHIFT)
 #define OSW_PLAT_BCM_CHSPEC_BW(cs) (CHSPEC_BW(cs) >> WL_CHANSPEC_BW_SHIFT)
@@ -107,6 +115,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         for (c = OSW_PLAT_BCM_CHSPEC_FIRST(cs); \
              c > 0 && c <= OSW_PLAT_BCM_CHSPEC_LAST(cs); \
              c += 4)
+
+#define BIT(x) (1 << (x))
 
 struct osw_plat_bcm {
     struct osw_plat_bcm_dfs_sta_war *dfs_sta_war;
@@ -173,6 +183,15 @@ struct osw_plat_bcm_sta_each_arg {
     struct osw_plat_bcm_vif *vif;
     osw_plat_bcm_sta_each_fn_t *fn;
     void *priv;
+};
+
+enum passpoint_list_type {
+    TYPE_DOMAIN,
+    TYPE_OUI,
+    TYPE_VENUE_URL,
+    TYPE_LANG,
+    TYPE_3GPP,
+    TYPE_NAI,
 };
 
 static bool
@@ -828,6 +847,282 @@ osw_plat_bcm_conf_vif_sta_multi_ap(struct osw_drv_phy_config *phy,
     WARN_ON(WL(vif_name, "map", strfmta("%d", val)) == NULL);
 }
 
+#define MAX_EAP_PER_NAI 10
+#define MAX_PARAMS_PER_EAP 16
+#define BUFFER_SIZE 256
+
+struct passpoint_nvram_eap_param {
+    uint8_t id;
+    uint8_t val;
+};
+
+struct passpoint_nvram_eap_method {
+    int eap_type;
+    struct passpoint_nvram_eap_param params[MAX_PARAMS_PER_EAP];
+    int param_count;
+};
+
+struct passpoint_nvram_nai_realm {
+    int encoding;
+    char realm[BUFFER_SIZE];
+    struct passpoint_nvram_eap_method eap_methods[MAX_EAP_PER_NAI];
+    int eap_method_count;
+};
+
+void parse_hostap_eap_method(const char *str,
+                             struct passpoint_nvram_eap_method *eap_method) {
+    const char *ptr = str;
+    sscanf(ptr, "%d", &eap_method->eap_type);
+    while ((eap_method->param_count < MAX_PARAMS_PER_EAP) && ((ptr = strchr(ptr, '[')) != NULL)) {
+        if (sscanf(ptr, "[%hhu:%hhu]",
+                   &eap_method->params[eap_method->param_count].id,
+                   &eap_method->params[eap_method->param_count].val) == 2) {
+            eap_method->param_count++;
+        }
+        ptr++;
+    }
+}
+
+void parse_hspot_eap_method(const char *str,
+                            struct passpoint_nvram_eap_method *eap_method) {
+    char *copy = strdupa(str);
+    char *ptr = strsep(&copy, "=");
+    eap_method->eap_type = atoi(ptr);
+
+    while ((eap_method->param_count < MAX_PARAMS_PER_EAP) && ((ptr = strsep(&copy, "#")) != NULL)) {
+        if (sscanf(ptr, "%hhu,%hhu",
+                   &eap_method->params[eap_method->param_count].id,
+                   &eap_method->params[eap_method->param_count].val) == 2) {
+            eap_method->param_count++;
+        }
+    }
+}
+
+
+void compile_hspot_nai(const struct passpoint_nvram_nai_realm *nai,
+                       char **out, size_t *out_len) {
+    int i = 0;
+    int j = 0;
+
+    csnprintf(out, out_len, "%s+%d+", nai->realm, nai->encoding);
+    for (i = 0; i < nai->eap_method_count; i++) {
+        csnprintf(out, out_len, "%d", nai->eap_methods[i].eap_type);
+        if (nai->eap_methods[i].param_count != 0)
+            csnprintf(out, out_len, "=");
+        for (j = 0; j < nai->eap_methods[i].param_count; j++) {
+            csnprintf(out, out_len, "%d,%d", nai->eap_methods[i].params[j].id,
+                                             nai->eap_methods[i].params[j].val);
+            if (j < nai->eap_methods[i].param_count - 1)
+                csnprintf(out, out_len, "#");
+        }
+        if (i < (nai->eap_method_count - 1))
+            csnprintf(out, out_len, ";");
+    }
+}
+
+void compile_hapd_nai(const struct passpoint_nvram_nai_realm *nai,
+                      char **out, size_t *out_len) {
+    int i = 0;
+    int j = 0;
+
+    csnprintf(out, out_len, "%d,%s", nai->encoding, nai->realm);
+    for (i = 0; i < nai->eap_method_count; i++) {
+        if (nai->eap_methods[i].param_count != 0)
+            csnprintf(out, out_len, ",%d", nai->eap_methods[i].eap_type);
+        for (j = 0; j < nai->eap_methods[i].param_count; j++) {
+            csnprintf(out, out_len, "[%d:%d]",
+                                    nai->eap_methods[i].params[j].id,
+                                    nai->eap_methods[i].params[j].val);
+        }
+    }
+}
+
+void parse_hapd_nai_realm(const char *input,
+                          struct passpoint_nvram_nai_realm *nai_realm) {
+
+    // Format: <encoding>,<NAI Realm(s)>[,<EAP Method 1>][,<EAP Method 2>][,...]
+    // NAI Realm(s): Semi-colon delimited NAI Realm(s)
+    // EAP Method: <EAP Method>[:<[AuthParam1:Val1]>][<[AuthParam2:Val2]>][...]
+    // #nai_realm=0,example.org,13[5:6],21[2:4][5:7]
+
+    char *str = strdupa(input);
+    char *token = strsep(&str, ",");
+
+    nai_realm->encoding = atoi(token);
+
+    token = strsep(&str, ",");
+    STRSCPY_WARN(nai_realm->realm, token);
+
+    while ((nai_realm->eap_method_count < MAX_EAP_PER_NAI) && ((token = strsep(&str, ",")) != NULL)) {
+        parse_hostap_eap_method(token, &nai_realm->eap_methods[nai_realm->eap_method_count++]);
+    }
+}
+
+void parse_hspot_nai_realm(const char *input,
+                           struct passpoint_nvram_nai_realm *nai_realm) {
+
+    // Format: (spaces for better readability)
+    // <Realm name> + <Encoding> + <EAP Method> = <Auth ID 1> , <Auth Param 1> #
+    //                                            <Auth ID 2> , <Auth Param 2>
+    //                           [;<EAP Method 2> ...] [? <Realm name 2> ...]
+    // example.org+0+13=5,6#3,5;21=2,4#5,7;23=5,1#5,2;50=5,1#5,2
+
+    char *realm = strdupa(input);
+    char *token = strsep(&realm, "+");
+    STRSCPY_WARN(nai_realm->realm, token);
+
+    token = strsep(&realm, "+");
+    nai_realm->encoding = atoi(token);
+
+    while((nai_realm->eap_method_count < MAX_EAP_PER_NAI) && ((token = strsep(&realm, ";")) != NULL)) {
+        parse_hspot_eap_method(token, &nai_realm->eap_methods[nai_realm->eap_method_count++]);
+    }
+}
+
+static void
+parse_passpoint_to_nvram_list(const char **list, const size_t list_len, const char *delim,
+                              char *out, const size_t out_size,
+                              const enum passpoint_list_type type)
+{
+    size_t i;
+    char *token1;
+    char *token2;
+    struct passpoint_nvram_nai_realm nai;
+    char *pbuf = out;
+    size_t sbuf = out_size;
+
+    if (list == NULL || list_len == 0) {
+        memset(out, 0, out_size);
+        return;
+    }
+
+    for (i = 0; i < list_len; i++) {
+        token1 = strdupa(list[i]);
+        token2 = strsep(&token1, delim);
+        switch (type) {
+            case TYPE_DOMAIN:
+            case TYPE_VENUE_URL:
+                csnprintf(&pbuf, &sbuf, "%s ", token2);
+                break;
+            case TYPE_OUI:
+                csnprintf(&pbuf, &sbuf, "%s:1;", token2);
+                break;
+            case TYPE_LANG:
+                csnprintf(&pbuf, &sbuf, "%s!%s|", token1, token2);
+                break;
+            case TYPE_3GPP:
+                csnprintf(&pbuf, &sbuf, "%s:%s;", token2, token1);
+                break;
+            case TYPE_NAI:
+                MEMZERO(nai);
+                parse_hapd_nai_realm(token2, &nai);
+                compile_hspot_nai(&nai, &pbuf, &sbuf);
+                csnprintf(&pbuf, &sbuf, "?");
+                break;
+        }
+    }
+    if (out_size != sbuf) out[out_size - sbuf - 1] = '\0';
+}
+
+static void
+osw_plat_bcm_conf_vif_ap_passpoint(struct osw_drv_phy_config *phy,
+                                   struct osw_drv_vif_config *vif)
+{
+    size_t i;
+    const struct osw_drv_vif_config_ap *ap = &vif->u.ap;
+    const char *vif_name = vif->vif_name;
+    if (ap->passpoint_changed == false) return;
+
+    const struct osw_passpoint *passpoint = &ap->passpoint;
+    char buf[4096];
+
+    NVS(vif_name, "radio", "1");
+    NVS(vif_name, "ifname", vif_name);
+
+    if (passpoint->hs20_enabled)
+        NVS(vif_name, "hsflag", "1aa5");
+    else
+        NVS(vif_name, "hsflag", "1aa0");
+
+    NVSF(vif_name, "hsflag", 1, passpoint->osen);
+    NVSF(vif_name, "hsflag", 4, passpoint->asra);
+
+    NVS(vif_name, "wanmetrics", strfmta("%s:%s:%s=0>0=0>0=0",
+                                         passpoint->adv_wan_status ? "1" : "0",
+                                         passpoint->adv_wan_symmetric ? "1" : "0",
+                                         passpoint->adv_wan_at_capacity ? "1" : "0"));
+
+    NVS(vif_name, "iwnettype", strfmta("%d", passpoint->ant));
+    NVS(vif_name, "venuegrp", strfmta("%d", passpoint->venue_group));
+    NVS(vif_name, "venuetype", strfmta("%d", passpoint->venue_type));
+    NVS(vif_name, "hessid", passpoint->hessid.buf);
+    NVS(vif_name, "osu_ssid", passpoint->osu_ssid.buf);
+
+    /* Parameters not used by BCM, but preserved for state report */
+    NVS(vif_name, "plume_anqp_domain_id", strfmta("%d", passpoint->anqp_domain_id));
+    NVS(vif_name, "plume_t_c_timestamp", strfmta("%d", passpoint->t_c_timestamp));
+    NVS(vif_name, "plume_t_c_filename", passpoint->t_c_filename);
+    NVS(vif_name, "plume_anqp_elem", passpoint->anqp_elem);
+
+    parse_passpoint_to_nvram_list((const char **)passpoint->domain_list, passpoint->domain_list_len,
+                                  "", buf, sizeof(buf), TYPE_DOMAIN);
+    NVS(vif_name, "domainlist", buf);
+
+    parse_passpoint_to_nvram_list((const char **)passpoint->roamc_list, passpoint->roamc_list_len,
+                                  "", buf, sizeof(buf), TYPE_OUI);
+    NVS(vif_name, "ouilist", buf);
+
+    parse_passpoint_to_nvram_list((const char **)passpoint->oper_fname_list, passpoint->oper_fname_list_len,
+                                  ":", buf, sizeof(buf), TYPE_LANG);
+    NVS(vif_name, "oplist", buf);
+
+    parse_passpoint_to_nvram_list((const char **)passpoint->venue_name_list, passpoint->venue_name_list_len,
+                                  ":", buf, sizeof(buf), TYPE_LANG);
+    NVS(vif_name, "venuelist", buf);
+
+    parse_passpoint_to_nvram_list((const char **)passpoint->nairealm_list, passpoint->nairealm_list_len,
+                                  "", buf, sizeof(buf), TYPE_NAI);
+    NVS(vif_name, "nai_realm", buf);
+
+    parse_passpoint_to_nvram_list((const char **)passpoint->list_3gpp_list, passpoint->list_3gpp_list_len,
+                                  ":", buf, sizeof(buf), TYPE_3GPP);
+    NVS(vif_name, "3gpplist", buf);
+
+    parse_passpoint_to_nvram_list((const char **)passpoint->venue_url_list, passpoint->venue_url_list_len,
+                                  "", buf, sizeof(buf), TYPE_VENUE_URL);
+    NVS(vif_name, "plume_venue_url", buf);
+
+    char *pbuf = buf;
+    size_t sbuf = sizeof(buf);
+    for (i = 0; i < passpoint->net_auth_type_list_len; i++) {
+        switch (passpoint->net_auth_type_list[i]) {
+            case AUTH_TYPE_TC:
+                /* FIXME: need net_auth_t_c_url implementation in osw
+                csnprintf(&pbuf, &sbuf, "accepttc=%s+", passpoint->net_auth_t_c_url);
+                */
+                break;
+            case AUTH_TYPE_ONLINE:
+                csnprintf(&pbuf, &sbuf, "online=+");
+                break;
+            case AUTH_TYPE_HTTP:
+                /* FIXME: need net_auth_redirect_url in osw
+                csnprintf(&pbuf, &sbuf, "httpred=%s+", passpoint->net_auth_redirect_url);
+                */
+                break;
+            case AUTH_TYPE_DNS:
+                csnprintf(&pbuf, &sbuf, "dnsred=+");
+                break;
+        }
+    }
+    if (sizeof(buf) != sbuf) buf[sizeof(buf) - sbuf - 1] = '\0';
+    NVS(vif_name, "netauthlist", buf);
+
+    /* FIXME: would be better to check in sleep loop if pid is dead */
+    HSPOTAP_STOP();
+    sleep(1);
+    HSPOTAP_RUN();
+}
+
 static void
 osw_plat_bcm_conf_each_vif(struct osw_drv_phy_config *phy,
                            struct osw_drv_vif_config *vif)
@@ -845,6 +1140,7 @@ osw_plat_bcm_conf_each_vif(struct osw_drv_phy_config *phy,
             osw_plat_bcm_conf_vif_ap_multi_ap(phy, vif);
             osw_plat_bcm_conf_vif_ap_beacon_rate(phy, vif);
             osw_plat_bcm_conf_vif_ap_mcast_rate(phy, vif);
+            osw_plat_bcm_conf_vif_ap_passpoint(phy, vif);
             break;
         case OSW_VIF_AP_VLAN:
             break;
@@ -1024,6 +1320,28 @@ osw_plat_bcm_ap_conf_mutate_cb(struct osw_hostap_hook *hook,
     OSW_HOSTAP_CONF_UNSET(hapd_conf->ieee80211ax);
     OSW_HOSTAP_CONF_UNSET(hapd_conf->ieee80211ac);
     OSW_HOSTAP_CONF_UNSET(hapd_conf->multi_ap); /* mapped to `map` iovar */
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->hs20);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->hessid);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->interworking);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->hs20_wan_metrics);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->osen);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->asra);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->domain_name);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->access_network_type);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->venue_group);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->venue_type);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->anqp_domain_id);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->hs20_t_c_timestamp);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->osu_ssid);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->hs20_t_c_filename);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->anqp_elem);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->roaming_consortium);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->nai_realm);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->hs20_oper_friendly_name);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->venue_name);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->venue_url);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->anqp_3gpp_cell_net);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->network_auth_type);
 }
 
 static void
@@ -3117,6 +3435,145 @@ osw_plat_bcm_fix_vif_ap_multi_ap(const char *phy_name,
     osw_plat_bcm_map_to_osw_ap(val, &ap->multi_ap);
 }
 
+static char **
+parse_nvram_list_to_passpoint(char *list, const char *delim1, const char *delim2,
+                              size_t *out_len, const enum passpoint_list_type type)
+{
+    size_t count = 0;
+    char **out = NULL;
+    char *token1;
+    char *token2;
+    char buf[BUFFER_SIZE];
+    char *pbuf;
+    size_t sbuf;
+    struct passpoint_nvram_nai_realm nai;
+
+    if (list == NULL || strlen(list) == 0) {
+        *out_len = 0;
+        return NULL;
+    }
+
+    while ((token1 = strsep(&list, delim1)) != NULL) {
+        if ((token2 = strsep(&token1, delim2)) != NULL) {
+            switch (type) {
+                case TYPE_DOMAIN:
+                case TYPE_OUI:
+                case TYPE_VENUE_URL:
+                    snprintf(buf, sizeof(buf), "%s", token2);
+                    break;
+                case TYPE_LANG:
+                    snprintf(buf, sizeof(buf), "%s:%s", token1, token2);
+                    break;
+                case TYPE_3GPP:
+                    snprintf(buf, sizeof(buf), "%s,%s", token2, token1);
+                    break;
+                case TYPE_NAI:
+                    MEMZERO(nai);
+                    pbuf = buf;
+                    sbuf = sizeof(buf);
+                    parse_hspot_nai_realm(token2, &nai);
+                    compile_hapd_nai(&nai, &pbuf, &sbuf);
+                    break;
+            }
+            out = REALLOC(out, sizeof(char *) * (count + 1));
+            out[count++] = STRDUP(buf);
+        }
+    }
+    *out_len = count;
+    return out;
+}
+
+static void
+osw_plat_bcm_fix_vif_ap_passpoint(const char *phy_name,
+                                  const char *vif_name,
+                                  struct osw_drv_vif_state *state)
+{
+    struct osw_passpoint *passpoint = &state->u.ap.passpoint;
+    char *str, *token, *list;
+    size_t count;
+
+    osw_passpoint_free_internal(passpoint);
+
+    str = NVG(vif_name, "hsflag");
+    if (str == NULL) return;
+
+    const long flags = strtol(str, NULL, 16);
+    passpoint->hs20_enabled = flags & BIT(0);
+    passpoint->osen = flags & BIT(1);
+    passpoint->asra = flags & BIT(4);
+
+    if ((str = NVG(vif_name, "wanmetrics")) != NULL) {
+        char status, symmetric, capacity;
+        sscanf(str, "%c:%c:%c", &status, &symmetric, &capacity);
+        passpoint->adv_wan_status = (status == '1') ? true : false;
+        passpoint->adv_wan_symmetric = (symmetric == '1') ? true : false;
+        passpoint->adv_wan_at_capacity = (capacity == '1') ? true : false;
+    }
+
+    if ((str = NVG(vif_name, "iwnettype")) != NULL) passpoint->ant = atoi(str);
+    if ((str = NVG(vif_name, "venuegrp")) != NULL) passpoint->venue_group = atoi(str);
+    if ((str = NVG(vif_name, "venuetype")) != NULL) passpoint->venue_type = atoi(str);
+    if ((str = NVG(vif_name, "plume_asra")) != NULL) passpoint->asra = atoi(str);
+    if ((str = NVG(vif_name, "plume_anqp_domain_id")) != NULL) passpoint->anqp_domain_id = atoi(str);
+    if ((str = NVG(vif_name, "plume_t_c_timestamp")) != NULL) passpoint->t_c_timestamp = atoi(str);
+    if ((str = NVG(vif_name, "plume_t_c_filename")) != NULL) passpoint->t_c_filename = STRDUP(str);
+
+    str = NVG(vif_name, "hessid");
+    if (str != NULL) {
+        STRSCPY_WARN(passpoint->hessid.buf, str);
+        passpoint->hessid.len = strlen(str);
+    }
+    str = NVG(vif_name, "osu_ssid");
+    if (str != NULL) {
+        STRSCPY_WARN(passpoint->osu_ssid.buf, str);
+        passpoint->osu_ssid.len = strlen(str);
+    }
+
+    list = NVG(vif_name, "domainlist");
+    passpoint->domain_list = parse_nvram_list_to_passpoint(list, " ", "",
+                                 &passpoint->domain_list_len, TYPE_DOMAIN);
+
+    list = NVG(vif_name, "ouilist");
+    passpoint->roamc_list = parse_nvram_list_to_passpoint(list, ";", ":",
+                                &passpoint->roamc_list_len, TYPE_OUI);
+
+    list = NVG(vif_name, "oplist");
+    passpoint->oper_fname_list = parse_nvram_list_to_passpoint(list, "|", "!",
+                                     &passpoint->oper_fname_list_len, TYPE_LANG);
+
+    list = NVG(vif_name, "venuelist");
+    passpoint->venue_name_list = parse_nvram_list_to_passpoint(list, "|", "!",
+                                     &passpoint->venue_name_list_len, TYPE_LANG);
+
+    list = NVG(vif_name, "nai_realm");
+    passpoint->nairealm_list = parse_nvram_list_to_passpoint(list, "?", "",
+                                    &passpoint->nairealm_list_len, TYPE_NAI);
+
+    list = NVG(vif_name, "3gpplist");
+    passpoint->list_3gpp_list = parse_nvram_list_to_passpoint(list, ";", ":",
+                                    &passpoint->list_3gpp_list_len, TYPE_3GPP);
+
+    list = NVG(vif_name, "plume_venue_url");
+    passpoint->venue_url_list = parse_nvram_list_to_passpoint(list, " ", "",
+                                    &passpoint->venue_url_list_len, TYPE_VENUE_URL);
+
+    list = NVG(vif_name, "netauthlist");
+    if (list != NULL && strlen(list) > 0) {
+        count = 0;
+        while ((str = strsep(&list, "+")) != NULL) {
+            if ((token = strsep(&str, "=")) != NULL) {
+                passpoint->net_auth_type_list = REALLOC(passpoint->net_auth_type_list,
+                                                        sizeof(int *) * (count + 1));
+                if (strcmp(token, "online") == 0)
+                    passpoint->net_auth_type_list[count++] = AUTH_TYPE_ONLINE;
+                else if (strcmp(token, "dnsred") == 0)
+                    passpoint->net_auth_type_list[count++] = AUTH_TYPE_DNS;
+            }
+        }
+        passpoint->net_auth_type_list_len = count;
+    }
+}
+
 static void
 osw_plat_bcm_fix_vif_ap_beacon_rate(const char *phy_name,
                                  const char *vif_name,
@@ -3266,6 +3723,7 @@ osw_plat_bcm_fix_vif_ap_state(const char *phy_name,
     osw_plat_bcm_fix_vif_ap_beacon_rate(phy_name, vif_name, state);
     osw_plat_bcm_fix_vif_ap_mcast_rate(phy_name, vif_name, state);
     osw_plat_bcm_fix_vif_ap_mgmt_rate(phy_name, vif_name, state);
+    osw_plat_bcm_fix_vif_ap_passpoint(phy_name, vif_name, state);
 
     ap->mode.wnm_bss_trans = strtol(WL(vif_name, "wnm") ?: "0", NULL, 16) & OSW_PLAT_BCM_BTM_BIT;
     ap->mode.rrm_neighbor_report = strtol(WL(vif_name, "rrm") ?: "0", NULL, 16) & OSW_PLAT_BCM_RRM_BIT;
