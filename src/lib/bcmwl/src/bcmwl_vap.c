@@ -537,7 +537,12 @@ void bcmwl_vap_prealloc_all(void)
             bssmax = bcmwl_radio_max_vifs(p->d_name);
             if (bssmax > BCMWL_VAP_PREALLOC_MAX)
                 bssmax = BCMWL_VAP_PREALLOC_MAX;
-            bcmwl_vap_prealloc(p->d_name, bssmax - 1, bcmwl_vap_mac_xfrm);
+            if(bssmax > 8){
+                    bcmwl_vap_prealloc(p->d_name, bssmax - 1, bcmwl_vap_mac_xfrm);
+            }else{
+		    //Adding a log here would be helpful to inform the developer/integrator
+                    bcmwl_vap_prealloc(p->d_name, bssmax - 2, bcmwl_vap_mac_xfrm);
+            }
         }
     }
 
