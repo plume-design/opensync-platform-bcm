@@ -985,8 +985,8 @@ static bool process_event_callback(
     STRSCPY(event.ifname, ifname);
 
     /*
-     * BM code is not resilient to events overrun. In such case its state may
-     * get silently corrupted. Therefore, it's safer to fail-fast BM.
+     * OWM code is not resilient to events overrun. In such case its state may
+     * get silently corrupted. Therefore, it's safer to fail-fast OWM.
      */
     if (!client_hwaddr && !data) {
         event.type = BSAL_EVENT_SOCKET_OVERRUN;
@@ -1426,7 +1426,7 @@ static void probe_req_filter_timer_callback(
         if (probe->snr <= client->snr_hwm) {
             /*
              * Drop probe reqs with SNR < HWM received from blacklisted STA.
-             * This prevents BM from generating (false) BAND_STEERING_ATTEMPT
+             * This prevents OWM from generating (false) BAND_STEERING_ATTEMPT
              * in bsReports.
              */
             propagate_probe_req = !client->is_blacklisted;

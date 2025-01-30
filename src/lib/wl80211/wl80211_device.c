@@ -65,23 +65,3 @@ bool wl80211_device_temp_results_get(const char *phyname, int32_t *temp)
     LOGW("Invalid temperature %s = %d", phyname, *temp);
     return false;
 }
-
-bool wl80211_device_txchainmask_get(const char *phyname, uint32_t *txchain)
-{
-    char *val;
-
-    if (!txchain) {
-        LOGE("Get tx chain (uninitialized)");
-        return false;
-    }
-    *txchain = 0;
-
-    if ((val = WL(phyname, "txchain")) && (val = strsep(&val, " "))) {
-        *txchain = atoi(val);
-        if (*txchain > 0)
-            return true;
-    }
-
-    LOGW("Invalid txchain %s = %d", phyname, *txchain);
-    return false;
-}

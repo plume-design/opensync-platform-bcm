@@ -75,7 +75,7 @@ target_radio_init_steer_war(void)
     /* FIXME: These settings can be configured by cloud via VIF_Config. However
      *        driver is limited to apply them only when radio is down. Downing
      *        radio introduces a severe service interruption so it's best to
-     *        avoid it if possible. These settings are for BM which works on
+     *        avoid it if possible. These settings are for OWM which works on
      *        home-vaps only. It is expected that these will always be either
      *        [set,[]] or 1 in ovsdb for home vifs.
      */

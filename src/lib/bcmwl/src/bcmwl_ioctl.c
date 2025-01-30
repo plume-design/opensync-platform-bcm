@@ -204,7 +204,7 @@ static bool bcmwl_iov(struct bcmwl_ioctl_arg *arg, void *buf)
     if (WARN_ON((len + arg->plen) > WLC_IOCTL_MAXLEN))
         return false;
 
-    strcpy(buf, arg->iovar);
+    strscpy(buf, arg->iovar, WLC_IOCTL_MAXLEN);
     if (arg->param)
         memcpy(buf + len, arg->param, arg->plen);
 
@@ -231,8 +231,8 @@ static bool bcmwl_iovbss(struct bcmwl_ioctl_arg *arg, void *buf)
     if (WARN_ON((len + arg->plen) > WLC_IOCTL_MAXLEN))
         return false;
 
-    strcpy(buf, prefix);
-    strcat(buf, arg->iovar);
+    strscpy(buf, prefix, WLC_IOCTL_MAXLEN);
+    strscat(buf, arg->iovar, WLC_IOCTL_MAXLEN);
     *idx = conv->dtoh32(arg->bsscfgidx);
     if (arg->param)
         memcpy(buf + len, arg->param, arg->plen);

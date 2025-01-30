@@ -35,6 +35,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "log.h"
 #include "schema.h"
 #include "os_nif.h"
+#include "os_time.h"
 #include "evx_debounce_call.h"
 #include "kconfig.h"
 
@@ -57,6 +58,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define BCMWL_VAP_PREALLOC_MAX 8 /* drv hard limit is 16, leave some for wds */
 #define BCMWL_RADIUS_SUPPORTED_MAX 8 /* arbitrary max number of all (A and AA) servers */
 #define BCMWL_NBORS_SUPPORTED_MAX 24 /* max number of neighbors supported for rxkhs */
+#define BCMWL_VIF_CREATION_TIMEOUT_MS 4000
 
 // some platforms use "wl1.1", some "wl1_1"
 // vif index 0 is just "wl1" not "wl1.0"
@@ -204,6 +206,22 @@ bool bcmwl_vap_ready(const char *ifname)
         os_nif_is_running((char *)ifname, &running);
 
     return (exists && running);
+}
+
+bool bcmwl_wait_for_vif_create(const char *vif, int timeout_ms)
+{
+    const int64_t start_ms = clock_mono_ms();
+    const int64_t deadline_ms = start_ms + timeout_ms;
+
+    while (clock_mono_ms() < deadline_ms)
+    {
+       if (access(strfmta("/sys/class/net/%s", vif), F_OK) == 0)
+           return true;
+
+       usleep(250 * 1000);
+    }
+
+    return false;
 }
 
 static const char *bcmwl_vap_map_int2str(int map)
@@ -474,6 +492,15 @@ static bool bcmwl_vap_prealloc_one(const char *phy, int idx, void (*mac_xfrm)(ch
     LOGI("%s: creating interface with mac %s", vif, mac);
     if (WARN_ON(!WL(phy, "ssid", "-C", strfmta("%d", idx), "")))
         return false;
+
+    /*
+     * Wait for VIF to be created. Sometimes VIF creation
+     * is taking time and WL commands that follow fails if
+     * it is not created yet.
+     */
+    if (WARN_ON(!bcmwl_wait_for_vif_create(vif, BCMWL_VIF_CREATION_TIMEOUT_MS)))
+        return false;
+
     if (WARN_ON(!WL(vif, "ap", "1")))
         return false;
     /*

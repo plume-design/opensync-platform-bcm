@@ -41,6 +41,18 @@ UNIT_EXPORT_LDFLAGS += -larcher
 
 endif
 
+ifdef CONFIG_OSN_BACKEND_QOS_BCM_TMCTL
+UNIT_SRC_TOP += $(OVERRIDE_DIR)/src/osn_qos_bcm_tmctl.c
+# Add BCMSDK include paths that are required
+# for: tmctl_api.h bcmtypes.h bcm_skb_defines.h
+UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/userspace/public/include
+UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/userspace/private/include
+UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/kernel/bcmkernel/include/uapi/linux
+UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/shared/opensource/include/bcm963xx
+# The final binary must be linked with -ltmctl
+UNIT_EXPORT_LDFLAGS += -ltmctl -ljson-c
+endif
+
 # Multicast OSN backend
 ifneq "$(or $(CONFIG_OSN_BACKEND_IGMP_BCM),$(CONFIG_OSN_BACKEND_MLD_BCM))" ""
 UNIT_CFLAGS += -I$(OVERRIDE_DIR)/inc

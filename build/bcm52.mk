@@ -103,6 +103,7 @@ DEFINES      += -Wno-error=cpp
 #DEFINES      += -Os
 OS_LDFLAGS   += -Wl,-rpath-link=$(BCM_FSBUILD_DIR)/lib
 OS_LDFLAGS   += -Wl,-rpath-link=$(BCM_FSBUILD_DIR)/public/lib
+OS_LDFLAGS   += -Wl,-rpath-link=$(BCM_FSBUILD_DIR)/private/lib
 OS_LDFLAGS   += -Wl,-rpath-link=$(BCM_FSBUILD_DIR)/gpl/lib
 OS_LDFLAGS   += -L$(BCM_FSBUILD_DIR)/lib
 OS_LDFLAGS   += -L$(BCM_FSBUILD_DIR)/public/lib

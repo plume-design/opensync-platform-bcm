@@ -591,6 +591,9 @@ void bcmwl_hostap_reset_wps_pbc(const char* ifname)
     int r;
     int v;
 
+    if (bcmwl_ops.op_vconf == NULL)
+        return;
+
     if (WARN_ON(!bcmwl_parse_vap(ifname, &r, &v)))
         return;
 

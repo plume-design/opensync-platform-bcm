@@ -37,25 +37,17 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define MCPD_CONFIG_FILE    "/var/mcpd.conf"
 /* Default number of apply retries before giving up */
 #define MCPD_APPLY_RETRIES  5
-#define OVS_APPLY_RETRIES  5
-#define NATIVE_APPLY_RETRIES  5
+#define BRIDGE_APPLY_RETRIES  5
 
 void osn_mcast_mcpd_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent);
-void osn_mcast_ovs_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent);
-void osn_mcast_native_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent);
-
-static char set_mcast_snooping[] = _S(ovs-vsctl set Bridge "$1" mcast_snooping_enable="$2");
-static char set_unknown_group[] = _S(ovs-vsctl set Bridge "$1" other_config:mcast-snooping-disable-flood-unregistered="$2");
-static char set_static_mrouter[] = _S(ovs-vsctl set Port "$1" other_config:mcast-snooping-flood-reports="$2");
-static char set_max_groups[] = _S(ovs-vsctl set Bridge "$1" other_config:mcast-snooping-table-size="$2");
-static char set_igmp_age[] = _S(ovs-vsctl set Bridge "$1" other_config:mcast-snooping-aging-time="$2");
+void osn_mcast_bridge_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent);
 
 /* Broadcom snooping tool configuration */
-static char set_mcast_igmp_snooping_native[] = _S(bcmmcastctl mode -i "$1" -p 1 -m "$2");
-static char set_mcast_mld_snooping_native[] = _S(bcmmcastctl mode -i "$1" -p 2 -m "$2");
+static char set_mcast_igmp_snooping_bridge[] = _S(bcmmcastctl mode -i "$1" -p 1 -m "$2");
+static char set_mcast_mld_snooping_bridge[] = _S(bcmmcastctl mode -i "$1" -p 2 -m "$2");
 
-static char set_mcast_igmp_snooping_l2l_native[] = _S(bcmmcastctl l2l -i "$1" -p 1 -e "$2");
-static char set_mcast_mld_snooping_l2l_native[] = _S(bcmmcastctl l2l -i "$1" -p 2 -e "$2");
+static char set_mcast_igmp_snooping_l2l_bridge[] = _S(bcmmcastctl l2l -i "$1" -p 1 -e "$2");
+static char set_mcast_mld_snooping_l2l_bridge[] = _S(bcmmcastctl l2l -i "$1" -p 2 -e "$2");
 
 osn_mcast_bridge osn_mcast_bridge_base;
 
@@ -75,10 +67,7 @@ static osn_mcast_bridge *osn_mcast_bridge_init()
 
     /* Initialize apply debounce */
     ev_debounce_init2(&self->mcpd_debounce, osn_mcast_mcpd_apply_fn, 0.4, 2.0);
-    if (!kconfig_enabled(CONFIG_TARGET_USE_NATIVE_BRIDGE))
-        ev_debounce_init2(&self->ovs_debounce, osn_mcast_ovs_apply_fn, 0.4, 2.0);
-    else
-        ev_debounce_init2(&self->native_debounce, osn_mcast_native_apply_fn, 0.4, 2.0);
+    ev_debounce_init2(&self->bridge_debounce, osn_mcast_bridge_apply_fn, 0.4, 2.0);
 
     self->initialized = true;
 
@@ -106,16 +95,8 @@ bool osn_mcast_apply()
     osn_mcast_bridge *self = &osn_mcast_bridge_base;
     self->mcpd_retry = MCPD_APPLY_RETRIES;
     ev_debounce_start(EV_DEFAULT, &self->mcpd_debounce);
-    if (!kconfig_enabled(CONFIG_TARGET_USE_NATIVE_BRIDGE))
-    {
-        self->ovs_retry = OVS_APPLY_RETRIES;
-        ev_debounce_start(EV_DEFAULT, &self->ovs_debounce);
-    }
-    else
-    {
-        self->native_retry = NATIVE_APPLY_RETRIES;
-        ev_debounce_start(EV_DEFAULT, &self->native_debounce);
-    }
+    self->bridge_retry = BRIDGE_APPLY_RETRIES;
+    ev_debounce_start(EV_DEFAULT, &self->bridge_debounce);
 
     return true;
 }
@@ -162,68 +143,27 @@ bool osn_mcast_free_string_array(char **arr, int len) {
     return true;
 }
 
-static bool osn_mcast_ovs_deconfigure(osn_mcast_bridge *self)
+static bool osn_mcast_bridge_deconfigure(osn_mcast_bridge *self)
 {
     int status;
 
-    LOGI("osn_mcast_ovs_deconfigure: called with %s", self->snooping_bridge);
+    LOGI("osn_mcast_bridge_deconfigure: called with %s", self->snooping_bridge);
 
     if (self->snooping_bridge[0] == '\0')
         return true;
 
     /* Disable snooping */
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_snooping, self->snooping_bridge, "false");
+    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_igmp_snooping_bridge, self->snooping_bridge, "0");
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
     {
-        LOG(INFO, "osn_mcast_ovs_deconfigure: Cannot disable snooping on bridge %s",
+        LOG(INFO, "osn_mcast_bridge_deconfigure: Cannot disable igmp snooping on bridge %s",
                 self->snooping_bridge);
     }
 
-    /* Reset unknown group behavior */
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_unknown_group, self->snooping_bridge, "false" );
+    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_mld_snooping_bridge, self->snooping_bridge, "0");
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
     {
-        LOG(INFO, "osn_mcast_ovs_deconfigure: Error resetting unknown group behiavor on bridge %s",
-                self->snooping_bridge);
-    }
-
-    /* Unset static mrouter port */
-    if (self->static_mrouter[0] != '\0')
-    {
-        status = execsh_log(LOG_SEVERITY_DEBUG, set_static_mrouter, self->static_mrouter, "false");
-        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-        {
-            LOG(INFO, "osn_mcast_ovs_deconfigure: Error unsetting old static multicast router %s",
-                    self->static_mrouter);
-        }
-        self->static_mrouter[0] = '\0';
-    }
-
-    self->snooping_bridge[0] = '\0';
-    return true;
-}
-
-static bool osn_mcast_native_deconfigure(osn_mcast_bridge *self)
-{
-    int status;
-
-    LOGI("osn_mcast_native_deconfigure: called with %s", self->snooping_bridge);
-
-    if (self->snooping_bridge[0] == '\0')
-        return true;
-
-    /* Disable snooping */
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_igmp_snooping_native, self->snooping_bridge, "0");
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-    {
-        LOG(INFO, "osn_mcast_native_deconfigure: Cannot disable igmp snooping on bridge %s",
-                self->snooping_bridge);
-    }
-
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_mld_snooping_native, self->snooping_bridge, "0");
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-    {
-        LOG(INFO, "osn_mcast_native_deconfigure: Cannot disable mld snooping on bridge %s",
+        LOG(INFO, "osn_mcast_bridge_deconfigure: Cannot disable mld snooping on bridge %s",
                 self->snooping_bridge);
     }
 
@@ -231,18 +171,18 @@ static bool osn_mcast_native_deconfigure(osn_mcast_bridge *self)
     if (BCM_SDK_VERSION < 0x50402)
     {
         /* Disable l2l igmp snooping */
-        status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_igmp_snooping_l2l_native, self->snooping_bridge, "0");
+        status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_igmp_snooping_l2l_bridge, self->snooping_bridge, "0");
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
         {
-            LOG(INFO, "osn_mcast_native_deconfigure: Cannot disable igmp l2l on bridge %s",
+            LOG(INFO, "osn_mcast_bridge_deconfigure: Cannot disable igmp l2l on bridge %s",
                 self->snooping_bridge);
         }
 
         /* Disable l2l snooping */
-        status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_mld_snooping_l2l_native, self->snooping_bridge, "0");
+        status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_mld_snooping_l2l_bridge, self->snooping_bridge, "0");
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
         {
-            LOG(INFO, "osn_mcast_native_deconfigure: Cannot disable mld l2l on bridge %s",
+            LOG(INFO, "osn_mcast_bridge_deconfigure: Cannot disable mld l2l on bridge %s",
                 self->snooping_bridge);
         }
     }
@@ -252,123 +192,7 @@ static bool osn_mcast_native_deconfigure(osn_mcast_bridge *self)
 }
 
 /* Returns false, if reapply is needed */
-bool osn_mcast_apply_ovs_config(osn_mcast_bridge *self)
-{
-    osn_igmp_t *igmp = &self->igmp;
-    osn_mld_t *mld = &self->mld;
-    bool snooping_enabled;
-    char *snooping_bridge;
-    bool snooping_bridge_up;
-    char *static_mrouter;
-    bool static_mrouter_up;
-    bool flood_unknown;
-    int max_groups;
-    char _max_groups[C_INT32_LEN];
-    int aging_time;
-    char _aging_time[C_INT32_LEN];
-    int status;
-
-    if (igmp->snooping_enabled || !mld->snooping_enabled)
-    {
-        snooping_enabled = igmp->snooping_enabled;
-        snooping_bridge = igmp->snooping_bridge;
-        snooping_bridge_up = igmp->snooping_bridge_up;
-        static_mrouter = igmp->static_mrouter;
-        static_mrouter_up = igmp->static_mrouter_up;
-        flood_unknown = igmp->unknown_group == OSN_MCAST_UNKNOWN_FLOOD;
-        max_groups = igmp->max_groups;
-        aging_time = igmp->aging_time;
-    }
-    else
-    {
-        snooping_enabled = mld->snooping_enabled;
-        snooping_bridge = mld->snooping_bridge;
-        snooping_bridge_up = mld->snooping_bridge_up;
-        static_mrouter = mld->static_mrouter;
-        static_mrouter_up = mld->static_mrouter_up;
-        flood_unknown = mld->unknown_group == OSN_MCAST_UNKNOWN_FLOOD;
-        max_groups = mld->max_groups;
-        aging_time = mld->aging_time;
-    }
-
-    /* If snooping was turned off or snooping bridge was changed, deconfigure it first */
-    if (snooping_bridge_up == false || strncmp(self->snooping_bridge, snooping_bridge, IFNAMSIZ) != 0)
-        osn_mcast_ovs_deconfigure(self);
-
-    if (snooping_bridge_up == false || snooping_bridge[0] == '\0')
-        return true;
-
-    /* Enable/disable snooping */
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_snooping, snooping_bridge,
-                        snooping_enabled ? "true" : "false");
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-    {
-        LOG(ERR, "osn_mcast_apply_ovs_config: Error enabling/disabling snooping, command failed for %s",
-                snooping_bridge);
-        return true;
-    }
-    STRSCPY_WARN(self->snooping_bridge, snooping_bridge);
-
-    /* Set maximum groups */
-    snprintf(_max_groups, sizeof(_max_groups), "%d", max_groups);
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_max_groups, snooping_bridge, _max_groups);
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-    {
-        LOG(ERR, "osn_mcast_apply_ovs_config: Error setting maximum groups, command failed for %s",
-                snooping_bridge);
-        return true;
-    }
-
-    /* Set aging time */
-    snprintf(_aging_time, sizeof(_aging_time), "%d", aging_time);
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_igmp_age, snooping_bridge, _aging_time);
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-    {
-        LOG(ERR, "osn_mcast_apply_ovs_config: Error setting aging time, command failed for %s",
-                snooping_bridge);
-        return true;
-    }
-
-    /* Set behaviour of multicast with unknown group */
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_unknown_group, snooping_bridge,
-                        (flood_unknown == true) ? "false" : "true");
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-    {
-        LOG(ERR, "osn_mcast_apply_ovs_config: Error setting unknown group behiavor, command failed for %s",
-                snooping_bridge);
-        return true;
-    }
-
-    /* If static_mrouter port changed since last time, we need to disable the old port */
-    if (strncmp(self->static_mrouter, static_mrouter, IFNAMSIZ) != 0 && self->static_mrouter[0] != '\0')
-    {
-        status = execsh_log(LOG_SEVERITY_DEBUG, set_static_mrouter, self->static_mrouter, "false");
-        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-        {
-            LOG(DEBUG, "osn_mcast_apply_ovs_config: Error unsetting old static mrouter, command failed for %s",
-                    self->static_mrouter);
-        }
-        self->static_mrouter[0] = '\0';
-    }
-
-    if (static_mrouter[0] == '\0' || static_mrouter_up == false)
-        return true;
-
-    /* Set static_mrouter port */
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_static_mrouter,
-                        static_mrouter, "true");
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-    {
-        LOG(INFO, "osn_mcast_apply_ovs_config: Error setting static mrouter %s", static_mrouter);
-        return false;
-    }
-    STRSCPY_WARN(self->static_mrouter, static_mrouter);
-
-    return true;
-}
-
-/* Returns false, if reapply is needed */
-bool osn_mcast_apply_native_config(osn_mcast_bridge *self)
+bool osn_mcast_apply_bridge_config(osn_mcast_bridge *self)
 {
     osn_igmp_t *igmp = &self->igmp;
     osn_mld_t *mld = &self->mld;
@@ -395,24 +219,24 @@ bool osn_mcast_apply_native_config(osn_mcast_bridge *self)
 
     /* If snooping was turned off or snooping bridge was changed, deconfigure it first */
     if (snooping_bridge_up == false || strncmp(self->snooping_bridge, snooping_bridge, IFNAMSIZ) != 0)
-        osn_mcast_native_deconfigure(self);
+        osn_mcast_bridge_deconfigure(self);
 
     if (snooping_bridge_up == false || snooping_bridge[0] == '\0')
         return true;
 
     /* Enable/disable snooping */
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_igmp_snooping_native, snooping_bridge, snooping_enabled ? "2" : "0");
+    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_igmp_snooping_bridge, snooping_bridge, snooping_enabled ? "2" : "0");
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
     {
-        LOG(ERR, "osn_mcast_apply_native_config: Error enabling/disabling igmp snooping, command failed for %s",
+        LOG(ERR, "osn_mcast_apply_bridge_config: Error enabling/disabling igmp snooping, command failed for %s",
                 snooping_bridge);
         return false;
     }
 
-    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_mld_snooping_native, snooping_bridge, snooping_enabled ? "2" : "0");
+    status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_mld_snooping_bridge, snooping_bridge, snooping_enabled ? "2" : "0");
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
     {
-        LOG(ERR, "osn_mcast_apply_native_config: Error enabling/disabling mld snooping, command failed for %s",
+        LOG(ERR, "osn_mcast_apply_bridge_config: Error enabling/disabling mld snooping, command failed for %s",
                 snooping_bridge);
         return false;
     }
@@ -421,10 +245,10 @@ bool osn_mcast_apply_native_config(osn_mcast_bridge *self)
     /* Don't configure l2l snooping for SDK 5.04L02 or newer */
     if (BCM_SDK_VERSION < 0x50402 && igmp->snooping_enabled && !igmp->proxy_enabled)
     {
-        status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_igmp_snooping_l2l_native, snooping_bridge, snooping_enabled ? "1" : "0");
+        status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_igmp_snooping_l2l_bridge, snooping_bridge, snooping_enabled ? "1" : "0");
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
         {
-            LOG(ERR, "osn_mcast_apply_native_config: Error enabling igmp l2l, command failed for %s",
+            LOG(ERR, "osn_mcast_apply_bridge_config: Error enabling igmp l2l, command failed for %s",
                 snooping_bridge);
             return false;
         }
@@ -433,10 +257,10 @@ bool osn_mcast_apply_native_config(osn_mcast_bridge *self)
     /* Don't configure l2l snooping for SDK 5.04L02 or newer */
     if (BCM_SDK_VERSION < 0x50402 && mld->snooping_enabled && !mld->proxy_enabled)
     {
-        status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_mld_snooping_l2l_native, snooping_bridge, snooping_enabled ? "1" : "0");
+        status = execsh_log(LOG_SEVERITY_DEBUG, set_mcast_mld_snooping_l2l_bridge, snooping_bridge, snooping_enabled ? "1" : "0");
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
         {
-            LOG(ERR, "osn_mcast_apply_native_config: Error enabling mld l2l, command failed for %s",
+            LOG(ERR, "osn_mcast_apply_bridge_config: Error enabling mld l2l, command failed for %s",
                 snooping_bridge);
             return false;
         }
@@ -445,44 +269,17 @@ bool osn_mcast_apply_native_config(osn_mcast_bridge *self)
     return true;
 }
 
-void osn_mcast_ovs_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent)
-{
-    osn_mcast_bridge *self = &osn_mcast_bridge_base;
-
-    if (kconfig_enabled(CONFIG_TARGET_USE_NATIVE_BRIDGE)) return;
-
-    if (!self->igmp_initialized && !self->mld_initialized)
-        return;
-
-    /* Apply OVS configuration */
-    if (osn_mcast_apply_ovs_config(self) == false)
-    {
-        /* Schedule retry until retry limit reached */
-        if (self->ovs_retry > 0)
-        {
-            LOG(INFO, "osn_mcast_ovs_apply_fn: retry %d", self->ovs_retry);
-            self->ovs_retry--;
-            ev_debounce_start(loop, w);
-            return;
-        }
-
-        LOG(ERR, "osn_mcast_ovs_apply_fn: Unable to apply OVS configuration.");
-    }
-
-    return;
-}
-
-void osn_mcast_native_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent)
+void osn_mcast_bridge_apply_fn(struct ev_loop *loop, ev_debounce *w, int revent)
 {
     osn_mcast_bridge *self = &osn_mcast_bridge_base;
 
     if (!self->igmp_initialized && !self->mld_initialized)
         return;
 
-    /* Apply native configuration */
-    if (osn_mcast_apply_native_config(self) == false)
+    /* Apply bridge configuration */
+    if (osn_mcast_apply_bridge_config(self) == false)
     {
-        LOG(ERR, "osn_mcast_native_apply_fn: Unable to apply native configuration.");
+        LOG(ERR, "osn_mcast_bridge_apply_fn: Unable to apply bridge configuration.");
     }
 
     return;

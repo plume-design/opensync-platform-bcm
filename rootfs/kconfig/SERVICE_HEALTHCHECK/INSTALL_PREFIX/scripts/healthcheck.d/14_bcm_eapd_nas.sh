@@ -28,7 +28,7 @@
 # still running. Without them no leaf or client will be able
 # to connect.
 #
-# WM2/target is expected to supervise and restart these.
+# OWM/target is expected to supervise and restart these.
 # However if the failure is neither transient nor one-off
 # we need to reboot the unit to recover.
 #

@@ -7,3 +7,13 @@ config OSN_BACKEND_QOS_BCM_ARCHER
 
         Requires BCM SDK support for Service Queues feature and a matching
         license.
+
+config OSN_BACKEND_QOS_BCM_TMCTL
+    bool "Broadcom TMCTL"
+
+    select OSN_LINUX_ENABLED
+    help
+        Use the Broadcom Traffic MAnagement Control QoS implementation.
+
+        Requires BCM SDK support for Service Queues feature and a matching
+        license.

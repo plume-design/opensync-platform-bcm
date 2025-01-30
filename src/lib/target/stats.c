@@ -309,14 +309,6 @@ bool target_stats_device_temp_get(radio_entry_t *radio_cfg,
     return wl80211_device_temp_results_get(radio_cfg->phy_name, &temp_entry->value);
 }
 
-bool target_stats_device_txchainmask_get(
-        radio_entry_t              *radio_cfg,
-        dpp_device_txchainmask_t   *txchainmask_entry)
-{
-    txchainmask_entry->type = radio_cfg->type;
-    return wl80211_device_txchainmask_get(radio_cfg->phy_name, &txchainmask_entry->value);
-}
-
 /******************************************************************************
  *  CAPACITY definitions
  *****************************************************************************/

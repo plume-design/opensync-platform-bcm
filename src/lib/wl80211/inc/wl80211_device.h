@@ -30,6 +30,5 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdbool.h>
 
 bool wl80211_device_temp_results_get(const char *phyname, int32_t *temp);
-bool wl80211_device_txchainmask_get(const char *phyname, uint32_t *txchain);
 
 #endif /* WL80211_DEVICE_H_INCLUDED */

@@ -215,6 +215,8 @@ static const char* bcmwl_radio_get_hwname(const char *dphy)
         "0x4366", "bcm4366",
         "0xaaa4", "bcm43684",
         "0xf6ca", "bcm6755",
+        "0x6039", "bcm6039",
+        "0x6038", "bcm6038",
         "0x6710", "bcm6710",
         "0x6715", "bcm6715",
         "0x6717", "bcm6717",

@@ -24,7 +24,7 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 # We don't want to leave stale Wi-Fi interfaces hanging
-# around. WM2 won't touch anything that isn't in Config
+# around. OWM won't touch anything that isn't in Config
 # table, so remove all extra vifs and put the primary
 # channels down.
 for i in $(ls /sys/class/net/)
@@ -36,4 +36,3 @@ do
         wl -i $i down
     }
 done
-

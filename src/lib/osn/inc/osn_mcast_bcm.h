@@ -109,10 +109,8 @@ typedef struct
     bool                        initialized;
     ev_debounce                 mcpd_debounce;
     int                         mcpd_retry;
-    ev_debounce                 ovs_debounce;
-    int                         ovs_retry;
-    ev_debounce                 native_debounce;
-    int                         native_retry;
+    ev_debounce                 bridge_debounce;
+    int                         bridge_retry;
     bool                        igmp_initialized;
     osn_igmp_t                  igmp;
     bool                        mld_initialized;

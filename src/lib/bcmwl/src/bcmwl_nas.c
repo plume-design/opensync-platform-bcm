@@ -577,7 +577,7 @@ bool bcmwl_nas_get_security(
             SCHEMA_KEY_VAL_APPEND(vstate->security, "encryption", "WPA-PSK");
             SCHEMA_KEY_VAL_APPEND(vstate->security, "key", p);
             /* Do not advertise [mode] unless it was asked in the config.
-             * Otherwise WM2 will detect [security] as changed all the time.
+             * Otherwise OWM will detect [security] as changed all the time.
              */
             if ((p = NVG(ifname, "plume_wpa_mode")) && !strcmp(p, "true"))
                 SCHEMA_KEY_VAL_APPEND(vstate->security, "mode", i == 3 ? "mixed" : strfmta("%d", i));

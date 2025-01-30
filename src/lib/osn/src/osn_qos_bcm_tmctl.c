@@ -24,43 +24,44 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include <stdlib.h>
 #include <stdint.h>
-#include "archer_api.h"
-#include "skb_defines.h"
+#include <stdlib.h>
+
+#include "bcm_skb_defines.h"
+#include "tmctl_api.h"
 
 #include "const.h"
 #include "log.h"
-#include "osn_qos.h"
 #include "memutil.h"
+#include "osn_qos.h"
 
-#define BCM_QOS_RATE_DEFAULT    1000000     /**< Default rate in kbit/s, used to reset queue speeds */
-#define BCM_QOS_ID_BASE         0x44000000
-#define BCM_QOS_ID_MASK         0x00ffffff
+#define BCM_QOS_RATE_DEFAULT 1000000 /**< Default rate in kbit/s, used to reset queue speeds */
+#define BCM_QOS_ID_BASE 0x44000000
+#define BCM_QOS_ID_MASK 0x00ffffff
 
 /*
- * There are actually 32 queues, but the last queue (31) is reserved for the
- * default action and is not configurable
+ * There are 32 queues that need to be initialized, however the last queue (31)
+ * is reserved for the default action and is not configurable
  */
-#define BCM_QOS_MAX_QUEUES  31      /**< Maximum number of queues available */
+#define BCM_QOS_INIT_QUEUES 32 /**< Number of queues to initialize */
+#define BCM_QOS_MAX_QUEUES 31  /**< Maximum number of queues available */
 
 struct osn_qos
 {
-    int     *q_id;              /* Array of IDs used by this object */
-    int     *q_id_e;            /* End of array */
+    int *q_id;   /* Array of IDs used by this object */
+    int *q_id_e; /* End of array */
 };
 
 struct bcm_qos_queue
 {
-    int             qq_min_rate;    /**< Queue min rate in kbit/s */
-    int             qq_max_rate;    /**< Queue max rate in kbit/s */
-    char           *qq_tag;         /**< Queue tag */
-    int             qq_refcnt;      /**< Queue reference count, 0 if unused */
+    int qq_min_rate; /**< Queue min rate in kbit/s */
+    int qq_max_rate; /**< Queue max rate in kbit/s */
+    char *qq_tag;    /**< Queue tag */
+    int qq_refcnt;   /**< Queue reference count, 0 if unused */
 };
 
 static struct bcm_qos_queue bcm_qos_queue_list[BCM_QOS_MAX_QUEUES];
 
-static bool bcm_qos_check_license(void);
 static bool bcm_qos_global_init(void);
 static bool bcm_qos_queue_reset(int queue_id);
 static bool bcm_qos_queue_set(int queue_id, int min_rate, int max_rate);
@@ -72,7 +73,7 @@ static void bcm_qos_id_put(int id);
  *  OSN API implementation
  * ===========================================================================
  */
-osn_qos_t* osn_qos_new(const char *ifname)
+osn_qos_t *osn_qos_new(const char *ifname)
 {
     osn_qos_t *self;
 
@@ -121,10 +122,13 @@ bool osn_qos_apply(osn_qos_t *self)
      */
     for (qp = self->q_id; qp < self->q_id_e; qp++)
     {
-        if (!bcm_qos_queue_set(
-                *qp,
-                bcm_qos_queue_list[*qp].qq_min_rate,
-                bcm_qos_queue_list[*qp].qq_max_rate))
+        int qid = *qp;
+        if (qid < 0 || qid >= BCM_QOS_MAX_QUEUES)
+        {
+            LOGE("%s: invalid queue id %d", __func__, qid);
+            return false;
+        }
+        if (!bcm_qos_queue_set(qid, bcm_qos_queue_list[qid].qq_min_rate, bcm_qos_queue_list[qid].qq_max_rate))
         {
             /* bcm_qos_queue_set() reported the error already */
             retval = false;
@@ -208,86 +212,42 @@ bool osn_qos_queue_end(osn_qos_t *self)
  */
 
 /*
- *  Perform run-time sanity checks and initialize the Archer DPI subsystem
+ *  Initialize the TMCTL SVCQ subsystem
  */
 bool bcm_qos_global_init(void)
 {
-    int rc;
+    tmctl_ret_e rc;
 
     /*
-     * Check if we have a valid license
+     * Enable TMCTL service queue
      */
-    if (!bcm_qos_check_license())
+
+    rc = tmctl_portTmInit(TMCTL_DEV_SVCQ, NULL, TMCTL_INIT_DEFAULT_QUEUES | TMCTL_SCHED_TYPE_WRR, BCM_QOS_INIT_QUEUES);
+    if (rc != TMCTL_SUCCESS)
     {
-        LOG(ERR, "bcm_qos: Archer DPI license not installed.");
+        LOGE("bcm_qos: error initializing TMCTL SVCQ %d", rc);
         return false;
     }
 
-    /*
-     * Enable Archer DPI service queue mode
-     */
-    rc = archer_dpi_mode_set(ARCHER_DPI_MODE_SERVICE_QUEUE);
-    if (rc != 0)
-    {
-        LOG(ERR, "bcm_qos: Error enabling Archer DPI service queue.");
-        return false;
-    }
-
-    rc = archer_dpi_sq_arbiter_set(ARCHER_SQ_ARBITER_RR);
-    if (rc != 0)
-    {
-        LOG(ERR, "bcm_qos: Error setting DPI Arbiter to Round-Robin.");
-        return false;
-    }
-
-    LOG(NOTICE, "bcm_qos: Archer DPI service queues initialized.");
+    LOG(NOTICE, "bcm_qos: TMCTL service queues initialized");
 
     return true;
 }
 
-/*
- * Check if a valid license is installed by looking for the "FULL SPEED_SERVICE"
- * and "FULL SERVICE_QUEUE" strings.
- */
-bool bcm_qos_check_license(void)
-{
-    FILE *lf;
-    char ll[512];
-
-    bool full_service_queue = false;
-
-    lf = fopen("/proc/driver/license", "r");
-    if (lf == NULL)
-    {
-        LOG(ERR, "bcm_qos: Error opening license driver file.");
-        return false;
-    }
-
-    while (fgets(ll, sizeof(ll), lf) != NULL)
-    {
-        if (strstr(ll, "FULL SERVICE_QUEUE") != NULL)
-        {
-            full_service_queue = true;
-            break;
-        }
-    }
-
-    fclose(lf);
-
-    return full_service_queue;
-}
-
 bool bcm_qos_queue_set(int queue_id, int min_rate, int max_rate)
 {
-    int rc;
+    tmctl_ret_e rc;
+    tmctl_shaper_t tm_shaper = {0};
 
-    LOG(INFO, "bcm_qos: queue[%d]: Applying settings min_rate=%d, max_rate=%d",
-            queue_id, min_rate, max_rate);
+    LOG(INFO, "bcm_qos: queue[%d]: Applying settings min_rate=%d, max_rate=%d", queue_id, min_rate, max_rate);
 
-    rc = archer_dpi_sq_queue_set(queue_id, min_rate, max_rate);
-    if (rc != 0)
+    tm_shaper.shapingRate = max_rate;
+    tm_shaper.minRate = min_rate;
+
+    rc = tmctl_setQueueShaper(TMCTL_DEV_SVCQ, NULL, queue_id, &tm_shaper);
+    if (rc != TMCTL_SUCCESS)
     {
-        LOG(ERR, "bcm_qos: queue[%d]: Error during configuration.", queue_id);
+        LOG(ERR, "bcm_qos: queue[%d]: Error %d setting rate %d %d", queue_id, rc, min_rate, max_rate);
         return false;
     }
 
@@ -308,8 +268,7 @@ int bcm_qos_id_get(const char *tag)
     {
         for (qid = 0; qid < BCM_QOS_MAX_QUEUES; qid++)
         {
-            if (bcm_qos_queue_list[qid].qq_tag != NULL &&
-                    strcmp(bcm_qos_queue_list[qid].qq_tag, tag) == 0)
+            if (bcm_qos_queue_list[qid].qq_tag != NULL && strcmp(bcm_qos_queue_list[qid].qq_tag, tag) == 0)
             {
                 break;
             }

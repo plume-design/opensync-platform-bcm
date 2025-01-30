@@ -62,7 +62,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 /* This clearly violates the abstraction separation but it's
  * better than do that than to slowness of calling fork+exec
- * for ovs-vsctl.
+ * for shell commands.
  */
 #include "ovsdb.h"
 #include "ovsdb_update.h"
