@@ -541,6 +541,10 @@ bool bcmwl_vap_prealloc(const char *phy, int max_idx, void (*mac_xfrm)(char *add
         WARN_ON(!WL(phy, "down"));
         WARN_ON(!WL(phy, "mbss", "1"));
     }
+
+    WARN_ON(!WL(phy, "down"));
+    WARN_ON(!WL(phy, "mbssid", "0"));
+
     WARN_ON(max_idx < 1);
     for (i = 1; i <= max_idx; i++)
         if (WARN_ON(!bcmwl_vap_prealloc_one(phy, i, mac_xfrm)))

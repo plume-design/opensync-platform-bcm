@@ -789,27 +789,40 @@ osw_plat_bcm_conf_vif_ap_mode(struct osw_drv_phy_config *phy,
 
     if (ap->mode_changed == false) return;
 
-    WARN_ON(WL(vif_name, "nmode", strfmta("%d", mode->ht_enabled)) == NULL);
-    WARN_ON(WL(vif_name, "vhtmode", strfmta("%d", mode->vht_enabled)) == NULL);
-    WARN_ON(WL(vif_name, "he", "enab", strfmta("%d", mode->he_enabled)) == NULL);
-    WARN_ON(WL(vif_name, "eht", "enab", strfmta("%d", mode->eht_enabled)) == NULL);
+    if (!!atoi(WL(vif_name, "nmode") ?: "-1") != !!(int)mode->ht_enabled)
+        WARN_ON(WL(vif_name, "nmode", strfmta("%d", mode->ht_enabled)) == NULL);
+
+    if (!!atoi(WL(vif_name, "vhtmode") ?: "-1") != !!(int)mode->vht_enabled)
+        WARN_ON(WL(vif_name, "vhtmode", strfmta("%d", mode->vht_enabled)) == NULL);
+
+    if (!!atoi(WL(vif_name, "he", "enab") ?: "-1") != !!(int)mode->he_enabled)
+        WARN_ON(WL(vif_name, "he", "enab", strfmta("%d", mode->he_enabled)) == NULL);
+
+    if (!!atoi(WL(vif_name, "eht", "enab") ?: "-1") != !!(int)mode->eht_enabled)
+        if (WL(vif_name, "eht") != NULL)
+            WARN_ON(WL(vif_name, "eht", "enab", strfmta("%d", mode->eht_enabled)) == NULL);
 
     {
-        uint32_t btm = strtol(WL(vif_name, "wnm") ?: "0", NULL, 16);
+        const uint32_t initial_btm = strtol(WL(vif_name, "wnm") ?: "0", NULL, 16);
+        uint32_t btm = initial_btm;
         btm &= ~OSW_PLAT_BCM_BTM_BIT;
         if (ap->mode.wnm_bss_trans) {
             btm |= OSW_PLAT_BCM_BTM_BIT;
         }
-        WARN_ON(WL(vif_name, "wnm", strfmta("%x", btm)) == NULL);
+        if (initial_btm != btm)
+            WARN_ON(WL(vif_name, "wnm", strfmta("%x", btm)) == NULL);
     }
 
     {
-        uint32_t rrm = strtol(WL(vif_name, "rrm") ?: "0", NULL, 16);
+        const uint32_t initial_rrm = strtol(WL(vif_name, "rrm") ?: "0", NULL, 16);
+        uint32_t rrm = initial_rrm;
         rrm &= ~OSW_PLAT_BCM_RRM_BIT;
         if (ap->mode.rrm_neighbor_report) {
             rrm |= OSW_PLAT_BCM_RRM_BIT;
         }
-        WARN_ON(WL(vif_name, "rrm", strfmta("%x", rrm)) == NULL);
+        if (initial_rrm != rrm)
+            WARN_ON(WL(vif_name, "rrm", strfmta("%x", rrm)) == NULL);
+
         osw_plat_bcm_rrm_set_skip_nbr_report(vif_name);
     }
 }
@@ -929,9 +942,11 @@ osw_plat_bcm_conf_vif_ap_beacon_rate(struct osw_drv_phy_config *phy,
     if (ap->mode_changed == false) return;
 
     const char *vif_name = vif->vif_name;
+    const uint32_t initial_beacon_rate = atoi(WL(vif_name, "force_bcn_rspec") ?: "0");
     const uint32_t beacon_rate = ap->mode.beacon_rate.u.legacy;
-    const int bcn_rate = osw_rate_legacy_to_halfmbps(beacon_rate);
-    WARN_ON(WL(vif_name, "force_bcn_rspec", strfmta("%d", bcn_rate)) == NULL);
+    const uint32_t bcn_rate = (uint32_t)osw_rate_legacy_to_halfmbps(beacon_rate);
+    if (initial_beacon_rate != bcn_rate)
+        WARN_ON(WL(vif_name, "force_bcn_rspec", strfmta("%d", bcn_rate)) == NULL);
 }
 
 static const char*
@@ -2279,6 +2294,7 @@ osw_plat_bcm_vif_wl_init_rrm(const char *vif_name)
              */
             WL(vif_name, "rrm", "+2");
             WL(vif_name, "wnm", "+1");
+            osw_plat_bcm_rrm_set_skip_nbr_report(vif_name);
             break;
     }
 }
