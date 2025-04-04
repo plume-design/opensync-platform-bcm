@@ -74,3 +74,13 @@ bool bcmwl_nvram_set(const char *ifname,
     }
     return p && strlen(p) == 0 ? true : false;
 }
+
+bool bcmwl_nvram_set_flag(const char *ifname,
+                          const char *name,
+                          const char *bit,
+                          const char *value)
+{
+    const char *p;
+    p = strexa(NVRAM, "setflag", strfmta("%s_%s %s=%s", ifname, name, bit, value);
+    return p && strlen(p) == 0 ? true : false;
+}

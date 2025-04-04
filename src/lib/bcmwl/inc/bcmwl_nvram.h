@@ -44,6 +44,11 @@ bool bcmwl_nvram_set(const char *ifname,
                      const char *name,
                      const char *value);
 
+bool bcmwl_nvram_set_flag(const char *ifname,
+                          const char *name,
+                          const int bit,
+                          const bool value);
+
 #define bcmwl_nvram_unset(ifname, name) bcmwl_nvram_set(ifname, name, NULL)
 
 #define bcmwl_nvram_get_kv(k, v, i) \
@@ -56,5 +61,6 @@ bool bcmwl_nvram_set(const char *ifname,
 #define NVG(ifname, prop) strdupafree(bcmwl_nvram_get(ifname, prop))
 #define NVS(ifname, prop, value) bcmwl_nvram_set(ifname, prop, value)
 #define NVU(ifname, prop) bcmwl_nvram_unset(ifname, prop)
+#define NVSF(ifname, prop, bit, value) bcmwl_nvram_set_flag(ifname, prop, bit, value)
 
 #endif /* BCMWL_NVRAM_H_INCLUDED */
