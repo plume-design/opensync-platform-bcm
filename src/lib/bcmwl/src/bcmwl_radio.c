@@ -44,6 +44,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "bcmwl_nvram.h"
 #include "bcmwl_debounce.h"
 #include "bcmwl_ioctl.h"
+#include <wlioctl.h>
 
 
 #define PLUME_CSA_MODE        0     // Does not block Tx during CSA
@@ -511,11 +512,171 @@ int bcmwl_get_current_channels(const char *phyname, int *chan, int size)
     return n;
 }
 
+static bool
+bcmwl_radio_get_bcn_int(const char *phy_name, int *bcn_int)
+{
+    const struct bcmwl_ioctl_num_conv *conv;
+    struct dirent *p;
+    bool consistent = true;
+    DIR *d;
+
+    if (WARN_ON(!(conv = bcmwl_ioctl_lookup_num_conv(phy_name))))
+        return false;
+
+    *bcn_int = 0;
+
+    /* As far as reporting goes, each AP can operate at a
+     * different interval. Even if that isn't matching with
+     * actual period of beacons sent OTA, the Beacon IE
+     * report is still per BSS until re-started. To
+     * facilitate config/state operation on a phy-attribute
+     * (config) and vif-attribute (state), merge
+     * vif-attributes into a single value.
+     */
+
+    for (d = opendir("/sys/class/net"); d && (p = readdir(d)); ) {
+        const char *vif_name = p->d_name;
+
+        const bool other_phy = (strstr(vif_name, phy_name) != vif_name);
+        if (other_phy)
+            continue;
+
+        const bool not_ap = (bcmwl_vap_is_ap(vif_name) != true);
+        if (not_ap)
+            continue;
+
+        const bool not_up = (strcmp(WL(vif_name, "bss") ?: "", "up") != 0);
+        if (not_up)
+            continue;
+
+        struct ether_addr bssid;
+        if (!bcmwl_GIOC(vif_name, WLC_GET_BSSID, NULL, &bssid))
+            continue;
+
+        union {
+            char buf[WLC_IOCTL_MAXLEN];
+            struct {
+                uint32_t len; /* ignore */
+                wl_bss_info_107_t info;
+            };
+        } bss;
+        MEMZERO(bss);
+        const uint32_t max_len = conv->dtoh32(sizeof(bss));
+        if (WARN_ON(!bcmwl_GIOC(vif_name, WLC_GET_BSS_INFO, &max_len, &bss)))
+            continue;
+
+        const int beacon_period = conv->dtoh32(bss.info.beacon_period);
+        LOGT("%s: %s has bcn_int = %d, previous = %d",
+             phy_name, vif_name, beacon_period, *bcn_int);
+
+        if (beacon_period == 0)
+            continue;
+
+        if (*bcn_int == 0) {
+            *bcn_int = beacon_period;
+            continue;
+        }
+
+        if (*bcn_int != beacon_period) {
+            consistent = false;
+            break;
+        }
+    }
+    if (!WARN_ON(!d))
+        closedir(d);
+
+    const bool non_zero = (*bcn_int != 0);
+
+    LOGT("%s: has bcn_int = %d consistent %d non_zero %d",
+         phy_name, *bcn_int, consistent, non_zero);
+
+    return consistent && non_zero;
+}
+
+static char *
+bcmwl_radio_get_any_ap_vap(const char *phy_name)
+{
+    struct dirent *p;
+    DIR *d;
+
+    for (d = opendir("/sys/class/net"); d && (p = readdir(d)); ) {
+        const char *vif_name = p->d_name;
+        const bool other_phy = (strstr(vif_name, phy_name) != vif_name);
+        if (other_phy) continue;
+
+        const bool not_ap = (bcmwl_vap_is_ap(vif_name) != true);
+        if (not_ap) continue;
+
+        closedir(d);
+        return STRDUP(vif_name);
+    }
+    if (!WARN_ON(!d))
+        closedir(d);
+
+    return NULL;
+}
+
+static void
+bcmwl_radio_downup_ap_vaps(const char *phy_name)
+{
+    struct dirent *p;
+    DIR *d;
+
+    for (d = opendir("/sys/class/net"); d && (p = readdir(d)); ) {
+        const char *vif_name = p->d_name;
+        const bool other_phy = (strstr(vif_name, phy_name) != vif_name);
+        if (other_phy) continue;
+
+        const bool not_ap = (bcmwl_vap_is_ap(vif_name) != true);
+        if (not_ap) continue;
+
+        const bool not_up = (strcmp(WL(vif_name, "bss") ?: "", "up") != 0);
+        if (not_up) continue;
+
+        WARN_ON(WL(vif_name, "bss", "down") == NULL);
+        WARN_ON(WL(vif_name, "bss", "up") == NULL);
+    }
+    if (!WARN_ON(!d))
+        closedir(d);
+}
+
+static void
+bcmwl_radio_set_bcn_int(const char *phy_name, const int bcn_int)
+{
+    char *ap_vif_name = bcmwl_radio_get_any_ap_vap(phy_name);
+
+    LOGD("%s: setting bcn_int on %s to %d",
+         phy_name, ap_vif_name ?: "", bcn_int);
+
+    /* Eg. if wl0 is an APSTA(STA) interface, then
+     * if it's down, the "bi" will refer to _any_
+     * of the AP configuration, but if it's up,
+     * then it refers to the associated
+     * (parent/link) BSS. Therefore always find
+     * _any_ AP BSS and set "bi" on that. And then
+     * reload all BSSes. Just setting "bi" won't
+     * reload config.
+     */
+
+    WARN_ON(ap_vif_name == NULL);
+    if (ap_vif_name != NULL) {
+        const char *arg = strfmta("%d", bcn_int);
+        const char *result = WL(ap_vif_name, "bi", arg);
+        WARN_ON(result == NULL);
+        WARN_ON(result != NULL && strlen(result) > 0);
+
+        bcmwl_radio_downup_ap_vaps(phy_name);
+    }
+
+    FREE(ap_vif_name);
+}
+
 bool bcmwl_radio_state(const char *phyname,
                        struct schema_Wifi_Radio_State *rstate)
 {
     const char *p;
     char *q;
+    int bcn_int;
     int channel = 0;
     int ht_mode = 0;
     char    band[32];
@@ -560,8 +721,8 @@ bool bcmwl_radio_state(const char *phyname,
         SCHEMA_SET_INT(rstate->enabled, atoi(p) != 0);
     if ((q = WL(phyname, "country")) && (q = strsep(&q, " ")))
         SCHEMA_SET_STR(rstate->country, q);
-    if ((p = WL(phyname, "bi")))
-        SCHEMA_SET_INT(rstate->bcn_int, atoi(p));
+    if (bcmwl_radio_get_bcn_int(phyname, &bcn_int))
+        SCHEMA_SET_INT(rstate->bcn_int, bcn_int);
     if ((q = WL(phyname, "txchain")) && (q = strsep(&q, " ")))
         SCHEMA_SET_INT(rstate->tx_chainmask, atoi(q));
     if ((q = WL(phyname, "txpwr")) && (q = strsep(&q, " ")))
@@ -687,9 +848,9 @@ bool bcmwl_radio_update2(const struct schema_Wifi_Radio_Config *rconf,
     if ((rchanged->channel || rchanged->ht_mode) && rconf->channel_exists && rconf->ht_mode_exists)
         WARN_ON(!bcmwl_radio_channel_set(phy, rconf->channel, rconf->ht_mode));
 
-    if (rchanged->bcn_int)
-        if (!(p = WL(phy, "bi", strfmta("%d", rconf->bcn_int))) || strlen(p))
-            LOGW("%s: failed to set beacn interval: %s", phy, p ?: strerror(errno));
+    if (rchanged->bcn_int) {
+        bcmwl_radio_set_bcn_int(phy, rconf->bcn_int);
+    }
 
     if (rchanged->country) {
         WARN_ON(!WL(phy, "down"));
