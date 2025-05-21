@@ -24,6 +24,13 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# Checks if BSS is up using platform-specific tools.
+#
+# 1. Ensures the VAP is managed by the driver
+# 2. Checks if the BSS is up and not in CAC
+# 3. Validates if the BSS is associated
+
+
 ifname=$1
 
 if ! wl -i "$ifname" bss >/dev/null 2>/dev/null

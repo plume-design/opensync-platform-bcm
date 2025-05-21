@@ -790,6 +790,15 @@ osw_plat_bcm_conf_phy_radar(struct osw_drv_phy_config *phy)
 }
 
 static void
+osw_plat_bcm_conf_phy_enabled(struct osw_drv_phy_config *phy)
+{
+    if (phy->enabled_changed) {
+        WARN_ON(!WL(phy->phy_name, "radio", phy->enabled ? "on" : "off"));
+        WARN_ON(!WL(phy->phy_name, phy->enabled ? "up" : "down"));
+    }
+}
+
+static void
 osw_plat_bcm_conf_each_phy(struct osw_drv_conf *drv_conf)
 {
     size_t i;
@@ -802,6 +811,7 @@ osw_plat_bcm_conf_each_phy(struct osw_drv_conf *drv_conf)
         }
         osw_plat_bcm_conf_phy_txchain(phy);
         osw_plat_bcm_conf_phy_radar(phy);
+        osw_plat_bcm_conf_phy_enabled(phy);
     }
 }
 
@@ -2775,11 +2785,19 @@ osw_plat_bcm_fix_phy_radar(const char *phy_name,
 }
 
 static void
+osw_plat_bcm_fix_phy_enabled(const char *phy_name,
+                             struct osw_drv_phy_state *state)
+{
+    state->enabled = atoi(WL(phy_name, "isup") ?: "0") != 0;
+}
+
+static void
 osw_plat_bcm_fix_phy_state_cb(struct osw_drv_nl80211_hook *hook,
                               const char *phy_name,
                               struct osw_drv_phy_state *state,
                               void *priv)
 {
+    osw_plat_bcm_fix_phy_enabled(phy_name, state);
     osw_plat_bcm_fix_phy_txchain(phy_name, state);
     osw_plat_bcm_fix_phy_regulatory(phy_name, state);
     osw_plat_bcm_fix_phy_dfs(phy_name, state);
