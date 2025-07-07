@@ -31,6 +31,7 @@
 
 RT_RUNTIME={{ CONFIG_BCM_SPEEDTEST_RT_RUNTIME }}
 CHRT_PRIO="-r 5"
+NICE_PRIO="-20"
 SIGNALS="INT HUP TERM EXIT QUIT"
 
 restore_rt_runtime()
@@ -60,8 +61,10 @@ if [ "${1:0:1}" = "-" ]; then
 fi
 
 # run command with increased prio
-logger "[$PPID]: $0: /usr/bin/chrt $CHRT_PRIO $*"
-/usr/bin/chrt $CHRT_PRIO "$@"
+#logger "[$PPID]: $0: /usr/bin/chrt $CHRT_PRIO $*"
+#/usr/bin/chrt $CHRT_PRIO "$@"
+logger "[$PPID]: $0: /bin/nice -$NICE_PRIO $*"
+/bin/nice -$NICE_PRIO "$@"
 
 # restore original sched_rt_runtime
 restore_rt_runtime

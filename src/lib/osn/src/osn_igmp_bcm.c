@@ -53,8 +53,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "osn_igmp.h"
 #include "osn_mcast_bcm.h"
 
-osn_igmp_t *osn_igmp_new()
+static bool osn_igmp_reset(const char *ifname);
+
+osn_igmp_t *osn_igmp_new(const char *ifname)
 {
+    /* Set default interface configuration */
+    if (!osn_igmp_reset(ifname))
+    {
+        LOG(WARN, "osn_igmp: %s: Error applying default bridge configuration.", ifname);
+    }
+
     osn_igmp_t *self = osn_mcast_bridge_igmp_init();
 
     if (self->initialized)
@@ -242,6 +250,36 @@ bool osn_igmp_write_section(osn_igmp_t *self, FILE *f)
         fprintf(f, " %s", self->mcast_exceptions[ii]);
     }
     fprintf(f, "\n# End IGMP configuration\n\n");
+
+    return true;
+}
+
+bool osn_igmp_reset(const char *ifname)
+{
+    /*
+     * Check if interface is a bridge
+     */
+    char brpath[C_MAXPATH_LEN];
+    int ret = snprintf(brpath, sizeof(brpath), "/sys/class/net/%s/bridge", ifname);
+    if (ret < 0 || ret >= (int)sizeof(brpath))
+    {
+        LOG(WARN, "osn_igmp: %s: Error creating bridge path.", ifname);
+        return false;
+    }
+
+    if (access(brpath, R_OK) != 0)
+    {
+        LOG(DEBUG, "osn_igmp: %s: Interface not a bridge.", ifname);
+        return true;
+    }
+
+    /* Set IGMP/MLD mode to 0 (disabled) */
+    const char default_igmp_cmd[] = _S(bcmmcastctl mode -i "$1" -p 1 -m 0 && bcmmcastctl mode -i "$1" -p 2 -m 0);
+    if (execsh_log(LOG_SEVERITY_DEBUG, default_igmp_cmd, (char *)ifname) != 0)
+    {
+        LOG(WARN, "osn_igmp: %s: Error setting default IGMP/MLD configuration on interface.", ifname);
+        return false;
+    }
 
     return true;
 }

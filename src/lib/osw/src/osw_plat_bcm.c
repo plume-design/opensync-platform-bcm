@@ -1055,7 +1055,7 @@ osw_plat_bcm_conf_vif_ap_passpoint(struct osw_drv_phy_config *phy,
     NVS(vif_name, "iwnettype", strfmta("%d", passpoint->ant));
     NVS(vif_name, "venuegrp", strfmta("%d", passpoint->venue_group));
     NVS(vif_name, "venuetype", strfmta("%d", passpoint->venue_type));
-    NVS(vif_name, "hessid", passpoint->hessid.buf);
+    NVS(vif_name, "hessid", strfmta(OSW_HWADDR_FMT, OSW_HWADDR_ARG(&passpoint->hessid)));
     NVS(vif_name, "osu_ssid", passpoint->osu_ssid.buf);
 
     /* Parameters not used by BCM, but preserved for state report */
@@ -3520,8 +3520,7 @@ osw_plat_bcm_fix_vif_ap_passpoint(const char *phy_name,
 
     str = NVG(vif_name, "hessid");
     if (str != NULL) {
-        STRSCPY_WARN(passpoint->hessid.buf, str);
-        passpoint->hessid.len = strlen(str);
+        osw_hwaddr_from_cstr(str, &passpoint->hessid);
     }
     str = NVG(vif_name, "osu_ssid");
     if (str != NULL) {
