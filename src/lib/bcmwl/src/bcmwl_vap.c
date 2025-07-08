@@ -417,9 +417,6 @@ bool bcmwl_vap_is_ap(const char *ifname)
 
 void bcmwl_vap_mac_xfrm(char *addr, int idx, int max)
 {
-    if (!idx)
-        return;
-
     /* Driver validates mac addresses by checking
      * if the addr[5] complies with a bssmax-based
      * mask. This is a hardware requirement and is
@@ -448,6 +445,26 @@ void bcmwl_vap_mac_xfrm(char *addr, int idx, int max)
             | ((max - 1) & (addr[5] + idx));
 }
 
+static bool bcmwl_vap_enable_mlo(const int vif_idx)
+{
+    char *nonmlo_vap_index = strdupafree(bcmwl_nvram_get_key("wl_mlo_enable_vap_index"));
+    if (!nonmlo_vap_index) return false;
+
+    int nvram_vap_index = -1;
+    char *token = NULL;
+
+    while ((token = strsep(&nonmlo_vap_index, " ")) != NULL) {
+        nvram_vap_index = atoi(token);
+        if (nvram_vap_index >= 0) {
+            if (vif_idx == nvram_vap_index) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 static void bcmwl_vap_update_mld(const char *vif, int idx)
 {
     char *mlo_config = bcmwl_nvram_get_key("wl_mlo_config");
@@ -457,6 +474,8 @@ static void bcmwl_vap_update_mld(const char *vif, int idx)
     char nlinks = 0;
     char *token = NULL;
     int link_id = -1;
+
+    if (!bcmwl_vap_enable_mlo(idx)) return;
 
     while ((token = strsep(&tmp, " ")) != NULL) {
         if ((link_id = atoi(token)) >= 0) {
@@ -475,23 +494,22 @@ static bool bcmwl_vap_prealloc_one(const char *phy, int idx, void (*mac_xfrm)(ch
     const char *vif = STRFMTA_VIF(phy, idx);
     char *mac;
     char *perm;
+    char *mac_cur;
     char addr[6];
     int max;
     int phys;
 
     if (WARN_ON(!mac_xfrm))
         return false;
-    if (access(strfmta("/sys/class/net/%s", vif), X_OK) == 0)
-        return true;
     if (WARN_ON(!WL(phy, "down")))
         return false;
     if (WARN_ON(!(perm = WL(phy, "perm_etheraddr")) || !WL_VAL(perm)))
         return false;
-    if (WARN_ON(!(mac = strexa("cat", strfmta("/sys/class/net/%s/address", phy)))))
+    if (WARN_ON(!(mac_cur = strexa("cat", strfmta("/sys/class/net/%s/address", phy)))))
         return false;
-    if (strcasecmp(mac, perm))
+    if (strcasecmp(mac_cur, perm))
         LOGI("%s: perm_etheraddr not properly set!", phy);
-    if (WARN_ON(sscanf(mac, "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
+    if (WARN_ON(sscanf(mac_cur, "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
                        &addr[0], &addr[1], &addr[2], &addr[3], &addr[4], &addr[5]) != 6))
         return false;
     if (WARN_ON((max = bcmwl_radio_max_vifs(phy)) < 1))
@@ -512,26 +530,30 @@ static bool bcmwl_vap_prealloc_one(const char *phy, int idx, void (*mac_xfrm)(ch
     mac = strfmta("%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
                   addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
     LOGI("%s: creating interface with mac %s", vif, mac);
-    if (WARN_ON(!WL(phy, "ssid", "-C", strfmta("%d", idx), "")))
-        return false;
+    if (access(strfmta("/sys/class/net/%s", vif), X_OK) == 0 && !strcmp(mac_cur, mac))
+        return true;
+    if (idx != 0) {
+        if (WARN_ON(!WL(phy, "ssid", "-C", strfmta("%d", idx), "")))
+            return false;
 
-    /*
-     * Wait for VIF to be created. Sometimes VIF creation
-     * is taking time and WL commands that follow fails if
-     * it is not created yet.
-     */
-    if (WARN_ON(!bcmwl_wait_for_vif_create(vif, BCMWL_VIF_CREATION_TIMEOUT_MS)))
-        return false;
+        /*
+         * Wait for VIF to be created. Sometimes VIF creation
+         * is taking time and WL commands that follow fails if
+         * it is not created yet.
+         */
+        if (WARN_ON(!bcmwl_wait_for_vif_create(vif, BCMWL_VIF_CREATION_TIMEOUT_MS)))
+            return false;
 
-    if (WARN_ON(!WL(vif, "ap", "1")))
-        return false;
-    /*
-     * WAR: Changing AP in some cases resets MPC to 1
-     * as well. Set it back to 0 which is preferred.
-     */
-    WARN_ON(!WL(vif, "mpc", "0"));
+        if (WARN_ON(!WL(vif, "ap", "1")))
+            return false;
+        /*
+         * WAR: Changing AP in some cases resets MPC to 1
+         * as well. Set it back to 0 which is preferred.
+         */
+        WARN_ON(!WL(vif, "mpc", "0"));
 
-    bcmwl_vap_update_mld(vif, idx);
+        bcmwl_vap_update_mld(vif, idx);
+    }
 
     if (WARN_ON(!WL(vif, "cur_etheraddr", mac)))
         return false;
@@ -552,6 +574,27 @@ static bool bcmwl_vap_prealloc_one(const char *phy, int idx, void (*mac_xfrm)(ch
     return true;
 }
 
+static bool bcmwl_vap_get_mbssid(const char *phy, bool *enabled)
+{
+    bool ok = true;
+    *enabled = false;
+#ifdef WL_MBSSID_VER
+    const struct bcmwl_ioctl_num_conv *conv;
+    char buf[WLC_IOCTL_MAXLEN];
+    if (WARN_ON(!(conv = bcmwl_ioctl_lookup_num_conv(phy))))
+        return false;
+
+    ok = bcmwl_GIOV(phy, "mbssid", NULL, &buf);
+    WARN_ON(!ok);
+    if (ok) {
+        const wl_mbssid_t *mbssid_cfg = (void *)buf;
+        LOGT("bcmwl: %s mbssid->status = %d", __func__, mbssid_cfg->status);
+        *enabled = !!(mbssid_cfg->status);
+    }
+#endif
+    return ok;
+}
+
 /* FIXME: mac_xfrm() probably should be kept private and
  *        non-configurable by the caller because BCM has a very
  *        specific requirements how non-primary vif mac addresses
@@ -566,13 +609,15 @@ bool bcmwl_vap_prealloc(const char *phy, int max_idx, void (*mac_xfrm)(char *add
         WARN_ON(!WL(phy, "mbss", "1"));
     }
 
-    WARN_ON(!WL(phy, "down"));
-    WARN_ON(!WL(phy, "mbssid", "0"));
+    bool mbssid_enabled;
 
+    WARN_ON(!bcmwl_vap_get_mbssid(phy, &mbssid_enabled));
     WARN_ON(max_idx < 1);
-    for (i = 1; i <= max_idx; i++)
+    for (i = 0; i <= max_idx; i++) {
+        if (i == 0 && !mbssid_enabled) continue;
         if (WARN_ON(!bcmwl_vap_prealloc_one(phy, i, mac_xfrm)))
             return false;
+    }
     if (was_up)
         WARN_ON(!WL(phy, "up"));
     return true;

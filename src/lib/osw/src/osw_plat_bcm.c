@@ -117,7 +117,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
              c > 0 && c <= OSW_PLAT_BCM_CHSPEC_LAST(cs); \
              c += 4)
 #define linkid_is_valid(link_id) (link_id >= 0)
-#define mldunit_is_valid(mld_unit) ((mld_unit >= 0) || (mld_unit == 255))
+#define mldunit_is_valid(mld_unit) ((mld_unit >= 0) && (mld_unit != 255))
 
 #define BIT(x) (1 << (x))
 
