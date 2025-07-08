@@ -108,7 +108,11 @@ collect_bcmwl()
     if [ -e /etc/patch.version ]; then
         collect_cmd cat /etc/patch.version
     fi
-    collect_cmd cat /proc/driver/license
+    if [ -e /proc/driver/license ]; then
+        collect_cmd cat /proc/driver/license
+    else
+        collect_cmd bp3 status
+    fi
 }
 
 collect_flowcache()

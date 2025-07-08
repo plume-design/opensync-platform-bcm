@@ -448,6 +448,28 @@ void bcmwl_vap_mac_xfrm(char *addr, int idx, int max)
             | ((max - 1) & (addr[5] + idx));
 }
 
+static void bcmwl_vap_update_mld(const char *vif, int idx)
+{
+    char *mlo_config = bcmwl_nvram_get_key("wl_mlo_config");
+    if (!mlo_config) return;
+
+    char *tmp = mlo_config;
+    char nlinks = 0;
+    char *token = NULL;
+    int link_id = -1;
+
+    while ((token = strsep(&tmp, " ")) != NULL) {
+        if ((link_id = atoi(token)) >= 0) {
+            nlinks++;
+        }
+    }
+
+    WARN_ON(!WL(vif, "mld_unit", strfmta("%d", idx)));
+    WARN_ON(!WL(vif, "mld_nlinks", strfmt("%d", nlinks)));
+
+    FREE(mlo_config);
+}
+
 static bool bcmwl_vap_prealloc_one(const char *phy, int idx, void (*mac_xfrm)(char *addr, int idx, int max))
 {
     const char *vif = STRFMTA_VIF(phy, idx);
@@ -508,6 +530,8 @@ static bool bcmwl_vap_prealloc_one(const char *phy, int idx, void (*mac_xfrm)(ch
      * as well. Set it back to 0 which is preferred.
      */
     WARN_ON(!WL(vif, "mpc", "0"));
+
+    bcmwl_vap_update_mld(vif, idx);
 
     if (WARN_ON(!WL(vif, "cur_etheraddr", mac)))
         return false;

@@ -37,6 +37,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 typedef struct
 {
     bool is_authorized;
+    bool is_authenticated;
     uint16_t capabilities;
     uint64_t rx_total_bytes;
     uint64_t tx_total_bytes;
@@ -54,8 +55,20 @@ typedef struct
     uint8_t max_mcs;
 } bcmwl_sta_info_t;
 
+struct bcmwl_sta_mlo_info
+{
+    os_macaddr_t mld_addr;
+    os_macaddr_t link_addr;
+    bool sta_link_participates_in_mlo;
+    bool mlo_on_ap_is_active;
+};
+
 bool bcmwl_sta_get_sta_info(const char *ifname,
                             const os_macaddr_t *hwaddr,
                             bcmwl_sta_info_t *sta_info);
+
+bool bcmwl_sta_get_mlo_info(const char *phy_name,
+                            const os_macaddr_t *hwaddr,
+                            struct bcmwl_sta_mlo_info *bcmwl_sta_mlo_info);
 
 #endif /* BCMWL_STA_H_INCLUDED */

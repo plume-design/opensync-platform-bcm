@@ -53,6 +53,19 @@ char *bcmwl_nvram_getall(void)
     return strdup(buf);
 }
 
+char *bcmwl_nvram_get_key(char *name)
+{
+    char key[256];
+    char *value;
+
+    value = wlcsm_nvram_get(name);
+    LOGT("%s: '%s' = '%s'", __func__, key, value ?: "(none)");
+    if (!value)
+        return NULL;
+
+    return strdup(value);
+}
+
 char *bcmwl_nvram_get(const char *ifname,
                       const char *name)
 {

@@ -37,6 +37,9 @@ int bcmwl_nvram_remove(const char *ifname, const char *prop, const char *needle,
 char *bcmwl_nvram_getall(void);
 
 /* returns heap allocated memory, needs to be free() */
+char *bcmwl_nvram_get_key(const char *name);
+
+/* returns heap allocated memory, needs to be free() */
 char *bcmwl_nvram_get(const char *ifname,
                       const char *name);
 

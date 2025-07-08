@@ -361,6 +361,8 @@ static void bcmwl_sta_get_sta_info_v4(
             sta_info->max_chwidth = 3; // 160 MHz
         }
     }
+    sta_info->is_authorized = v4->flags & WL_STA_AUTHO;
+    sta_info->is_authenticated = v4->flags & WL_STA_AUTHE;
 #endif
 }
 
@@ -1207,4 +1209,150 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
 #else
     return -1;
 #endif
+}
+
+#ifdef WL_MLO_MAX_TID_MAP_SIZE
+
+static int
+bcmwl_sta_get_link_id(const char *vif_name,
+                      const wl_mlo_info_v1_t *mlo_info)
+{
+    int radio_idx;
+    int vif_idx;
+    bool ok = bcmwl_parse_vap(vif_name, &radio_idx, &vif_idx);
+    if (!ok) return -1;
+
+    uint8_t i;
+    for (i = 0; i < mlo_info->num_links; i++) {
+        if ((int)mlo_info->mli[i].wlc_unit == radio_idx) {
+                return mlo_info->mli[i].link_id;
+        }
+    }
+    return -1;
+}
+
+static void
+bcmwl_sta_conv_client_assoc_linkid_bmp(const wl_mlo_scb_info_v1_t *mlo_scb,
+                                       const uint8_t link_id,
+                                       struct bcmwl_sta_mlo_info *bcmwl_sta_mlo_info)
+{
+    const uint8_t assoc_link_id = 1UL << (unsigned long)link_id;
+    bcmwl_sta_mlo_info->sta_link_participates_in_mlo = !!(mlo_scb->assoc_linkid_bmp & assoc_link_id);
+}
+
+static const wl_mlo_scb_info_v1_t *
+bcmwl_sta_find_client_scb_by_mac(const wl_mlo_info_v1_t *mlo_info,
+                                 const os_macaddr_t *hwaddr)
+{
+    int iter;
+    const uint16_t number_of_mlo_scb = mlo_info->no_of_mlo_scb;
+    const wl_mlo_scb_info_v1_t *mlo_scb = mlo_info->msi;
+
+    for (iter = 0; iter < number_of_mlo_scb; iter++) {
+        const os_macaddr_t *link_addr_it = (os_macaddr_t *)&mlo_scb[iter].ea;
+        const os_macaddr_t *mld_addr_it = (os_macaddr_t *)&mlo_scb[iter].peer_mld_addr;
+        if (memcmp(link_addr_it, hwaddr, sizeof(os_macaddr_t)) == 0
+               || memcmp(mld_addr_it, hwaddr, sizeof(os_macaddr_t)) == 0) {
+            return &mlo_scb[iter];
+        }
+    }
+    return NULL;
+}
+
+static bool
+bcmwl_sta_validate_mlo_info(const char *vif_name,
+                            const wl_mlo_info_v1_t *mlo_info,
+                            const size_t mlo_info_max_size)
+{
+    if (mlo_info->ver > WL_MLO_INFO_VER) {
+        LOGE("%s: unsupported mlo_info version: %d but received version: %d",
+                vif_name, WL_MLO_INFO_VER, mlo_info->ver);
+        return false;
+    }
+    if(!mlo_info->mlo_active) {
+        LOGD("%s: MLO is disabled", vif_name);
+    }
+    const size_t mli_size = ARRAY_SIZE(mlo_info->mli);
+    if (mlo_info->num_links > mli_size) {
+        LOGE("%s: buffer too short for links", vif_name);
+        return false;
+    }
+
+    const uint16_t number_of_mlo_scb = mlo_info->no_of_mlo_scb;
+    const wl_mlo_scb_info_v1_t *mlo_scb = mlo_info->msi;
+    const size_t max_scb_size = number_of_mlo_scb * sizeof(*mlo_scb);
+    if (mlo_info->len > mlo_info_max_size
+        || max_scb_size > mlo_info_max_size
+        || mlo_info->len < sizeof(*mlo_info) + max_scb_size)
+    {
+        LOGE("%s: buffer too short for scb", vif_name);
+        return false;
+    }
+
+    return true;
+}
+
+struct bcmwl_sta_tlv {
+    uint16_t tag;
+    uint16_t len;
+    uint8_t *data;
+};
+
+static bool
+bcmwl_sta_pack_mlo_tlv(const char *vif_name,
+                       const uint16_t type,
+                       const uint16_t len,
+                       const uint8_t *data,
+                       struct bcmwl_sta_tlv *buf)
+{
+    const struct bcmwl_ioctl_num_conv *conv;
+    conv = bcmwl_ioctl_lookup_num_conv(vif_name);
+    if(conv == NULL) return false;
+
+    buf->tag = conv->dtoh16(type);
+    buf->len = conv->dtoh16(len);
+    memcpy(buf->data, data, len);
+    return true;
+}
+
+#endif /* WL_MLO_MAX_TID_MAP_SIZE */
+
+bool
+bcmwl_sta_get_mlo_info(const char *vif_name,
+                       const os_macaddr_t *hwaddr,
+                       struct bcmwl_sta_mlo_info *bcmwl_sta_mlo_info)
+{
+#ifdef WL_MLO_MAX_TID_MAP_SIZE
+    uint8_t in[WLC_IOCTL_MEDLEN];
+    char buf[WLC_IOCTL_MAXLEN];
+    memset(bcmwl_sta_mlo_info, 0, sizeof(*bcmwl_sta_mlo_info));
+
+    bool ok = bcmwl_sta_pack_mlo_tlv(vif_name, WL_MLO_CMD_INFO, 0, NULL, (struct bcmwl_sta_tlv *)in);
+    if(!ok) return false;
+
+    ok = bcmwl_GIOV(vif_name, "mlo", in, &buf);
+    if(!ok) return false;
+
+    const wl_mlo_info_v1_t *mlo_info = (const wl_mlo_info_v1_t *)buf;
+
+    ok = bcmwl_sta_validate_mlo_info(vif_name, mlo_info, sizeof(buf));
+    if (!ok) return false;
+    bcmwl_sta_mlo_info->mlo_on_ap_is_active = !!(mlo_info->mlo_active);
+
+    const wl_mlo_scb_info_v1_t *mlo_scb = bcmwl_sta_find_client_scb_by_mac(mlo_info, hwaddr);
+    if(mlo_scb == NULL) return false;
+
+    const os_macaddr_t *link_addr = (const os_macaddr_t *)&mlo_scb->ea;
+    const os_macaddr_t *mld_addr = (const os_macaddr_t *)&mlo_scb->peer_mld_addr;
+    bcmwl_sta_mlo_info->link_addr = *link_addr;
+    bcmwl_sta_mlo_info->mld_addr = *mld_addr;
+
+    const int link_id = bcmwl_sta_get_link_id(vif_name, mlo_info);
+    if(link_id < 0) return false;
+
+    bcmwl_sta_conv_client_assoc_linkid_bmp(mlo_scb, link_id, bcmwl_sta_mlo_info);
+    return true;
+#else
+    return false;
+#endif /* WL_MLO_MAX_TID_MAP_SIZE */
 }

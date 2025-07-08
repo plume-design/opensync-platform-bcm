@@ -116,6 +116,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         for (c = OSW_PLAT_BCM_CHSPEC_FIRST(cs); \
              c > 0 && c <= OSW_PLAT_BCM_CHSPEC_LAST(cs); \
              c += 4)
+#define linkid_is_valid(link_id) (link_id >= 0)
+#define mldunit_is_valid(mld_unit) ((mld_unit >= 0) || (mld_unit == 255))
 
 #define BIT(x) (1 << (x))
 
@@ -132,6 +134,7 @@ struct osw_plat_bcm {
     struct nl_conn_subscription *nl_conn_sub;
     struct nl_80211_sub *nl_sub;
     struct ev_loop *loop;
+    bool mlo_started;
     ev_io event_io;
     ev_io nl_io;
 };
@@ -677,8 +680,52 @@ osw_plat_bcm_conf_disable_phys(struct osw_drv_conf *drv_conf)
     }
 }
 
+static char *
+osw_plat_bcm_get_mld_main_link()
+{
+    char *nvram_mlo = strdupafree(bcmwl_nvram_get_key("wl_mlo_config"));
+    if (!nvram_mlo) return NULL;
+
+    char *token = NULL;
+    int link_id = -1;
+    int i = 0;
+
+    while ((token = strsep(&nvram_mlo, " ")) != NULL) {
+         link_id = atoi(token);
+         if (!link_id) {
+             return strfmt("wl%d", i);
+         }
+
+         i++;
+    }
+
+    return NULL;
+}
+
+static int
+osw_plat_bcm_get_link_id(const char *phy_name)
+{
+    char *nvram_mlo = strdupafree(bcmwl_nvram_get_key("wl_mlo_config"));
+    char *token = NULL;
+    int link_id = -1;
+    int i = 0;
+    char link_name[20];
+
+    while ((token = strsep(&nvram_mlo, " ")) != NULL) {
+         link_id = atoi(token);
+         snprintf(link_name, sizeof(link_name), "wl%d", i);
+         if (!strcmp(phy_name, link_name)) {
+             return link_id;
+         }
+
+         i++;
+    }
+
+    return -1;
+}
+
 static void
-osw_plat_bcm_conf_enable_phys(struct osw_drv_conf *drv_conf)
+osw_plat_bcm_conf_enable_phys(struct osw_drv_conf *drv_conf, struct osw_plat_bcm *m)
 {
     size_t i;
     for (i = 0; i < drv_conf->n_phy_list; i++) {
@@ -691,6 +738,19 @@ osw_plat_bcm_conf_enable_phys(struct osw_drv_conf *drv_conf)
             }
             WARN_ON(WL(phy_name, "up") == NULL);
             WARN_ON(os_nif_up((const char *)phy_name, true) == false);
+            if (bcmwl_nvram_get_key("wl_mlo_config"))
+            {
+	        if (!m->mlo_started)
+                {
+                    m->mlo_started = true;
+
+                    /* hwa_mlo_start is started on main link which has link id = 0 */
+                    char *main_link = strdupafree(osw_plat_bcm_get_mld_main_link());
+                    if (!main_link) return;
+
+                    WARN_ON(WL(main_link, "hwa_mlo_start", "1"));
+	        }
+	    }
         }
     }
 }
@@ -828,6 +888,24 @@ osw_plat_bcm_conf_vif_ap_mode(struct osw_drv_phy_config *phy,
 }
 
 static char *
+osw_plat_bcm_chanspec_from_osw_6g_320(const struct osw_channel *c)
+{
+    const int chan = osw_freq_to_chan(c->control_freq_mhz);
+    const int centerchan1 = chanlist_to_center(unii_6g_320_1_chan2list(chan));
+    const int centerchan2 = chanlist_to_center(unii_6g_320_2_chan2list(chan));
+    const int osw_centerchan = osw_freq_to_chan(c->center_freq0_mhz);
+
+    WARN_ON(osw_centerchan == 0);
+    WARN_ON(centerchan1 == 0 && centerchan2 == 0);
+
+    if (osw_centerchan == centerchan1)
+    {
+        return strfmt("6g%d/320-1", chan);
+    }
+    return strfmt("6g%d/320-2", chan);
+}
+
+static char *
 osw_plat_bcm_chanspec_from_osw(const struct osw_channel *c)
 {
     const int freq = c->control_freq_mhz;
@@ -860,7 +938,7 @@ osw_plat_bcm_chanspec_from_osw(const struct osw_channel *c)
                 case OSW_CHANNEL_40MHZ: return strfmt("6g%d/40", chan);
                 case OSW_CHANNEL_80MHZ: return strfmt("6g%d/80", chan);
                 case OSW_CHANNEL_160MHZ: return strfmt("6g%d/160", chan);
-                case OSW_CHANNEL_320MHZ: return strfmt("6g%d/320-1", chan); /* FIXME, +/- */
+                case OSW_CHANNEL_320MHZ: return osw_plat_bcm_chanspec_from_osw_6g_320(c);
                 case OSW_CHANNEL_80P80MHZ: return NULL;
             }
             break;
@@ -1015,6 +1093,22 @@ osw_plat_bcm_conf_vif_ap_supp_basic_rates(struct osw_drv_phy_config *phy,
         }
     }
     WARN_ON(!bcmwl_SIOC(vif_name, WLC_SET_RATESET, &data_rates));
+}
+
+static void
+osw_plat_bcm_conf_vif_ap_chanspec(struct osw_drv_phy_config *phy,
+                                 struct osw_drv_vif_config *vif)
+{
+    const struct osw_drv_vif_config_ap *ap = &vif->u.ap;
+    if (ap->channel_changed == false) return;
+
+    const char *vif_name = vif->vif_name;
+    const char *chanspec = osw_plat_bcm_chanspec_from_osw(&ap->channel);
+    if (WARN_ON(chanspec == NULL)) return;
+
+    WARN_ON(WL(vif_name, "chanspec", chanspec) == NULL);
+
+    FREE(chanspec);
 }
 
 static void
@@ -1322,12 +1416,12 @@ osw_plat_bcm_conf_each_vif(struct osw_drv_phy_config *phy,
             osw_plat_bcm_conf_vif_ap_acl(phy, vif);
             osw_plat_bcm_conf_vif_ap_acl_policy(phy, vif);
             osw_plat_bcm_conf_vif_ap_mode(phy, vif);
-            osw_plat_bcm_conf_vif_ap_channel(phy, vif);
             osw_plat_bcm_conf_vif_ap_multi_ap(phy, vif);
             osw_plat_bcm_conf_vif_ap_beacon_rate(phy, vif);
             osw_plat_bcm_conf_vif_ap_mcast_rate(phy, vif);
             osw_plat_bcm_conf_vif_ap_passpoint(phy, vif);
             osw_plat_bcm_conf_vif_ap_supp_basic_rates(phy, vif);
+            osw_plat_bcm_conf_vif_ap_chanspec(phy, vif);
             break;
         case OSW_VIF_AP_VLAN:
             break;
@@ -1419,6 +1513,31 @@ osw_plat_bcm_conf_phy_enabled(struct osw_drv_phy_config *phy)
 }
 
 static void
+osw_plat_bcm_conf_phy_channel(struct osw_drv_phy_config *phy)
+{
+    size_t i;
+    for (i = 0; i < phy->vif_list.count; i++) {
+        struct osw_drv_vif_config *vif = &phy->vif_list.list[i];
+        switch (vif->vif_type) {
+            case OSW_VIF_AP:
+                {
+                    struct osw_drv_vif_config_ap *ap = &vif->u.ap;
+                    if (ap->channel_changed &&
+                            ap->csa_required) {
+                        osw_plat_bcm_conf_vif_ap_channel(phy, vif);
+                        i = phy->vif_list.count;
+                    }
+                }
+                break;
+            case OSW_VIF_AP_VLAN:
+            case OSW_VIF_STA:
+            case OSW_VIF_UNDEFINED:
+                break;
+        }
+    }
+}
+
+static void
 osw_plat_bcm_conf_each_phy(struct osw_drv_conf *drv_conf)
 {
     size_t i;
@@ -1429,6 +1548,7 @@ osw_plat_bcm_conf_each_phy(struct osw_drv_conf *drv_conf)
             struct osw_drv_vif_config *vif = &phy->vif_list.list[j];
             osw_plat_bcm_conf_each_vif(phy, vif);
         }
+        osw_plat_bcm_conf_phy_channel(phy);
         osw_plat_bcm_conf_phy_txchain(phy);
         osw_plat_bcm_conf_phy_radar(phy);
         osw_plat_bcm_conf_phy_dfs_channel_forced(phy);
@@ -1456,11 +1576,10 @@ osw_plat_bcm_pre_request_config_cb(struct osw_drv_nl80211_hook *hook,
                                    void *priv)
 {
     struct osw_plat_bcm *m = priv;
-    (void)m;
 
     osw_plat_bcm_conf_disable_phys(drv_conf);
     osw_plat_bcm_conf_each_phy(drv_conf);
-    osw_plat_bcm_conf_enable_phys(drv_conf);
+    osw_plat_bcm_conf_enable_phys(drv_conf, m);
     osw_plat_bcm_conf_each_phy_enabled(drv_conf);
 }
 
@@ -1610,6 +1729,60 @@ osw_plat_bcm_ap_hostap_conf_mutate_cb(struct osw_hostap_hook *hook,
     OSW_HOSTAP_CONF_UNSET(hapd_conf->anqp_3gpp_cell_net);
     OSW_HOSTAP_CONF_UNSET(hapd_conf->network_auth_type);
     osw_plat_bcm_ap_hostap_conf_mutate_ft(phy_name, vif_name, drv_conf, hapd_conf);
+    if (bcmwl_nvram_get_key("wl_mlo_config"))
+    {
+        int link_id = -1;
+        int mld_unit = -1;
+
+        char *mldstr = WL(vif_name, "mld_unit");
+        if (!mldstr) return;
+
+        mld_unit = atoi(mldstr);
+        if (!mldunit_is_valid(mld_unit)) return;
+
+        link_id = osw_plat_bcm_get_link_id(phy_name);
+        if (!linkid_is_valid(link_id)) return;
+
+        STRSCAT(hapd_conf->extra_buf, strfmta("mld_unit=%d\n", mld_unit));
+        STRSCAT(hapd_conf->extra_buf, strfmta("link_id=%d\n", link_id));
+    }
+}
+
+static void
+osw_plat_bcm_hostap_event_cb(
+        struct osw_hostap_hook *hook,
+        const char *phy_name,
+        const char *vif_name,
+        const char *msg,
+        size_t msg_len,
+        void *priv)
+{
+    struct osw_plat_bcm *m = priv;
+    struct osw_drv *drv = m->drv_nl80211;
+    if (drv == NULL) return;
+
+    char buf[1024];
+    STRSCPY_WARN(buf, msg);
+
+    char *p = buf;
+    char *event_name = strsep(&p, " ");
+    if(event_name == NULL) return;
+
+    if ((strcmp(event_name, "EAPOL-4WAY-HS-COMPLETED") == 0) ||
+        (strcmp(event_name, "AP-STA-CONNECTED") == 0) ||
+        (strcmp(event_name, "AP-STA-DISCONNECTED") == 0)) {
+        const char *mac = strsep(&p, " ");
+        struct osw_hwaddr addr;
+        const bool addr_ok = osw_hwaddr_from_cstr(mac, &addr);
+        if (addr_ok) {
+            /* The driver doesn't properly signal all MLO link appearances/disappearances.
+             * The most reliable way to mitigate that is to invalidate all objects OSW is
+             * aware of and have it re-request all states from scratch to detect the
+             * entities the driver is failing to signal.
+             */
+            osw_drv_invalidate(drv);
+        }
+    }
 }
 
 static void
@@ -1846,6 +2019,8 @@ osw_plat_bcm_vif_stats_run_bss_scan(struct osw_plat_bcm_phy *phy,
 
     const long cs = osw_plat_bcm_cs_from_buf(chanspec);
     osw_plat_bcm_cs_into_osw(cs, &c);
+    const bool ok = osw_channel_downgrade_to(&c, OSW_CHANNEL_20MHZ);
+    WARN_ON(!ok);
     char *cs_str = osw_plat_bcm_chanspec_from_osw(&c);
 
     const bool scan_failed = (WL(vif_name, "escan", "-t", "lowpriority", "-c", cs_str) == NULL);
@@ -2086,6 +2261,37 @@ osw_plat_bcm_get_vif_list_cb(struct osw_drv_nl80211_hook *hook,
 {
     struct osw_plat_bcm *m = priv;
     osw_plat_bcm_get_vif_list_supplement_wds(phy_name, report_vif_fn, fn_priv, m);
+}
+
+static void
+osw_plat_bcm_get_vif_state_mld_addr(const char *phy_name,
+                                    const char *vif_name,
+                                    struct osw_drv_vif_state *state)
+{
+    os_macaddr_t mld_addr;
+
+    if (!bcmwl_nvram_get_key("wl_mlo_config")) return;
+
+    char *mldstr = WL(vif_name, "mld_unit");
+    if (!mldstr) return;
+
+    int mld_unit = atoi(mldstr);
+    if (!mldunit_is_valid(mld_unit)) return;
+
+    int link_id = osw_plat_bcm_get_link_id(phy_name);
+    if (!linkid_is_valid(link_id)) return;
+
+    int r, v;
+    if (WARN_ON(!bcmwl_parse_vap(vif_name, &r, &v)))
+        return;
+
+    char *main_link = strdupafree(osw_plat_bcm_get_mld_main_link());
+    if (!main_link) return;
+
+    char *vif = strfmta("%s.%d", main_link, v);
+    bool mac_addr_is_valid = os_nif_macaddr((char *)vif, &mld_addr);
+    if (mac_addr_is_valid)
+        memcpy(&state->u.ap.mld.addr, &mld_addr, sizeof(os_macaddr_t));
 }
 
 static void
@@ -3310,6 +3516,20 @@ osw_plat_bcm_into_chanspec_width(const enum osw_channel_width width)
 }
 
 static uint16_t
+osw_plat_bcm_into_chanspec320_sb(const int primary, const int center)
+{
+#ifdef WL_CHANSPEC_BW_320
+    int lowest = center - 30;
+    uint16_t sb;
+
+    sb = ((primary - lowest) / CH_20MHZ_APART);
+    return sb << WL_CHANSPEC_GE320_SB_SHIFT;
+#else
+    return 0;
+#endif
+}
+
+static uint16_t
 osw_plat_bcm_into_chanspec_sb(const enum osw_channel_width width,
                               const int primary,
                               const int center)
@@ -3364,8 +3584,20 @@ osw_plat_bcm_into_chanspec_sb(const enum osw_channel_width width,
         case OSW_CHANNEL_80P80MHZ:
             break;
         case OSW_CHANNEL_320MHZ:
-            break;
+            return osw_plat_bcm_into_chanspec320_sb(primary, center);
     }
+    WARN_ON(1);
+    return 0;
+}
+
+static uint16_t
+osw_plat_bcm_get_320_center_idx(const int center)
+{
+#ifdef WL_CHANSPEC_BW_320
+    const int centers[] = { 31, 63, 95, 127, 159, 191 };
+    size_t i;
+    for (i = 0; i < ARRAY_SIZE(centers); i++) if (centers[i] == center) return (uint16_t)i << WL_CHANSPEC_GE320_CHIDX_SHIFT;
+#endif
     WARN_ON(1);
     return 0;
 }
@@ -3382,7 +3614,10 @@ osw_plat_bcm_into_chanspec(const struct osw_channel *c)
     const uint16_t cs_band = osw_plat_bcm_into_chanspec_band(band);
     const uint16_t cs_width = osw_plat_bcm_into_chanspec_width(width);
     const uint16_t cs_sb = osw_plat_bcm_into_chanspec_sb(width, primary, center);
-    const uint16_t cs_chan = center ? center : primary;
+    uint16_t cs_chan = c->width == OSW_CHANNEL_320MHZ
+                     ? osw_plat_bcm_get_320_center_idx(center)
+                     : (center ?: primary);
+
     const uint16_t cs = cs_band
                       | cs_width
                       | cs_sb
@@ -4023,6 +4258,7 @@ osw_plat_bcm_fix_vif_ap_state(const char *phy_name,
     osw_plat_bcm_fix_vif_ap_mgmt_rate(phy_name, vif_name, state);
     osw_plat_bcm_fix_vif_ap_passpoint(phy_name, vif_name, state);
     osw_plat_bcm_fix_vif_ap_supp_basic_rates(phy_name, vif_name, state);
+    osw_plat_bcm_get_vif_state_mld_addr(phy_name, vif_name, state);
 
     ap->mode.wnm_bss_trans = strtol(WL(vif_name, "wnm") ?: "0", NULL, 16) & OSW_PLAT_BCM_BTM_BIT;
     ap->mode.rrm_neighbor_report = strtol(WL(vif_name, "rrm") ?: "0", NULL, 16) & OSW_PLAT_BCM_RRM_BIT;
@@ -4084,6 +4320,67 @@ osw_plat_bcm_fix_vif_state_cb(struct osw_drv_nl80211_hook *hook,
 }
 
 static void
+osw_plat_bcm_fix_sta_state_cb(struct osw_drv_nl80211_hook *hook,
+                                   const char *phy_name,
+                                   const char *vif_name,
+                                   const struct osw_hwaddr *sta_addr,
+                                   struct osw_drv_sta_state *state,
+                                   void *priv)
+{
+    bcmwl_sta_info_t info = {0};
+    const os_macaddr_t *hwaddr = (const os_macaddr_t *)sta_addr->octet;
+    bool ok = bcmwl_sta_get_sta_info(vif_name, hwaddr, &info);
+    if (!ok) {
+        state->connected = false;
+        return;
+    }
+
+    struct bcmwl_sta_mlo_info mlo_info;
+    ok = bcmwl_sta_get_mlo_info(vif_name, hwaddr, &mlo_info);
+    if (!ok) return;
+
+    const struct osw_hwaddr *link_addr = osw_hwaddr_from_cptr_unchecked(&mlo_info.link_addr);
+    const struct osw_hwaddr *mld_addr = osw_hwaddr_from_cptr_unchecked(&mlo_info.mld_addr);
+
+    const bool is_link_addr = !osw_hwaddr_is_zero(link_addr)
+                              && osw_hwaddr_is_equal(link_addr, sta_addr);
+    const bool is_mld_addr = !osw_hwaddr_is_zero(mld_addr)
+                             && osw_hwaddr_is_equal(mld_addr, sta_addr);
+
+    const bool mld_addr_reuses_link_addr = osw_hwaddr_is_equal(link_addr, mld_addr);
+    const bool mld_addr_is_distinct = (mld_addr_reuses_link_addr == false);
+
+    if (mlo_info.mlo_on_ap_is_active) {
+        /*
+         * The primary radio (MAP) may end up not being used
+         * in the association, but it internally participates
+         * in the driver data structures so it needs extra
+         * care to filter out
+         */
+         if (mlo_info.sta_link_participates_in_mlo == false) {
+             state->connected = false;
+             return;
+         }
+     }
+
+     /* This is needed for both auto-MLDs and explicit MLDs */
+     if (is_mld_addr && mld_addr_is_distinct) {
+         state->connected = false;
+         return;
+     }
+
+    if (is_link_addr) {
+        state->mld_addr = *mld_addr;
+        /*
+         * MLO/EHT requires non-open, therefore AUTHE must
+         * be true for datapath to work/EAPOL to be inferred
+         * as completed
+         */
+        state->connected = info.is_authenticated && info.is_authorized;
+    }
+}
+
+static void
 osw_plat_bcm_init_wl(void)
 {
     bcmwl_vap_prealloc_all();
@@ -4132,6 +4429,7 @@ osw_plat_bcm_start(struct osw_plat_bcm *m)
     static const struct osw_drv_nl80211_hook_ops nl_hook_ops = {
         .fix_phy_state_fn = osw_plat_bcm_fix_phy_state_cb,
         .fix_vif_state_fn = osw_plat_bcm_fix_vif_state_cb,
+        .fix_sta_state_fn = osw_plat_bcm_fix_sta_state_cb,
         .pre_request_config_fn = osw_plat_bcm_pre_request_config_cb,
         .pre_request_stats_fn = osw_plat_bcm_pre_request_stats_cb,
         .get_vif_list_fn = osw_plat_bcm_get_vif_list_cb,
@@ -4154,6 +4452,7 @@ osw_plat_bcm_start(struct osw_plat_bcm *m)
     static const struct osw_hostap_hook_ops hapd_hook_ops = {
         .ap_conf_mutate_fn = osw_plat_bcm_ap_hostap_conf_mutate_cb,
         .sta_conf_mutate_fn = osw_plat_bcm_sta_conf_mutate_cb,
+        .event_fn = osw_plat_bcm_hostap_event_cb,
     };
 
    static const struct osw_conf_mutator conf_mut = {
@@ -4164,6 +4463,7 @@ osw_plat_bcm_start(struct osw_plat_bcm *m)
     m->loop = OSW_MODULE_LOAD(osw_ev);
     if (m->loop == NULL) return;
 
+    m->mlo_started = false;
     osw_plat_bcm_init_wl();
 
     m->dfs_sta_war = osw_plat_bcm_dfs_sta_war_new();
@@ -4247,3 +4547,52 @@ OSW_UT(osw_plat_bcm_chanspec)
     assert(osw_plat_bcm_into_chanspec(&c36ht40) == cs36ht40);
     assert(osw_plat_bcm_into_chanspec(&c52ht160) == cs52ht160);
 }
+
+#ifdef WL_CHANSPEC_BW_320
+OSW_UT(osw_plat_bcm_chanspec_320)
+{
+     const struct osw_channel c1eht320 = {
+         .control_freq_mhz = 5955,
+         .center_freq0_mhz = 6105,
+         .width = OSW_CHANNEL_320MHZ,
+     };
+     const uint16_t cs1eht320 = 0x7000;
+     const struct osw_channel c221eht320 = {
+         .control_freq_mhz = 7055,
+         .center_freq0_mhz = 6905,
+         .width = OSW_CHANNEL_320MHZ,
+     };
+     const uint16_t cs221eht320 = 0x73c5;
+     const struct osw_channel c33cen31eht320 = {
+         .control_freq_mhz = 6115,
+         .center_freq0_mhz = 6105,
+         .width = OSW_CHANNEL_320MHZ,
+     };
+     const uint16_t cs33cen31eht320 = 0x7200;
+     const struct osw_channel c33cen63eht320 = {
+         .control_freq_mhz = 6115,
+         .center_freq0_mhz = 6265,
+         .width = OSW_CHANNEL_320MHZ,
+     };
+     const uint16_t cs33cen63eht320 = 0x7001;
+     const struct osw_channel c65cen95eht320 = {
+         .control_freq_mhz = 6275,
+         .center_freq0_mhz = 6425,
+         .width = OSW_CHANNEL_320MHZ,
+     };
+     const uint16_t cs65cen95eht320 = 0x7002;
+     const struct osw_channel c65cen63eht320 = {
+         .control_freq_mhz = 6275,
+         .center_freq0_mhz = 6265,
+         .width = OSW_CHANNEL_320MHZ,
+     };
+     const uint16_t cs65cen63eht320 = 0x7201;
+
+     assert(osw_plat_bcm_into_chanspec(&c1eht320) == cs1eht320);
+     assert(osw_plat_bcm_into_chanspec(&c221eht320) == cs221eht320);
+     assert(osw_plat_bcm_into_chanspec(&c33cen31eht320) == cs33cen31eht320);
+     assert(osw_plat_bcm_into_chanspec(&c33cen63eht320) == cs33cen63eht320);
+     assert(osw_plat_bcm_into_chanspec(&c65cen95eht320) == cs65cen95eht320);
+     assert(osw_plat_bcm_into_chanspec(&c65cen63eht320) == cs65cen63eht320);
+}
+#endif

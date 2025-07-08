@@ -393,5 +393,19 @@ bool bcmwl_cim_get(const char *phy,
                   bcmwl_cim_parse_v2_us(arr, len, buf, ver, conv))))
         return false;
 
+    memset(&arg, 0, sizeof(arg));
+    arg.count = conv->dtoh32(WL_CHANIM_COUNT_US_ONE);
+    arg.buflen = sizeof(buf);
+    arg.buflen -= WL_CHANIM_STATS_US_FIXED_LEN;
+    arg.buflen = conv->dtoh32(arg.buflen);
+
+    if (WARN_ON(!bcmwl_GIOV(phy, "chanim_stats", &arg, &buf)))
+        return false;
+
+    if (WARN_ON(!(bcmwl_cim_parse_v3_v4_us_v2(arr, len, buf, ver, conv) ||
+                  bcmwl_cim_parse_v3_us_v1(arr, len, buf, ver, conv) ||
+                  bcmwl_cim_parse_v2_us(arr, len, buf, ver, conv))))
+        return false;
+
     return true;
 }
