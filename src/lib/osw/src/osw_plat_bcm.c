@@ -863,25 +863,23 @@ osw_plat_bcm_conf_vif_ap_mode(struct osw_drv_phy_config *phy,
             WARN_ON(WL(vif_name, "eht", "enab", strfmta("%d", mode->eht_enabled)) == NULL);
 
     {
-        const uint32_t initial_btm = strtol(WL(vif_name, "wnm") ?: "0", NULL, 16);
-        uint32_t btm = initial_btm;
-        btm &= ~OSW_PLAT_BCM_BTM_BIT;
-        if (ap->mode.wnm_bss_trans) {
-            btm |= OSW_PLAT_BCM_BTM_BIT;
-        }
-        if (initial_btm != btm)
-            WARN_ON(WL(vif_name, "wnm", strfmta("%x", btm)) == NULL);
+        const uint32_t wnm = strtol(WL(vif_name, "wnm") ?: "0", NULL, 16);
+        const uint32_t btm_actual = wnm & OSW_PLAT_BCM_BTM_BIT;
+        const uint32_t btm_desired = (ap->mode.wnm_bss_trans ? OSW_PLAT_BCM_BTM_BIT : 0);
+        const uint32_t wnm_desired = (wnm & (~OSW_PLAT_BCM_BTM_BIT))
+                                   | btm_desired;
+        if (btm_actual != btm_desired)
+            WARN_ON(WL(vif_name, "wnm", strfmta("%x", wnm_desired)) == NULL);
     }
 
     {
-        const uint32_t initial_rrm = strtol(WL(vif_name, "rrm") ?: "0", NULL, 16);
-        uint32_t rrm = initial_rrm;
-        rrm &= ~OSW_PLAT_BCM_RRM_BIT;
-        if (ap->mode.rrm_neighbor_report) {
-            rrm |= OSW_PLAT_BCM_RRM_BIT;
-        }
-        if (initial_rrm != rrm)
-            WARN_ON(WL(vif_name, "rrm", strfmta("%x", rrm)) == NULL);
+        const uint32_t rrm = strtol(WL(vif_name, "rrm") ?: "0", NULL, 16);
+        const uint32_t rrm_actual = rrm & ~OSW_PLAT_BCM_RRM_BIT;
+        const uint32_t rrm_bit_desired = (ap->mode.rrm_neighbor_report ? OSW_PLAT_BCM_RRM_BIT : 0);
+        const uint32_t rrm_desired = (rrm & (~OSW_PLAT_BCM_RRM_BIT))
+                                   | rrm_bit_desired;
+         if (rrm_actual != rrm_desired)
+             WARN_ON(WL(vif_name, "rrm", strfmta("%x", rrm_desired)) == NULL);
 
         osw_plat_bcm_rrm_set_skip_nbr_report(vif_name);
     }

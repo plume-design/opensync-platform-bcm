@@ -55,11 +55,10 @@ char *bcmwl_nvram_getall(void)
 
 char *bcmwl_nvram_get_key(char *name)
 {
-    char key[256];
     char *value;
 
     value = wlcsm_nvram_get(name);
-    LOGT("%s: '%s' = '%s'", __func__, key, value ?: "(none)");
+    LOGT("%s: '%s' = '%s'", __func__, name, value ?: "(none)");
     if (!value)
         return NULL;
 
