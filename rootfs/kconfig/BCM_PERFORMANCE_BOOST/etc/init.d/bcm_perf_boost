@@ -13,17 +13,31 @@ log()
 
 bcm_performance_boost()
 {
+
+# use wlaffinity and rtpolicy to set best possible scheduler, affinity and priority settings for selected platforms.
+# rtpolicy and wlaffinity are used on recommendation from in BRCM case: CS00012392428
+if [ -x "/bin/wlaffinity" ]; then
+    /bin/wlaffinity auto | log
+else
+    log "bcm_performance_boost: Error: no wlaffinity"
+fi
+
+if [ -x "/bin/rtpolicy" ]; then
+    /bin/rtpolicy auto ALL | log
+else
+    log "bcm_performance_boost: WARNING: no rtpolicy, using legacy settings"
+
     # Setting bcm kernel task priorities and affinities according to
     # BCM Document 'CPU Allocation for 47622_6755' and eid_bcm_kthreads.txt
-
     # bcmsw_rx: pin to cpu0, rt-prio 5 RR:
     pidof bcmsw_rx | xargs -n 1 taskset -p 0x1 | log
-    pgrep 'dhd0_dpc|wfd0-thrd|wfd1-thrd|skb_free_task|bcmsw_rx|fc_task' | xargs -n 1 chrt -r -p 5 | log
+    pgrep 'dhd0_dpc|wfd0-thrd|wfd1-thrd|skb_free_task|bcmsw_rx|fc_task|pdc_rx' | xargs -n 1 chrt -r -p 5 | log
 
     # bcmsw_recycle: rt-prio 5 FIFO:
     pidof bcmsw_recycle | xargs -n 1 chrt -f -p 5 | log
 
     # Priorities and affinities for other tasks are handled by /bin/wlaffinity
+fi
 
 for IF in $INTERFACES
 do

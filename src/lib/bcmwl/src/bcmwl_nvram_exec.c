@@ -31,6 +31,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 /* internal */
 #include <util.h>
+#include "bcmwl_nvram.h"
 #define DUP(buf) bcmwl_nvram_dup(buf)
 #define NVRAM CONFIG_BCM_NVRAM_EXEC_PATH
 
@@ -77,10 +78,24 @@ bool bcmwl_nvram_set(const char *ifname,
 
 bool bcmwl_nvram_set_flag(const char *ifname,
                           const char *name,
-                          const char *bit,
-                          const char *value)
+                          const int bit,
+                          const bool value)
 {
     const char *p;
-    p = strexa(NVRAM, "setflag", strfmta("%s_%s %s=%s", ifname, name, bit, value);
+    p = strexa(NVRAM, "setflag", strfmta("%s_%s %d=%d", ifname, name, bit, value ? 1 : 0));
     return p && strlen(p) == 0 ? true : false;
+}
+
+char *bcmwl_nvram_get_key(const char *name)
+{
+    return DUP(strexa(NVRAM, "get", name));
+}
+
+char *bcmwl_nvram_kget_key(const char *name)
+{
+    return bcmwl_nvram_get_key(name);
+}
+
+void bcmwl_nvram_init(void)
+{
 }

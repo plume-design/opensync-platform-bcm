@@ -1,0 +1,26 @@
+#!/bin/sh -e
+
+START=961
+
+start()
+{
+    if [ ! -e /var/lib/lxc/opensync ]; then
+        mkdir -p /var/lib/lxc/
+        ln -sf /etc/lxc/opensync /var/lib/lxc/opensync
+    fi
+    lxc-start -n opensync
+}
+
+stop()
+{
+    lxc-stop -n opensync
+}
+
+case "$1" in
+    boot) start ;;
+    start) start ;;
+    stop) stop ;;
+    restart) stop && start ;;
+    *) exit 1 ;;
+esac
+

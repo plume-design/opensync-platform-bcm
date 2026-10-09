@@ -108,6 +108,7 @@ void osn_qos_del(osn_qos_t *self)
     }
 
     FREE(self->q_id);
+    FREE(self);
 }
 
 bool osn_qos_apply(osn_qos_t *self)

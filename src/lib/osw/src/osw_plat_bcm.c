@@ -98,6 +98,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     ##__VA_ARGS__)
 
 #include "osw_plat_bcm_dfs_sta_war.c.h"
+#include "osw_plat_bcm_atf.c.h"
 #define AUTH_TYPE_TC        0
 #define AUTH_TYPE_ONLINE    1
 #define AUTH_TYPE_HTTP      2
@@ -116,11 +117,34 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         for (c = OSW_PLAT_BCM_CHSPEC_FIRST(cs); \
              c > 0 && c <= OSW_PLAT_BCM_CHSPEC_LAST(cs); \
              c += 4)
+#define linkid_is_valid(link_id) (link_id >= 0)
+#define mldunit_is_valid(mld_unit) ((mld_unit >= 0) && (mld_unit != 255))
+
+/**
+ * Link IDs are MLO specific radio representations. The driver MLO topology
+ * requires one radio to be the leader. The Link ID 0 is the leader. This is
+ * typically assigned, by the system integrator, to the highest-bandwidth
+ * radio: 6G or 5G.
+ */
+#define OSW_PLAT_BCM_MLO_MAIN_LINK_ID 0
 
 #define BIT(x) (1 << (x))
 
+#define BCM_ACL_MAX_DRIVER_COUNT    ((size_t)64)
+#define BCM_ACL_MAX_STORAGE_COUNT   ((size_t)191)
+#define BCM_ACL_TOTAL_COUNT         (BCM_ACL_MAX_DRIVER_COUNT + BCM_ACL_MAX_STORAGE_COUNT)
+#define ACL_LOG_BUFFER_SIZE         (BCM_ACL_MAX_STORAGE_COUNT * 19)  /* 191 MAC addresses * 18 chars each (17 + comma) + 1 for safety */
+
+struct osw_plat_bcm_vif_acl_storage {
+    struct ds_tree_node node;
+    char vif_name[32];
+    struct osw_hwaddr_list remaining_acl;
+};
+
 struct osw_plat_bcm {
     struct osw_plat_bcm_dfs_sta_war *dfs_sta_war;
+    struct osw_plat_bcm_atf *atf;
+    struct ds_tree acl_storage; /* osw_plat_bcm_vif_acl_storage */
     struct osw_state_observer state_obs;
     struct osw_drv_nl80211_ops *nl_ops;
     struct osw_drv_nl80211_hook *nl_hook;
@@ -132,6 +156,9 @@ struct osw_plat_bcm {
     struct nl_conn_subscription *nl_conn_sub;
     struct nl_80211_sub *nl_sub;
     struct ev_loop *loop;
+    bool mlo_started;
+    bool rsno_supported;            /* RSNO (RSN Overriding) engine present in wpa_supplicant */
+    bool wpas_has_rsn_overriding;   /* wpa_supplicant parses the 'rsn_overriding' config token */
     ev_io event_io;
     ev_io nl_io;
 };
@@ -147,6 +174,8 @@ struct osw_plat_bcm_vif {
     struct osw_plat_bcm *m;
     const struct nl_80211_vif *info;
     unsigned int stats_mask_pending;
+    struct nl_cmd_task task_nl_tx_power_reset;
+    bool percent_100_applied;
 };
 
 struct osw_plat_bcm_sta {
@@ -186,6 +215,35 @@ struct osw_plat_bcm_sta_each_arg {
     osw_plat_bcm_sta_each_fn_t *fn;
     void *priv;
 };
+
+static struct osw_plat_bcm_vif_acl_storage *
+osw_plat_bcm_acl_storage_get(struct osw_plat_bcm *m, const char *vif_name)
+{
+    struct osw_plat_bcm_vif_acl_storage *storage = ds_tree_find(&m->acl_storage, vif_name);
+    if (storage == NULL) {
+        storage = CALLOC(1, sizeof(*storage));
+        STRSCPY_WARN(storage->vif_name, vif_name);
+        ds_tree_insert(&m->acl_storage, storage, storage->vif_name);
+    }
+    return storage;
+}
+
+static void
+osw_plat_bcm_acl_storage_init(struct osw_plat_bcm_vif_acl_storage *storage)
+{
+    osw_hwaddr_list_flush(&storage->remaining_acl);
+}
+
+static void
+osw_plat_bcm_acl_storage_remove(struct osw_plat_bcm *m, const char *vif_name)
+{
+    struct osw_plat_bcm_vif_acl_storage *storage = ds_tree_find(&m->acl_storage, vif_name);
+    if (storage != NULL) {
+        osw_hwaddr_list_flush(&storage->remaining_acl);
+        ds_tree_remove(&m->acl_storage, storage);
+        FREE(storage);
+    }
+}
 
 enum passpoint_list_type {
     TYPE_DOMAIN,
@@ -575,7 +633,7 @@ osw_plat_bcm_conf_eht_is_changed(struct osw_drv_vif_config *vif)
 }
 
 
-static bool 
+static bool
 osw_plat_bcm_get_basic_supp_rates(const char *vif_name, uint16_t *supp_rates, uint16_t *basic_rates)
 {
     wl_rateset_t rs;
@@ -608,7 +666,7 @@ osw_plat_bcm_get_basic_supp_rates(const char *vif_name, uint16_t *supp_rates, ui
 
 static bool
 osw_plat_bcm_conf_is_rates_changed(struct osw_drv_vif_config *vif)
-{   
+{
     const char *vif_name = vif->vif_name;
     uint16_t basic_rates = 0;
     uint16_t supported_rates = 0;
@@ -662,8 +720,87 @@ osw_plat_bcm_conf_need_phy_disable(struct osw_drv_phy_config *phy)
     return false;
 }
 
+static bool
+osw_plat_bcm_is_mlo(void)
+{
+    char *nvram_mlo = NVKG("wl_mlo_config");
+    return nvram_mlo != NULL;
+}
+
+static char *
+osw_plat_bcm_get_mld_main_link(void)
+{
+    char *nvram_mlo = NVKG("wl_mlo_config");
+    if (!nvram_mlo) return NULL;
+
+    char *token = NULL;
+    int link_id = -1;
+    int i = 0;
+
+    while ((token = strsep(&nvram_mlo, " ")) != NULL) {
+         link_id = atoi(token);
+         if (link_id == OSW_PLAT_BCM_MLO_MAIN_LINK_ID) {
+             return strfmt("wl%d", i);
+         }
+
+         i++;
+    }
+
+    return NULL;
+}
+
+static int
+osw_plat_bcm_get_link_id(const char *phy_name)
+{
+    char *nvram_mlo = NVKG("wl_mlo_config");
+    char *token = NULL;
+    int link_id = -1;
+    int i = 0;
+    char link_name[20];
+
+    while ((token = strsep(&nvram_mlo, " ")) != NULL) {
+         link_id = atoi(token);
+         snprintf(link_name, sizeof(link_name), "wl%d", i);
+         if (!strcmp(phy_name, link_name)) {
+             return link_id;
+         }
+
+         i++;
+    }
+
+    return -1;
+}
+
+static bool
+osw_plat_bcm_phy_is_mlo_sibling(const char *phy1, const char *phy2)
+{
+    const int phy1_link_id = osw_plat_bcm_get_link_id(phy1);
+    const int phy2_link_id = osw_plat_bcm_get_link_id(phy2);
+    if (phy1_link_id == -1) return false;
+    if (phy2_link_id == -1) return false;
+    return phy1_link_id != phy2_link_id;
+}
+
 static void
-osw_plat_bcm_conf_disable_phys(struct osw_drv_conf *drv_conf)
+osw_plat_bcm_conf_mark_mlo_sibling_phys_as_disabled(struct osw_drv_conf *drv_conf,
+                                                     const char *phy_name,
+                                                     uint32_t *phy_disabled_bitmap)
+{
+    size_t i;
+    for (i = 0; i < drv_conf->n_phy_list; i++) {
+        struct osw_drv_phy_config *phy = &drv_conf->phy_list[i];
+        const char *other_phy_name = phy->phy_name;
+        const bool already_disabled = *phy_disabled_bitmap & BIT(i);
+        if (already_disabled) continue;
+        if (osw_plat_bcm_phy_is_mlo_sibling(phy_name, other_phy_name) == false) continue;
+
+        *phy_disabled_bitmap |= BIT(i);
+        LOGI(LOG_PREFIX_PHY(other_phy_name, "marking as disabled for reconfig (due to sibling %s)", phy_name));
+    }
+}
+
+static void
+osw_plat_bcm_conf_disable_phys(struct osw_drv_conf *drv_conf, uint32_t *phy_disabled_bitmap)
 {
     size_t i;
     for (i = 0; i < drv_conf->n_phy_list; i++) {
@@ -671,14 +808,17 @@ osw_plat_bcm_conf_disable_phys(struct osw_drv_conf *drv_conf)
         const char *phy_name = phy->phy_name;
 
         if (osw_plat_bcm_conf_need_phy_disable(phy)) {
+            *phy_disabled_bitmap |= BIT(i);
             LOGI(LOG_PREFIX_PHY(phy_name, "disabling for reconfig"));
             WARN_ON(WL(phy_name, "down") == NULL);
+            osw_plat_bcm_conf_mark_mlo_sibling_phys_as_disabled(drv_conf, phy_name, phy_disabled_bitmap);
         }
     }
 }
 
 static void
-osw_plat_bcm_conf_enable_phys(struct osw_drv_conf *drv_conf)
+osw_plat_bcm_conf_enable_phys(struct osw_drv_conf *drv_conf, struct osw_plat_bcm *m,
+                              uint32_t phy_disabled_bitmap)
 {
     size_t i;
     for (i = 0; i < drv_conf->n_phy_list; i++) {
@@ -686,11 +826,28 @@ osw_plat_bcm_conf_enable_phys(struct osw_drv_conf *drv_conf)
         const char *phy_name = phy->phy_name;
 
         if (phy->enabled) {
-            if (osw_plat_bcm_conf_need_phy_disable(phy)) {
+            if (phy_disabled_bitmap & BIT(i)) {
                 LOGI(LOG_PREFIX_PHY(phy_name, "enabling after reconfig"));
+                WARN_ON(WL(phy_name, "up") == NULL);
             }
-            WARN_ON(WL(phy_name, "up") == NULL);
+            else if (phy->enabled_changed) {
+                WARN_ON(WL(phy_name, "up") == NULL);
+            }
+
             WARN_ON(os_nif_up((const char *)phy_name, true) == false);
+            if (osw_plat_bcm_is_mlo())
+            {
+            if (!m->mlo_started)
+                {
+                    m->mlo_started = true;
+
+                    /* hwa_mlo_start is started on main link which has link id = 0 */
+                    char *main_link = strdupafree(osw_plat_bcm_get_mld_main_link());
+                    if (!main_link) return;
+
+                    WARN_ON(WL(main_link, "hwa_mlo_start", "1"));
+            }
+        }
         }
     }
 }
@@ -740,7 +897,8 @@ osw_plat_bcm_conf_vif_ap_mcast2ucast(struct osw_drv_phy_config *phy,
 
 static void
 osw_plat_bcm_conf_vif_ap_acl(struct osw_drv_phy_config *phy,
-                             struct osw_drv_vif_config *vif)
+                             struct osw_drv_vif_config *vif,
+                             struct osw_plat_bcm *m)
 {
     struct osw_drv_vif_config_ap *ap = &vif->u.ap;
     if (ap->acl_changed == false) return;
@@ -748,8 +906,39 @@ osw_plat_bcm_conf_vif_ap_acl(struct osw_drv_phy_config *phy,
     const char *vif_name = vif->vif_name;
     WARN_ON(WL(vif_name, "mac", "none") == NULL);
 
+    const size_t acl_count = ap->acl.count;
+    const size_t hw_count = (acl_count > BCM_ACL_MAX_DRIVER_COUNT) ? BCM_ACL_MAX_DRIVER_COUNT : acl_count;
+    const size_t storage_start = BCM_ACL_MAX_DRIVER_COUNT;
+    const size_t storage_end = (acl_count > BCM_ACL_TOTAL_COUNT) ? BCM_ACL_TOTAL_COUNT : acl_count;
+    const size_t storage_count = (storage_end > storage_start) ? (storage_end - storage_start) : 0;
+
+    /* Log ACL distribution between hardware and storage */
+    if (acl_count > BCM_ACL_MAX_DRIVER_COUNT) {
+        LOGI("osw: plat: bcm: %s: ACL count %zu exceeds hardware limit %zu, applying first %zu to hardware and storing %zu in storage",
+             vif_name, acl_count, BCM_ACL_MAX_DRIVER_COUNT, hw_count, storage_count);
+    }
+
+    /* Store remaining ACL list for this VIF */
+    struct osw_plat_bcm_vif_acl_storage *storage = osw_plat_bcm_acl_storage_get(m, vif_name);
+    osw_plat_bcm_acl_storage_init(storage);
+
+    /* Store ACL list (entries from 64 to 255, up to 191 entries in storage) */
+    if (storage_count > 0) {
+        size_t i;
+        for (i = storage_start; i < storage_end; i++) {
+            osw_hwaddr_list_append(&storage->remaining_acl, &ap->acl.list[i]);
+        }
+
+        /* Log the remaining ACLs being stored */
+        char remaining_acl_str[ACL_LOG_BUFFER_SIZE];
+        osw_hwaddr_list_to_str(remaining_acl_str, sizeof(remaining_acl_str), &storage->remaining_acl);
+        LOGI("osw: plat: bcm: %s: Storing %zu ACLs in storage (entries %zu-%zu): %s",
+             vif_name, storage->remaining_acl.count, storage_start, storage_end - 1, remaining_acl_str);
+    }
+
+    /* Apply first 64 ACLs to hardware */
     size_t i;
-    for (i = 0; i < ap->acl.count; i++) {
+    for (i = 0; i < hw_count; i++) {
         const struct osw_hwaddr *mac = &ap->acl.list[i];
         struct osw_hwaddr_str buf;
         const char *str = osw_hwaddr2str(mac, &buf);
@@ -803,28 +992,44 @@ osw_plat_bcm_conf_vif_ap_mode(struct osw_drv_phy_config *phy,
             WARN_ON(WL(vif_name, "eht", "enab", strfmta("%d", mode->eht_enabled)) == NULL);
 
     {
-        const uint32_t initial_btm = strtol(WL(vif_name, "wnm") ?: "0", NULL, 16);
-        uint32_t btm = initial_btm;
-        btm &= ~OSW_PLAT_BCM_BTM_BIT;
-        if (ap->mode.wnm_bss_trans) {
-            btm |= OSW_PLAT_BCM_BTM_BIT;
-        }
-        if (initial_btm != btm)
-            WARN_ON(WL(vif_name, "wnm", strfmta("%x", btm)) == NULL);
+        const uint32_t wnm = strtol(WL(vif_name, "wnm") ?: "0", NULL, 16);
+        const uint32_t btm_actual = wnm & OSW_PLAT_BCM_BTM_BIT;
+        const uint32_t btm_desired = (ap->mode.wnm_bss_trans ? OSW_PLAT_BCM_BTM_BIT : 0);
+        const uint32_t wnm_desired = (wnm & (~OSW_PLAT_BCM_BTM_BIT))
+                                   | btm_desired;
+        if (btm_actual != btm_desired)
+            WARN_ON(WL(vif_name, "wnm", strfmta("%" PRIx32, wnm_desired)) == NULL);
     }
 
     {
-        const uint32_t initial_rrm = strtol(WL(vif_name, "rrm") ?: "0", NULL, 16);
-        uint32_t rrm = initial_rrm;
-        rrm &= ~OSW_PLAT_BCM_RRM_BIT;
-        if (ap->mode.rrm_neighbor_report) {
-            rrm |= OSW_PLAT_BCM_RRM_BIT;
-        }
-        if (initial_rrm != rrm)
-            WARN_ON(WL(vif_name, "rrm", strfmta("%x", rrm)) == NULL);
+        const uint32_t rrm = strtol(WL(vif_name, "rrm") ?: "0", NULL, 16);
+        const uint32_t rrm_actual = rrm & ~OSW_PLAT_BCM_RRM_BIT;
+        const uint32_t rrm_bit_desired = (ap->mode.rrm_neighbor_report ? OSW_PLAT_BCM_RRM_BIT : 0);
+        const uint32_t rrm_desired = (rrm & (~OSW_PLAT_BCM_RRM_BIT))
+                                   | rrm_bit_desired;
+         if (rrm_actual != rrm_desired)
+             WARN_ON(WL(vif_name, "rrm", strfmta("%" PRIx32, rrm_desired)) == NULL);
 
         osw_plat_bcm_rrm_set_skip_nbr_report(vif_name);
     }
+}
+
+static char *
+osw_plat_bcm_chanspec_from_osw_6g_320(const struct osw_channel *c)
+{
+    const int chan = osw_freq_to_chan(c->control_freq_mhz);
+    const int centerchan1 = chanlist_to_center(unii_6g_320_1_chan2list(chan));
+    const int centerchan2 = chanlist_to_center(unii_6g_320_2_chan2list(chan));
+    const int osw_centerchan = osw_freq_to_chan(c->center_freq0_mhz);
+
+    WARN_ON(osw_centerchan == 0);
+    WARN_ON(centerchan1 == 0 && centerchan2 == 0);
+
+    if (osw_centerchan == centerchan1)
+    {
+        return strfmt("6g%d/320-1", chan);
+    }
+    return strfmt("6g%d/320-2", chan);
 }
 
 static char *
@@ -860,7 +1065,7 @@ osw_plat_bcm_chanspec_from_osw(const struct osw_channel *c)
                 case OSW_CHANNEL_40MHZ: return strfmt("6g%d/40", chan);
                 case OSW_CHANNEL_80MHZ: return strfmt("6g%d/80", chan);
                 case OSW_CHANNEL_160MHZ: return strfmt("6g%d/160", chan);
-                case OSW_CHANNEL_320MHZ: return strfmt("6g%d/320-1", chan); /* FIXME, +/- */
+                case OSW_CHANNEL_320MHZ: return osw_plat_bcm_chanspec_from_osw_6g_320(c);
                 case OSW_CHANNEL_80P80MHZ: return NULL;
             }
             break;
@@ -913,10 +1118,16 @@ osw_plat_bcm_conf_vif_ap_channel(struct osw_drv_phy_config *phy,
     char *chanspec = osw_plat_bcm_chanspec_from_osw(&ap->channel);
     if (WARN_ON(chanspec == NULL)) return;
 
-    WARN_ON(WL(vif_name, "chanspec", chanspec) == NULL);
-
     if (ap->csa_required) {
-        WARN_ON(WL(vif_name, "csa", "0", "15", chanspec) == NULL);
+        const bool zero_wait_dfs_enabled = (phy->zero_wait_dfs == OSW_ZERO_WAIT_DFS_ENABLE);
+
+        if (zero_wait_dfs_enabled && osw_channel_overlaps_dfs(&ap->channel)) {
+            WARN_ON(WL(vif_name, "dfs_ap_move", chanspec) == NULL);
+        }
+        else {
+            WARN_ON(WL(vif_name, "csa", "0", "15", chanspec) == NULL);
+            WARN_ON(WL(vif_name, "chanspec", chanspec) == NULL);
+        }
     }
 
     FREE(chanspec);
@@ -946,7 +1157,7 @@ osw_plat_bcm_conf_vif_ap_beacon_rate(struct osw_drv_phy_config *phy,
     const uint32_t beacon_rate = ap->mode.beacon_rate.u.legacy;
     const uint32_t bcn_rate = (uint32_t)osw_rate_legacy_to_halfmbps(beacon_rate);
     if (initial_beacon_rate != bcn_rate)
-        WARN_ON(WL(vif_name, "force_bcn_rspec", strfmta("%d", bcn_rate)) == NULL);
+        WARN_ON(WL(vif_name, "force_bcn_rspec", strfmta("%" PRIu32, bcn_rate)) == NULL);
 }
 
 static const char*
@@ -1011,10 +1222,114 @@ osw_plat_bcm_conf_vif_ap_supp_basic_rates(struct osw_drv_phy_config *phy,
                 }
                 data_rates.count++;
             }
-            
+
         }
     }
     WARN_ON(!bcmwl_SIOC(vif_name, WLC_SET_RATESET, &data_rates));
+}
+
+static void
+osw_plat_bcm_conf_vif_ap_mbo(struct osw_drv_phy_config *phy,
+                             struct osw_drv_vif_config *vif)
+{
+    const struct osw_drv_vif_config_ap *ap = &vif->u.ap;
+    if (ap->mbo_changed == false) return;
+
+    const char *vif_name = vif->vif_name;
+    const bool val = ap->mbo;
+
+    WARN_ON(WL(vif_name, "mbo", "ap_enable", strfmta("%d", val)) == NULL);
+}
+
+static void
+osw_plat_bcm_conf_vif_ap_oce(struct osw_drv_phy_config *phy,
+                             struct osw_drv_vif_config *vif)
+{
+    const struct osw_drv_vif_config_ap *ap = &vif->u.ap;
+    if (ap->oce_changed == false) return;
+
+    const char *vif_name = vif->vif_name;
+    const bool val = ap->oce;
+
+    WARN_ON(WL(vif_name, "oce", "enable", strfmta("%d", val)) == NULL);
+}
+
+static void
+osw_plat_bcm_conf_vif_ap_oce_min_rssi_dbm(struct osw_drv_phy_config *phy,
+                                          struct osw_drv_vif_config *vif)
+{
+    const struct osw_drv_vif_config_ap *ap = &vif->u.ap;
+    if (!ap->oce) return;
+    if (!ap->oce_min_rssi_enable) return;
+    if (ap->oce_min_rssi_dbm_changed == false) return;
+
+    const char *vif_name = vif->vif_name;
+    const int val = ap->oce_min_rssi_dbm;
+
+    WARN_ON(WL(vif_name, "oce", "rssi_th", strfmta("%d", val)) == NULL);
+}
+
+static void
+osw_plat_bcm_conf_vif_ap_oce_retry_delay(struct osw_drv_phy_config *phy,
+                                         struct osw_drv_vif_config *vif)
+{
+    const struct osw_drv_vif_config_ap *ap = &vif->u.ap;
+    if (!ap->oce) return;
+    if (ap->oce_retry_delay_sec_changed == false) return;
+
+    const char *vif_name = vif->vif_name;
+    const int val = ap->oce_retry_delay_sec;
+
+    WARN_ON(WL(vif_name, "oce", "retry_delay", strfmta("%d", val)) == NULL);
+}
+
+static void
+osw_plat_bcm_conf_vif_ap_max_sta(struct osw_drv_phy_config *phy,
+                                 struct osw_drv_vif_config *vif)
+{
+    const struct osw_drv_vif_config_ap *ap = &vif->u.ap;
+    if (ap->max_sta_changed == false) return;
+
+    const char *vif_name = vif->vif_name;
+    const int val = ap->max_sta;
+
+    WARN_ON(WL(vif_name, "bss_maxassoc", strfmta("%d", val)) == NULL);
+}
+
+static void
+osw_plat_bcm_conf_vif_ap_airtime_precedence(struct osw_drv_phy_config *phy,
+                                            struct osw_drv_vif_config *vif,
+                                            struct osw_plat_bcm *m)
+{
+    const struct osw_drv_vif_config_ap *ap = &vif->u.ap;
+    if (ap->airtime_precedence_changed == false) return;
+
+    const char *phy_name = phy->phy_name;
+    const char *vif_name = vif->vif_name;
+
+    osw_plat_bcm_atf_set_vif_precedence(m->atf, phy_name, vif_name, vif->u.ap.airtime_precedence);
+}
+
+static void
+osw_plat_bcm_conf_vif_ap_chanspec(struct osw_drv_phy_config *phy,
+                                  struct osw_drv_vif_config *vif)
+{
+    const struct osw_drv_vif_config_ap *ap = &vif->u.ap;
+    if (ap->channel_changed == false) return;
+
+    if (ap->csa_required) {
+        const bool zero_wait_dfs_enabled = (phy->zero_wait_dfs == OSW_ZERO_WAIT_DFS_ENABLE);
+        if (zero_wait_dfs_enabled && osw_channel_overlaps_dfs(&ap->channel))
+            return;
+    }
+
+    const char *vif_name = vif->vif_name;
+    const char *chanspec = osw_plat_bcm_chanspec_from_osw(&ap->channel);
+    if (WARN_ON(chanspec == NULL)) return;
+
+    WARN_ON(WL(vif_name, "chanspec", chanspec) == NULL);
+
+    FREE(chanspec);
 }
 
 static void
@@ -1225,13 +1540,20 @@ osw_plat_bcm_conf_vif_ap_passpoint(struct osw_drv_phy_config *phy,
     NVS(vif_name, "radio", "1");
     NVS(vif_name, "ifname", vif_name);
 
-    if (passpoint->hs20_enabled)
+    if (passpoint->hs20_enabled) {
         NVS(vif_name, "hsflag", "1aa5");
-    else
+        /* hs2cap is the HS2.0 Release Number for hspotap (1=R2, 2=R3).
+         * Not in OVSDB schema; set directly for Broadcom daemon. */
+        NVS(vif_name, "hs2cap", "1");
+    } else {
         NVS(vif_name, "hsflag", "1aa0");
+    }
 
     NVSF(vif_name, "hsflag", 1, passpoint->osen);
     NVSF(vif_name, "hsflag", 4, passpoint->asra);
+
+    NVSF(vif_name, "hsflag", 9, vif->u.ap.proxy_arp);
+    NVSF(vif_name, "hsflag", 10, vif->u.ap.dgaf_disable);
 
     NVS(vif_name, "wanmetrics", strfmta("%s:%s:%s=0>0=0>0=0",
                                          passpoint->adv_wan_status ? "1" : "0",
@@ -1244,8 +1566,9 @@ osw_plat_bcm_conf_vif_ap_passpoint(struct osw_drv_phy_config *phy,
     NVS(vif_name, "hessid", strfmta(OSW_HWADDR_FMT, OSW_HWADDR_ARG(&passpoint->hessid)));
     NVS(vif_name, "osu_ssid", passpoint->osu_ssid.buf);
 
+    NVS(vif_name, "hs_anqp_domain_id", strfmta("0x%x", passpoint->anqp_domain_id));
+
     /* Parameters not used by BCM, but preserved for state report */
-    NVS(vif_name, "plume_anqp_domain_id", strfmta("%d", passpoint->anqp_domain_id));
     NVS(vif_name, "plume_t_c_timestamp", strfmta("%d", passpoint->t_c_timestamp));
     NVS(vif_name, "plume_t_c_filename", passpoint->t_c_filename);
     NVS(vif_name, "plume_anqp_elem", passpoint->anqp_elem);
@@ -1311,7 +1634,8 @@ osw_plat_bcm_conf_vif_ap_passpoint(struct osw_drv_phy_config *phy,
 
 static void
 osw_plat_bcm_conf_each_vif(struct osw_drv_phy_config *phy,
-                           struct osw_drv_vif_config *vif)
+                           struct osw_drv_vif_config *vif,
+                           struct osw_plat_bcm *m)
 {
     (void)phy;
     (void)vif;
@@ -1319,15 +1643,21 @@ osw_plat_bcm_conf_each_vif(struct osw_drv_phy_config *phy,
     switch (vif->vif_type) {
         case OSW_VIF_AP:
             osw_plat_bcm_conf_vif_ap_mcast2ucast(phy, vif);
-            osw_plat_bcm_conf_vif_ap_acl(phy, vif);
+            osw_plat_bcm_conf_vif_ap_acl(phy, vif, m);
             osw_plat_bcm_conf_vif_ap_acl_policy(phy, vif);
             osw_plat_bcm_conf_vif_ap_mode(phy, vif);
-            osw_plat_bcm_conf_vif_ap_channel(phy, vif);
             osw_plat_bcm_conf_vif_ap_multi_ap(phy, vif);
             osw_plat_bcm_conf_vif_ap_beacon_rate(phy, vif);
             osw_plat_bcm_conf_vif_ap_mcast_rate(phy, vif);
             osw_plat_bcm_conf_vif_ap_passpoint(phy, vif);
             osw_plat_bcm_conf_vif_ap_supp_basic_rates(phy, vif);
+            osw_plat_bcm_conf_vif_ap_chanspec(phy, vif);
+            osw_plat_bcm_conf_vif_ap_mbo(phy, vif);
+            osw_plat_bcm_conf_vif_ap_oce(phy, vif);
+            osw_plat_bcm_conf_vif_ap_oce_retry_delay(phy, vif);
+            osw_plat_bcm_conf_vif_ap_oce_min_rssi_dbm(phy, vif);
+            osw_plat_bcm_conf_vif_ap_max_sta(phy, vif);
+            osw_plat_bcm_conf_vif_ap_airtime_precedence(phy, vif, m);
             break;
         case OSW_VIF_AP_VLAN:
             break;
@@ -1419,16 +1749,53 @@ osw_plat_bcm_conf_phy_enabled(struct osw_drv_phy_config *phy)
 }
 
 static void
-osw_plat_bcm_conf_each_phy(struct osw_drv_conf *drv_conf)
+osw_plat_bcm_conf_phy_atf_enabled(struct osw_plat_bcm *m,
+                                  struct osw_drv_phy_config *phy)
+{
+    const char *phy_name = phy->phy_name;
+    const bool atf_enabled = phy->atf_enabled;
+
+    osw_plat_bcm_set_atf_enabled(m->atf, phy_name, atf_enabled);
+}
+
+static void
+osw_plat_bcm_conf_phy_channel(struct osw_drv_phy_config *phy)
+{
+    size_t i;
+    for (i = 0; i < phy->vif_list.count; i++) {
+        struct osw_drv_vif_config *vif = &phy->vif_list.list[i];
+        switch (vif->vif_type) {
+            case OSW_VIF_AP:
+                {
+                    struct osw_drv_vif_config_ap *ap = &vif->u.ap;
+                    if (ap->channel_changed &&
+                            ap->csa_required) {
+                        osw_plat_bcm_conf_vif_ap_channel(phy, vif);
+                        i = phy->vif_list.count;
+                    }
+                }
+                break;
+            case OSW_VIF_AP_VLAN:
+            case OSW_VIF_STA:
+            case OSW_VIF_UNDEFINED:
+                break;
+        }
+    }
+}
+
+static void
+osw_plat_bcm_conf_each_phy(struct osw_drv_conf *drv_conf, struct osw_plat_bcm *m)
 {
     size_t i;
     for (i = 0; i < drv_conf->n_phy_list; i++) {
         struct osw_drv_phy_config *phy = &drv_conf->phy_list[i];
         size_t j;
+        osw_plat_bcm_conf_phy_atf_enabled(m, phy);
         for (j = 0; j < phy->vif_list.count; j++) {
             struct osw_drv_vif_config *vif = &phy->vif_list.list[j];
-            osw_plat_bcm_conf_each_vif(phy, vif);
+            osw_plat_bcm_conf_each_vif(phy, vif, m);
         }
+        osw_plat_bcm_conf_phy_channel(phy);
         osw_plat_bcm_conf_phy_txchain(phy);
         osw_plat_bcm_conf_phy_radar(phy);
         osw_plat_bcm_conf_phy_dfs_channel_forced(phy);
@@ -1450,18 +1817,129 @@ osw_plat_bcm_conf_each_phy_enabled(struct osw_drv_conf *drv_conf)
     }
 }
 
+static int
+osw_plat_bcm_vif_mld_unit(const char *vif_name)
+{
+    const char *mldstr = WL(vif_name, "mld_unit");
+    if (mldstr == NULL) return -1;
+
+    char *end = NULL;
+    const long parsed = strtol(mldstr, &end, 10);
+    const bool parsed_whole_string = (end != mldstr) && (*end == '\0');
+    const bool parsed_in_range = (parsed >= 0) && (parsed <= UINT8_MAX);
+    const int mld_unit = (parsed_whole_string && parsed_in_range) ? (int)parsed : -1;
+    if (mldunit_is_valid(mld_unit) == false) return -1;
+
+    return mld_unit;
+}
 static void
 osw_plat_bcm_pre_request_config_cb(struct osw_drv_nl80211_hook *hook,
                                    struct osw_drv_conf *drv_conf,
                                    void *priv)
 {
     struct osw_plat_bcm *m = priv;
-    (void)m;
+    uint32_t phy_disabled_bitmap = 0;
 
-    osw_plat_bcm_conf_disable_phys(drv_conf);
-    osw_plat_bcm_conf_each_phy(drv_conf);
-    osw_plat_bcm_conf_enable_phys(drv_conf);
+    osw_plat_bcm_conf_disable_phys(drv_conf, &phy_disabled_bitmap);
+    osw_plat_bcm_conf_each_phy(drv_conf, m);
+    osw_plat_bcm_conf_enable_phys(drv_conf, m, phy_disabled_bitmap);
     osw_plat_bcm_conf_each_phy_enabled(drv_conf);
+}
+
+static struct osw_plat_bcm_vif *
+osw_plat_bcm_lookup_vif(struct osw_plat_bcm *m,
+                        const char *vif_name)
+{
+    struct osw_drv_nl80211_ops *nl_ops = m->nl_ops;
+    if (nl_ops == NULL) return NULL;
+
+    struct nl_80211 *nl = nl_ops->get_nl_80211_fn(nl_ops);
+    if (nl == NULL) return NULL;
+
+    struct nl_80211_sub *sub = m->nl_sub;
+    if (sub == NULL) return NULL;
+
+    const struct nl_80211_vif *info = nl_80211_vif_by_name(nl, vif_name);
+    if (info == NULL) return NULL;
+
+    struct osw_plat_bcm_vif *vif = nl_80211_sub_vif_get_priv(sub, info);
+    return vif;
+}
+
+static void
+osw_plat_bcm_tx_power_reset_done_cb(struct rq_task *task, void *priv)
+{
+    (void)task;
+    struct osw_plat_bcm_vif *bcm_vif = priv;
+    const char *vif_name = bcm_vif->info ? bcm_vif->info->name : NULL;
+    if (vif_name == NULL) return;
+
+    LOGI(LOG_PREFIX("%s: setting txpwr1 -1 (percent 100)", vif_name));
+    const bool ok = (WL(vif_name, "txpwr1", "-1") != NULL);
+    WARN_ON(ok == false);
+    bcm_vif->percent_100_applied = ok;
+}
+
+static void
+osw_plat_bcm_tx_power_reset_schedule(struct osw_plat_bcm *m,
+                                     struct osw_plat_bcm_vif *bcm_vif,
+                                     const char *phy_name,
+                                     const char *vif_name,
+                                     struct rq *q)
+{
+    struct nl_80211 *nl = m->nl_ops ? m->nl_ops->get_nl_80211_fn(m->nl_ops) : NULL;
+    if (nl == NULL) return;
+
+    const struct nl_80211_vif *info = bcm_vif->info;
+    if (info == NULL) return;
+
+    nl_cmd_task_fini(&bcm_vif->task_nl_tx_power_reset);
+
+    struct nl_cmd *cmd = nl_conn_alloc_cmd(m->nl_conn);
+    struct nl_msg *msg = nl_80211_alloc_get_interface(nl, info->ifindex);
+    nl_cmd_task_init(&bcm_vif->task_nl_tx_power_reset, cmd, msg);
+    nl_cmd_set_name(cmd, strfmta(LOG_PREFIX_VIF(phy_name, vif_name, "tx_power reset (txpwr1 -1)")));
+
+    bcm_vif->task_nl_tx_power_reset.task.completed_fn = osw_plat_bcm_tx_power_reset_done_cb;
+    bcm_vif->task_nl_tx_power_reset.task.priv = bcm_vif;
+    rq_add_task(q, &bcm_vif->task_nl_tx_power_reset.task);
+}
+
+static void
+osw_plat_bcm_post_request_config_vif(struct osw_plat_bcm *m,
+                                     struct osw_drv_phy_config *phy,
+                                     struct osw_drv_vif_config *vif,
+                                     struct rq *q)
+{
+    struct osw_plat_bcm_vif *bcm_vif = osw_plat_bcm_lookup_vif(m, vif->vif_name);
+    if (bcm_vif == NULL) return;
+
+    if (vif->tx_power_changed) {
+        if (vif->tx_power_percent == 100) {
+            osw_plat_bcm_tx_power_reset_schedule(m, bcm_vif, phy->phy_name, vif->vif_name, q);
+        }
+        else {
+            rq_task_kill(&bcm_vif->task_nl_tx_power_reset.task);
+            bcm_vif->percent_100_applied = false;
+        }
+    }
+}
+
+static void
+osw_plat_bcm_post_request_config_cb(struct osw_drv_nl80211_hook *hook,
+                                    struct osw_drv_conf *drv_conf,
+                                    struct rq *q,
+                                    void *priv)
+{
+    struct osw_plat_bcm *m = priv;
+    size_t i;
+    for (i = 0; i < drv_conf->n_phy_list; i++) {
+        struct osw_drv_phy_config *phy = &drv_conf->phy_list[i];
+        size_t j;
+        for (j = 0; j < phy->vif_list.count; j++) {
+            osw_plat_bcm_post_request_config_vif(m, phy, &phy->vif_list.list[j], q);
+        }
+    }
 }
 
 static void
@@ -1510,6 +1988,7 @@ osw_plat_bcm_init(struct osw_plat_bcm *m)
         .drv_removed_fn = osw_plat_bcm_drv_removed_cb,
     };
     m->state_obs = obs;
+    ds_tree_init(&m->acl_storage, ds_str_cmp, struct osw_plat_bcm_vif_acl_storage, node);
 }
 
 static void osw_plat_bcm_conf_mutate_ap_mode_he(struct ds_tree *phy_tree)
@@ -1609,7 +2088,63 @@ osw_plat_bcm_ap_hostap_conf_mutate_cb(struct osw_hostap_hook *hook,
     OSW_HOSTAP_CONF_UNSET(hapd_conf->venue_url);
     OSW_HOSTAP_CONF_UNSET(hapd_conf->anqp_3gpp_cell_net);
     OSW_HOSTAP_CONF_UNSET(hapd_conf->network_auth_type);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->proxy_arp);
+    OSW_HOSTAP_CONF_UNSET(hapd_conf->disable_dgaf);
     osw_plat_bcm_ap_hostap_conf_mutate_ft(phy_name, vif_name, drv_conf, hapd_conf);
+    if (osw_plat_bcm_is_mlo())
+    {
+        int link_id = -1;
+        int mld_unit = -1;
+
+        char *mldstr = WL(vif_name, "mld_unit");
+        if (!mldstr) return;
+
+        mld_unit = atoi(mldstr);
+        if (!mldunit_is_valid(mld_unit)) return;
+
+        link_id = osw_plat_bcm_get_link_id(phy_name);
+        if (!linkid_is_valid(link_id)) return;
+
+        STRSCAT(hapd_conf->extra_buf, strfmta("mld_unit=%d\n", mld_unit));
+        STRSCAT(hapd_conf->extra_buf, strfmta("link_id=%d\n", link_id));
+    }
+}
+
+static void
+osw_plat_bcm_hostap_event_cb(
+        struct osw_hostap_hook *hook,
+        const char *phy_name,
+        const char *vif_name,
+        const char *msg,
+        size_t msg_len,
+        void *priv)
+{
+    struct osw_plat_bcm *m = priv;
+    struct osw_drv *drv = m->drv_nl80211;
+    if (drv == NULL) return;
+
+    char buf[1024];
+    STRSCPY_WARN(buf, msg);
+
+    char *p = buf;
+    char *event_name = strsep(&p, " ");
+    if(event_name == NULL) return;
+
+    if ((strcmp(event_name, "EAPOL-4WAY-HS-COMPLETED") == 0) ||
+        (strcmp(event_name, "AP-STA-CONNECTED") == 0) ||
+        (strcmp(event_name, "AP-STA-DISCONNECTED") == 0)) {
+        const char *mac = strsep(&p, " ");
+        struct osw_hwaddr addr;
+        const bool addr_ok = osw_hwaddr_from_cstr(mac, &addr);
+        if (addr_ok) {
+            /* The driver doesn't properly signal all MLO link appearances/disappearances.
+             * The most reliable way to mitigate that is to invalidate all objects OSW is
+             * aware of and have it re-request all states from scratch to detect the
+             * entities the driver is failing to signal.
+             */
+            osw_drv_invalidate(drv);
+        }
+    }
 }
 
 static void
@@ -1623,6 +2158,63 @@ osw_plat_bcm_sta_conf_mutate_strip_multi_ap(struct osw_hostap_conf_sta_network_c
 }
 
 static void
+osw_plat_bcm_sta_conf_mutate_add_mlo_config(const char *phy_name,
+                                            const char *vif_name,
+                                            struct osw_hostap_conf_sta_config *wpas_conf)
+{
+    if (!osw_plat_bcm_is_mlo()) return;
+
+    char *mldstr = WL(vif_name, "mld_unit");
+    if (!mldstr) return;
+
+    const int mld_unit = atoi(mldstr);
+    if (!mldunit_is_valid(mld_unit)) return;
+
+    const int link_id = osw_plat_bcm_get_link_id(phy_name);
+    if (!linkid_is_valid(link_id)) return;
+
+    STRSCAT(wpas_conf->extra_buf, strfmta("mld_unit=%d\n", mld_unit));
+    STRSCAT(wpas_conf->extra_buf, strfmta("link_id=%d\n", link_id));
+}
+
+/**
+ * Only the main link keeps the default ap_scan=1 and drives
+ * scan/BSS-selection/association. The firmware bundles the affiliated links
+ * into one MLD connection. Only the affiliated (link_id != main) links are
+ * forced to ap_scan=0 so they stop scanning on their own and interfering with
+ * the main link's association.
+ *
+ * This only applies to a STA vap that the driver has actually grouped into an
+ * MLD, so it is keyed off the runtime mld_unit rather than off the device-wide
+ * MLO nvram config: on an MLO-provisioned device a STA vap left out of the MLD
+ * still has to run a plain, self-driven association (e.g. onto a
+ * non-Wi-Fi-7 parent AP), and must keep ap_scan=1.
+ *
+ * Known limitation: when the driver does group all STA links into one MLD, this
+ * assumes every one of those links is configured and that the parent AP offers
+ * a matching MLD. Associating such a device to a parent that advertises fewer
+ * links is not supported yet - the affiliated links with no counterpart stay
+ * silent instead of falling back to their own association.
+ */
+static void
+osw_plat_bcm_sta_conf_mutate_aux_link_ap_scan(const char *phy_name,
+                                              const char *vif_name,
+                                              struct osw_hostap_conf_sta_config *wpas_conf)
+{
+    if (!osw_plat_bcm_is_mlo()) return;
+
+    const int mld_unit = osw_plat_bcm_vif_mld_unit(vif_name);
+    if (!mldunit_is_valid(mld_unit)) return;
+
+    const int link_id = osw_plat_bcm_get_link_id(phy_name);
+    if (!linkid_is_valid(link_id)) return;
+
+    if (link_id == OSW_PLAT_BCM_MLO_MAIN_LINK_ID) return;
+
+    OSW_HOSTAP_CONF_SET_VAL(wpas_conf->global.ap_scan, 0);
+}
+
+static void
 osw_plat_bcm_sta_conf_mutate_cb(struct osw_hostap_hook *hook,
                                 const char *phy_name,
                                 const char *vif_name,
@@ -1630,7 +2222,23 @@ osw_plat_bcm_sta_conf_mutate_cb(struct osw_hostap_hook *hook,
                                 struct osw_hostap_conf_sta_config *wpas_conf,
                                 void *priv)
 {
+    struct osw_plat_bcm *m = priv;
+
     osw_plat_bcm_sta_conf_mutate_strip_multi_ap(wpas_conf->network);
+    osw_plat_bcm_sta_conf_mutate_add_mlo_config(phy_name, vif_name, wpas_conf);
+    osw_plat_bcm_sta_conf_mutate_aux_link_ap_scan(phy_name, vif_name, wpas_conf);
+
+    /* Core sets global.rsn_overriding whenever RSNO is supported. On this BCM
+     * wpa_supplicant that config token is not recognized, and emitting it would
+     * stop wpa_supplicant from starting. RSNO is always-on at runtime here, so
+     * the knob is not needed. Strip it only when the running binary does not
+     * parse it, a future upstream-compatible SDK that exposes the token keeps it.
+     */
+    if (m->wpas_has_rsn_overriding == false) {
+        OSW_HOSTAP_CONF_UNSET(wpas_conf->global.rsn_overriding);
+        LOGD(LOG_PREFIX_VIF(phy_name, vif_name,
+                            "rsno: stripped rsn_overriding from sta config"));
+    }
 }
 
 static void
@@ -1684,14 +2292,24 @@ osw_plat_bcm_sta_tx_avg(struct osw_plat_bcm_vif *vif,
     const int tx_err = bcmwl_sta_get_tx_avg_rate(vif_name, mac_str, &rate);
     if (WARN_ON(tx_err)) return;
 
-    const int snr_raw = info.rssi - info.nf;
+    /* Using static noise floor to calculate SNR because the noise 
+     * floor read from the driver maps a raw hardware register value
+     * rather than a true physical dBm.
+     * Reason for choosing -95:
+     * Thermal noise floor at 20MHz:
+     * -174 dBm/Hz (white noise) + 73 dB (bw) = -101 dBm MDS.
+     * Adding ~6 dB rule-of-thumb front-end noise figure (typically 4-10 dB)
+     * gives -95 dBm. See also osw_channel_nf_20mhz_fixup() which
+     * uses +5 dB giving -96 dBm.
+     */
+    const int snr_raw = info.rssi + 95;
     const uint32_t snr = (snr_raw < 0) ? 0 : snr_raw;
 
     const uint32_t tx_mbps = rate.mbps_perceived;
     const uint32_t mpdu = rate.tried * rate.psr;
     const uint32_t retry = rate.tried - mpdu;
-    const uint32_t tx_bytes = info.tx_total_bytes;
-    const uint32_t rx_bytes = info.rx_total_bytes;
+    const uint64_t tx_bytes = info.tx_total_bytes;
+    const uint64_t rx_bytes = info.rx_total_bytes;
     const uint32_t tx_pkts = info.tx_total_pkts;
     const uint32_t rx_pkts = info.rx_total_pkts;
     const uint32_t tx_retries = info.tx_total_retries;
@@ -1711,10 +2329,10 @@ osw_plat_bcm_sta_tx_avg(struct osw_plat_bcm_vif *vif,
         if (mpdu > 0) {
             osw_tlv_put_u32(&t, OSW_STATS_STA_TX_RATE_MBPS, tx_mbps);
         }
-        osw_tlv_put_u32(&t, OSW_STATS_STA_TX_BYTES, tx_bytes);
+        osw_tlv_put_u64(&t, OSW_STATS_STA_TX_BYTES_64, tx_bytes);
         osw_tlv_put_u32(&t, OSW_STATS_STA_TX_FRAMES, tx_pkts);
         osw_tlv_put_u32(&t, OSW_STATS_STA_TX_RETRIES, tx_retries);
-        osw_tlv_put_u32(&t, OSW_STATS_STA_RX_BYTES, rx_bytes);
+        osw_tlv_put_u64(&t, OSW_STATS_STA_RX_BYTES_64, rx_bytes);
         osw_tlv_put_u32(&t, OSW_STATS_STA_RX_FRAMES, rx_pkts);
         osw_tlv_put_u32(&t, OSW_STATS_STA_RX_RETRIES, rx_retries);
         osw_tlv_end_nested(&t, off);
@@ -1723,8 +2341,8 @@ osw_plat_bcm_sta_tx_avg(struct osw_plat_bcm_vif *vif,
                             " tx_mbps=%"PRIu32
                             " tx_mpdu=%"PRIu32
                             " tx_retry=%"PRIu32
-                            " tx_bytes=%"PRIu32
-                            " rx_bytes=%"PRIu32
+                            " tx_bytes=%"PRIu64
+                            " rx_bytes=%"PRIu64
                             " snr=%"PRIu32,
                             tx_mbps,
                             mpdu,
@@ -1846,6 +2464,8 @@ osw_plat_bcm_vif_stats_run_bss_scan(struct osw_plat_bcm_phy *phy,
 
     const long cs = osw_plat_bcm_cs_from_buf(chanspec);
     osw_plat_bcm_cs_into_osw(cs, &c);
+    const bool ok = osw_channel_downgrade_to(&c, OSW_CHANNEL_20MHZ);
+    WARN_ON(!ok);
     char *cs_str = osw_plat_bcm_chanspec_from_osw(&c);
 
     const bool scan_failed = (WL(vif_name, "escan", "-t", "lowpriority", "-c", cs_str) == NULL);
@@ -2086,6 +2706,58 @@ osw_plat_bcm_get_vif_list_cb(struct osw_drv_nl80211_hook *hook,
 {
     struct osw_plat_bcm *m = priv;
     osw_plat_bcm_get_vif_list_supplement_wds(phy_name, report_vif_fn, fn_priv, m);
+}
+
+static struct osw_drv_mld_state *
+osw_plat_bcm_get_mld_state(struct osw_drv_vif_state *state)
+{
+    if (state == NULL) return NULL;
+    switch (state->vif_type) {
+        case OSW_VIF_UNDEFINED:
+            break;
+        case OSW_VIF_AP:
+            return &state->u.ap.mld;
+        case OSW_VIF_AP_VLAN:
+            break;
+        case OSW_VIF_STA:
+            return &state->u.sta.mld;
+    }
+    return NULL;
+}
+
+static void
+osw_plat_bcm_get_vif_state_mld_addr(const char *phy_name,
+                                    const char *vif_name,
+                                    struct osw_drv_vif_state *state)
+{
+    os_macaddr_t mld_addr;
+
+    if (!osw_plat_bcm_is_mlo()) return;
+
+    char *mldstr = WL(vif_name, "mld_unit");
+    if (!mldstr) return;
+
+    int mld_unit = atoi(mldstr);
+    if (!mldunit_is_valid(mld_unit)) return;
+
+    int link_id = osw_plat_bcm_get_link_id(phy_name);
+    if (!linkid_is_valid(link_id)) return;
+
+    int r, v;
+    if (WARN_ON(!bcmwl_parse_vap(vif_name, &r, &v)))
+        return;
+
+    char *main_link = strdupafree(osw_plat_bcm_get_mld_main_link());
+    if (!main_link) return;
+
+    char *vif = v ? strfmta("%s.%d", main_link, v) : main_link;
+    bool mac_addr_is_valid = os_nif_macaddr((char *)vif, &mld_addr);
+    if (mac_addr_is_valid) {
+        struct osw_drv_mld_state *mld = osw_plat_bcm_get_mld_state(state);
+        if (!mld) return;
+        memcpy(&mld->addr, &mld_addr, sizeof(os_macaddr_t));
+        STRSCPY_WARN(mld->if_name.buf, vif);
+    }
 }
 
 static void
@@ -2646,7 +3318,7 @@ osw_plat_bcm_vif_event_handle_escan_result_partial_v109(struct osw_plat_bcm_vif 
     const void *ies = (void *)bi + ies_off;
     const void *ies_end = ies + ies_len;
     const size_t bi_len = (ies_end - (const void *)bi);
-    LOGT("%s: bi=%p ies=%p ies_end=%p sizeof(*bi)=%zu ies_off=%zu ies_len=%zu",
+    LOGT("%s: bi=%p ies=%p ies_end=%p sizeof(*bi)=%zu ies_off=%" PRIu16 " ies_len=%" PRIu32,
         __func__,
         bi,
         ies,
@@ -2679,7 +3351,7 @@ osw_plat_bcm_vif_event_handle_escan_result_partial(struct osw_plat_bcm_vif *vif,
     size_t rem = len_after_result;
     while (rem >= sizeof(*bi)) {
         const uint32_t bi_version = bi->version; // shouldn't this be byte-swapped depending on dongle type?
-        LOGT("%s: bi_version = %u", __func__, bi_version);
+        LOGT("%s: bi_version = %" PRIu32, __func__, bi_version);
         size_t consumed = rem + 1;
         switch (bi_version) {
             case 107:
@@ -2795,26 +3467,6 @@ osw_plat_bcm_vif_event_sta_is_invalidated(const int e)
             return true;
     }
     return false;
-}
-
-static struct osw_plat_bcm_vif *
-osw_plat_bcm_lookup_vif(struct osw_plat_bcm *m,
-                        const char *vif_name)
-{
-    struct osw_drv_nl80211_ops *nl_ops = m->nl_ops;
-    if (nl_ops == NULL) return NULL;
-
-    struct nl_80211 *nl = nl_ops->get_nl_80211_fn(nl_ops);
-    if (nl == NULL) return NULL;
-
-    struct nl_80211_sub *sub = m->nl_sub;
-    if (sub == NULL) return NULL;
-
-    const struct nl_80211_vif *info = nl_80211_vif_by_name(nl, vif_name);
-    if (info == NULL) return NULL;
-
-    struct osw_plat_bcm_vif *vif = nl_80211_sub_vif_get_priv(sub, info);
-    return vif;
 }
 
 static bool
@@ -3187,6 +3839,12 @@ osw_plat_bcm_vif_removed_cb(const struct nl_80211_vif *info,
     struct osw_plat_bcm_vif *vif = nl_80211_sub_vif_get_priv(sub, info);
     if (vif == NULL) return;
 
+    nl_cmd_task_fini(&vif->task_nl_tx_power_reset);
+    vif->percent_100_applied = false;
+
+    /* Clean up ACL storage for this VIF */
+    osw_plat_bcm_acl_storage_remove(m, info->name);
+
     vif->info = NULL;
     vif->m = NULL;
 }
@@ -3310,6 +3968,20 @@ osw_plat_bcm_into_chanspec_width(const enum osw_channel_width width)
 }
 
 static uint16_t
+osw_plat_bcm_into_chanspec320_sb(const int primary, const int center)
+{
+#ifdef WL_CHANSPEC_BW_320
+    int lowest = center - 30;
+    uint16_t sb;
+
+    sb = ((primary - lowest) / CH_20MHZ_APART);
+    return sb << WL_CHANSPEC_GE320_SB_SHIFT;
+#else
+    return 0;
+#endif
+}
+
+static uint16_t
 osw_plat_bcm_into_chanspec_sb(const enum osw_channel_width width,
                               const int primary,
                               const int center)
@@ -3364,8 +4036,20 @@ osw_plat_bcm_into_chanspec_sb(const enum osw_channel_width width,
         case OSW_CHANNEL_80P80MHZ:
             break;
         case OSW_CHANNEL_320MHZ:
-            break;
+            return osw_plat_bcm_into_chanspec320_sb(primary, center);
     }
+    WARN_ON(1);
+    return 0;
+}
+
+static uint16_t
+osw_plat_bcm_get_320_center_idx(const int center)
+{
+#ifdef WL_CHANSPEC_BW_320
+    const int centers[] = { 31, 63, 95, 127, 159, 191 };
+    size_t i;
+    for (i = 0; i < ARRAY_SIZE(centers); i++) if (centers[i] == center) return (uint16_t)i << WL_CHANSPEC_GE320_CHIDX_SHIFT;
+#endif
     WARN_ON(1);
     return 0;
 }
@@ -3382,7 +4066,10 @@ osw_plat_bcm_into_chanspec(const struct osw_channel *c)
     const uint16_t cs_band = osw_plat_bcm_into_chanspec_band(band);
     const uint16_t cs_width = osw_plat_bcm_into_chanspec_width(width);
     const uint16_t cs_sb = osw_plat_bcm_into_chanspec_sb(width, primary, center);
-    const uint16_t cs_chan = center ? center : primary;
+    uint16_t cs_chan = c->width == OSW_CHANNEL_320MHZ
+                     ? osw_plat_bcm_get_320_center_idx(center)
+                     : (center ?: primary);
+
     const uint16_t cs = cs_band
                       | cs_width
                       | cs_sb
@@ -3577,14 +4264,174 @@ osw_plat_bcm_fix_phy_enabled(const char *phy_name,
 }
 
 static void
+osw_plat_bcm_fix_phy_atf_enabled(const struct osw_plat_bcm *m,
+                                 const char *phy_name,
+                                 struct osw_drv_phy_state *state)
+{
+    state->atf_enabled = osw_plat_bcm_get_atf_enabled(m->atf, phy_name);
+}
+
+static void
+osw_plat_bcm_fix_phy_reported_channels(const char *phy_name,
+                                       struct osw_drv_phy_state *state)
+{
+    FREE(state->channel_states);
+    state->channel_states = NULL;
+    state->n_channel_states = 0;
+
+    char *chanspecs_buf = WL(phy_name, "chanspecs");
+    if (chanspecs_buf == NULL) return;
+
+    int count = 0;
+    char *token;
+
+    while ((token = strsep(&chanspecs_buf, "\r\n"))) {
+        const long cs = osw_plat_bcm_cs_from_buf(token);
+        struct osw_channel c = *osw_channel_none();
+        osw_plat_bcm_cs_into_osw(cs, &c);
+
+        if (c.width != OSW_CHANNEL_20MHZ) {
+            continue;
+        }
+
+        count++;
+        const size_t new_size = count * sizeof(struct osw_channel_state);
+        state->channel_states = REALLOC(state->channel_states, new_size);
+        state->channel_states[count - 1].channel = c;
+    }
+
+    state->n_channel_states = count;
+}
+
+static int
+osw_plat_bcm_total_txpwr_dbm(int per_antenna_qdbm, int n_chains)
+{
+    /* Pre-computed in quarter-dBm (10*log10(n_chains))
+     * BCM radios have <= 4 chains
+     */
+    int chains_gain_qdbm;
+    switch (n_chains) {
+        case 2:
+            chains_gain_qdbm = 12;  /* +3 dB */
+            break;
+        case 3:
+            chains_gain_qdbm = 19;  /* +4.77 dB */
+            break;
+        case 4:
+            chains_gain_qdbm = 24;  /* +6 dB */
+            break;
+        default:
+            chains_gain_qdbm = 0;   /* +0 dB */
+            break;
+    }
+
+    /* To calculate total tx_power in dbm, we combine per-antenna (one chain's
+    * output) power with number of chains on the radio (precomputed) and divide
+    * the result by 4. In order not to lose value by integer division truncation,
+    * we need to add "2" before (adding half the divisor first makes it round-to-nearest).
+    */
+    return (per_antenna_qdbm + chains_gain_qdbm + 2) / 4;
+}
+
+static void
+osw_plat_bcm_fix_phy_chan_max_tx_power(const char *phy_name,
+                                       struct osw_drv_phy_state *state)
+{
+    if (state->n_channel_states == 0) return;
+
+    const struct bcmwl_ioctl_num_conv *conv = bcmwl_ioctl_lookup_num_conv(phy_name);
+    if (WARN_ON(conv == NULL)) return;
+
+    const int n_chains = __builtin_popcount((unsigned)state->tx_chainmask);
+    const uint16_t chanspec = osw_plat_bcm_into_chanspec(&state->channel_states[0].channel);
+
+    wl_chanspec_txpwr_max_t in;
+    MEMZERO(in);
+    in.ver   = conv->dtoh16((uint16_t)WL_CHANSPEC_TXPWR_MAX_VER);
+    in.len   = conv->dtoh16((uint16_t)WL_CHANSPEC_TXPWR_MAX_LEN);
+    in.count = conv->dtoh32(1);
+    in.txpwr[0].chanspec = conv->dtoh16(chanspec);
+
+    union {
+        wl_chanspec_txpwr_max_t hdr;
+        char buf[WLC_IOCTL_MAXLEN];
+    } out;
+    MEMZERO(out);
+
+    const bool ok = bcmwl_GIOV(phy_name, "chanspec_txpwr_max", &in, &out);
+    if (WARN_ON(ok == false)) return;
+    if (WARN_ON(conv->dtoh16(out.hdr.ver) != WL_CHANSPEC_TXPWR_MAX_VER)) return;
+
+    const uint32_t count = conv->dtoh32(out.hdr.count);
+    const chanspec_txpwr_max_t *txpwr = out.hdr.txpwr;
+
+    uint32_t i;
+    for (i = 0; i < count; i++) {
+        const uint16_t cs = conv->dtoh16(txpwr[i].chanspec);
+        const uint8_t per_antenna_qdbm = txpwr[i].txpwr_max;
+
+        struct osw_channel c = *osw_channel_none();
+        osw_plat_bcm_cs_into_osw((long)cs, &c);
+        if (c.width != OSW_CHANNEL_20MHZ) continue;
+
+        const int freq = c.control_freq_mhz;
+        const int max_tx_power_dbm = osw_plat_bcm_total_txpwr_dbm(per_antenna_qdbm, n_chains);
+        size_t j;
+        for (j = 0; j < state->n_channel_states; j++) {
+            struct osw_channel_state *cstate = &state->channel_states[j];
+            if (cstate->channel.control_freq_mhz != freq) continue;
+
+            LOGT(LOG_PREFIX_PHY(phy_name, "chan max tx power: "OSW_CHANNEL_FMT
+                                ": %d -> %d dBm (per-antenna %d.%02d dBm, chains %d)",
+                                OSW_CHANNEL_ARG(&cstate->channel),
+                                cstate->max_tx_power_dbm, max_tx_power_dbm,
+                                per_antenna_qdbm / 4, (per_antenna_qdbm % 4) * 25, n_chains));
+            cstate->max_tx_power_dbm = max_tx_power_dbm;
+            cstate->max_tx_power_dbm_valid = true;
+            break;
+        }
+    }
+}
+
+static bool
+osw_plat_bcm_binary_has_keyword(const char *binary, const char *keyword)
+{
+    const char *path = strexa("which", binary);
+    if (WARN_ON(path == NULL)) return false;
+    return (strexa("grep", "-qF", keyword, path) != NULL);
+}
+
+static void
+osw_plat_bcm_fix_phy_rsno(const struct osw_plat_bcm *m,
+                          struct osw_drv_phy_state *state)
+{
+    /* The generic core probe (osw_drv_nl80211_guess_rsno_supported) greps
+     * wpa_supplicant for the 'rsn_overriding' config token. This BCM
+     * wpa_supplicant supports RSN Overriding (WPA3-compat) but enables it
+     * unconditionally at runtime and does not expose that config token, so the
+     * generic probe under-reports it. Assert support here, based on the RSNO
+     * engine detected in the binary at start (see osw_plat_bcm_start).
+     */
+    if (m->rsno_supported) {
+        state->rsno_supported = true;
+    }
+}
+
+static void
 osw_plat_bcm_fix_phy_state_cb(struct osw_drv_nl80211_hook *hook,
                               const char *phy_name,
                               struct osw_drv_phy_state *state,
                               void *priv)
 {
+    struct osw_plat_bcm *m = priv;
+
     osw_plat_bcm_fix_phy_enabled(phy_name, state);
+    osw_plat_bcm_fix_phy_rsno(m, state);
+    osw_plat_bcm_fix_phy_atf_enabled(m, phy_name, state);
     osw_plat_bcm_fix_phy_txchain(phy_name, state);
     osw_plat_bcm_fix_phy_regulatory(phy_name, state);
+    osw_plat_bcm_fix_phy_reported_channels(phy_name, state);
+    osw_plat_bcm_fix_phy_chan_max_tx_power(phy_name, state);
     osw_plat_bcm_fix_phy_dfs(phy_name, state);
     osw_plat_bcm_fix_phy_radar(phy_name, state);
     osw_plat_bcm_fix_phy_dfs_channel_forced(phy_name, state);
@@ -3625,24 +4472,57 @@ osw_plat_bcm_fix_vif_ap_mcast2ucast(const char *phy_name,
 static void
 osw_plat_bcm_fix_vif_ap_acl(const char *phy_name,
                             const char *vif_name,
-                            struct osw_drv_vif_state *state)
+                            struct osw_drv_vif_state *state,
+                            struct osw_plat_bcm *m)
 {
     struct osw_hwaddr_list *acl = &state->u.ap.acl;
 
     char *buf = WL(vif_name, "mac");
     if (WARN_ON(acl == NULL)) return;
 
+    /* First, read ACLs from hardware (max 64) */
+    size_t hw_acl_count = 0;
     const char *word;
     while ((word = strsep(&buf, " \r\n")) != NULL) {
         struct osw_hwaddr mac;
         const bool valid = osw_hwaddr_from_cstr(word, &mac);
         if (valid) {
+            if (hw_acl_count >= BCM_ACL_MAX_DRIVER_COUNT) {
+                LOGW("osw: plat: bcm: %s: Hardware ACL readout limit reached (%zu), ignoring additional ACLs",
+                     vif_name, BCM_ACL_MAX_DRIVER_COUNT);
+                break;
+            }
             const size_t i = acl->count;
             acl->count++;
             const size_t new_size = (acl->count * sizeof(*acl->list));
             acl->list = REALLOC(acl->list, new_size);
             acl->list[i] = mac;
+            hw_acl_count++;
         }
+    }
+
+    /* Now check if we have stored remaining ACL list to append (max 191 entries) */
+    struct osw_plat_bcm_vif_acl_storage *storage = osw_plat_bcm_acl_storage_get(m, vif_name);
+    if (storage->remaining_acl.count > 0) {
+        const size_t storage_count = (storage->remaining_acl.count > BCM_ACL_MAX_STORAGE_COUNT)
+                                    ? BCM_ACL_MAX_STORAGE_COUNT
+                                    : storage->remaining_acl.count;
+
+        LOGW("osw: plat: bcm: %s: ACL storage is being used (configured %zu/%zu entries)",
+             vif_name, storage_count, BCM_ACL_MAX_DRIVER_COUNT);
+
+        /* Log the remaining ACLs being retrieved */
+        char remaining_acl_str[ACL_LOG_BUFFER_SIZE];
+        osw_hwaddr_list_to_str(remaining_acl_str, sizeof(remaining_acl_str), &storage->remaining_acl);
+
+        /* Append remaining ACLs to the hardware ACLs (up to storage limit) */
+        size_t i;
+        for (i = 0; i < storage_count; i++) {
+            osw_hwaddr_list_append(acl, &storage->remaining_acl.list[i]);
+        }
+
+        LOGD("osw: plat: bcm: %s: ACL list consists of (%zu entries: %zu in hardware, %zu in storage)",
+             vif_name, acl->count, hw_acl_count, storage_count);
     }
 }
 
@@ -3792,6 +4672,9 @@ osw_plat_bcm_fix_vif_ap_passpoint(const char *phy_name,
     passpoint->osen = flags & BIT(1);
     passpoint->asra = flags & BIT(4);
 
+    state->u.ap.proxy_arp = flags & BIT(9);
+    state->u.ap.dgaf_disable = flags & BIT(10);
+
     if ((str = NVG(vif_name, "wanmetrics")) != NULL) {
         char status, symmetric, capacity;
         sscanf(str, "%c:%c:%c", &status, &symmetric, &capacity);
@@ -3804,7 +4687,7 @@ osw_plat_bcm_fix_vif_ap_passpoint(const char *phy_name,
     if ((str = NVG(vif_name, "venuegrp")) != NULL) passpoint->venue_group = atoi(str);
     if ((str = NVG(vif_name, "venuetype")) != NULL) passpoint->venue_type = atoi(str);
     if ((str = NVG(vif_name, "plume_asra")) != NULL) passpoint->asra = atoi(str);
-    if ((str = NVG(vif_name, "plume_anqp_domain_id")) != NULL) passpoint->anqp_domain_id = atoi(str);
+    if ((str = NVG(vif_name, "hs_anqp_domain_id")) != NULL) passpoint->anqp_domain_id = strtol(str, NULL, 0);
     if ((str = NVG(vif_name, "plume_t_c_timestamp")) != NULL) passpoint->t_c_timestamp = atoi(str);
     if ((str = NVG(vif_name, "plume_t_c_filename")) != NULL) passpoint->t_c_filename = STRDUP(str);
 
@@ -3945,6 +4828,113 @@ osw_plat_bcm_fix_vif_ap_supp_basic_rates(const char *phy_name,
 }
 
 static void
+osw_plat_bcm_fix_vif_ap_mbo(const char *phy_name,
+                            const char *vif_name,
+                            struct osw_drv_vif_state *state)
+{
+    struct osw_drv_vif_state_ap *ap = &state->u.ap;
+
+    char* buf = WL(vif_name, "mbo", "ap_enable");
+    if (WARN_ON(buf == NULL)) return;
+
+    /*
+     * Examples of output:
+     * MBO AP ENABLE : 0
+     * MBO AP ENABLE : 1
+     */
+
+    int value = atoi(strpbrk(strstr(buf, ":") ?: "", "0123456789") ?: "0");
+    ap->mbo = value;
+}
+
+static void
+osw_plat_bcm_fix_vif_ap_oce(const char *phy_name,
+                            const char *vif_name,
+                            struct osw_drv_vif_state *state)
+{
+    struct osw_drv_vif_state_ap *ap = &state->u.ap;
+
+    char* buf = WL(vif_name, "oce", "enable");
+    if (WARN_ON(buf == NULL)) return;
+
+    /*
+     * Examples of output:
+     * Enable: 0
+     * Enable: 1
+     */
+
+    const int value = atoi(strpbrk(strstr(buf, ":") ?: "", "0123456789") ?: "0");
+    ap->oce = value;
+}
+
+static void
+osw_plat_bcm_fix_vif_ap_oce_min_rssi_dbm(const char *phy_name,
+                                         const char *vif_name,
+                                         struct osw_drv_vif_state *state)
+{
+    struct osw_drv_vif_state_ap *ap = &state->u.ap;
+    if (!ap->oce) return;
+
+    char* buf = WL(vif_name, "oce", "rssi_th");
+    if (WARN_ON(buf == NULL)) return;
+
+    /*
+     * Examples of output:
+     * RSSI Threashold: 0
+     * RSSI Threashold: 1
+     */
+
+    const int value = atoi(strpbrk(strstr(buf, ":") ?: "", "-") ?: "0");
+    ap->oce_min_rssi_dbm = value;
+    ap->oce_min_rssi_enable = (ap->oce_min_rssi_dbm < 0) ? true : false;
+}
+
+static void
+osw_plat_bcm_fix_vif_ap_oce_retry_delay(const char *phy_name,
+                                        const char *vif_name,
+                                        struct osw_drv_vif_state *state)
+{
+    struct osw_drv_vif_state_ap *ap = &state->u.ap;
+    if (!ap->oce) return;
+
+    char* buf = WL(vif_name, "oce", "retry_delay");
+    if (WARN_ON(buf == NULL)) return;
+
+    /*
+     * Examples of output:
+     * retry delay: 0
+     * retry delay: 1
+     */
+
+    const int value = atoi(strpbrk(strstr(buf, ":") ?: "", "0123456789") ?: "0");
+    ap->oce_retry_delay_sec = value;
+}
+
+static void
+osw_plat_bcm_fix_vif_ap_max_sta(const char *phy_name,
+                                const char *vif_name,
+                                struct osw_drv_vif_state *state)
+{
+    struct osw_drv_vif_state_ap *ap = &state->u.ap;
+
+    char* buf = WL(vif_name, "bss_maxassoc");
+    if (WARN_ON(buf == NULL)) return;
+
+    const int value = atoi(buf);
+    ap->max_sta = value;
+}
+
+static void
+osw_plat_bcm_fix_vif_ap_airtime_precedence(const char *phy_name,
+                                           const char *vif_name,
+                                           struct osw_drv_vif_state *state,
+                                           struct osw_plat_bcm *m)
+{
+    enum osw_airtime_precedence precedence = osw_plat_bcm_atf_get_vif_precedence(m->atf, phy_name, vif_name);
+    state->u.ap.airtime_precedence = precedence;
+}
+
+static void
 osw_plat_bcm_fix_vif_sta_multi_ap_networks(const char *phy_name,
                                            const char *vif_name,
                                            struct osw_drv_vif_state *state)
@@ -4002,7 +4992,8 @@ osw_plat_bcm_fix_vif_sta_multi_ap(const char *phy_name,
 static void
 osw_plat_bcm_fix_vif_ap_state(const char *phy_name,
                               const char *vif_name,
-                              struct osw_drv_vif_state *state)
+                              struct osw_drv_vif_state *state,
+                              struct osw_plat_bcm *m)
 {
     struct osw_drv_vif_state_ap *ap = &state->u.ap;
 
@@ -4013,7 +5004,7 @@ osw_plat_bcm_fix_vif_ap_state(const char *phy_name,
     osw_plat_bcm_fix_vif_channel(phy_name, vif_name, &state->u.ap.channel);
     osw_plat_bcm_fix_vif_ap_enabled(phy_name, vif_name, state);
     osw_plat_bcm_fix_vif_ap_mcast2ucast(phy_name, vif_name, state);
-    osw_plat_bcm_fix_vif_ap_acl(phy_name, vif_name, state);
+    osw_plat_bcm_fix_vif_ap_acl(phy_name, vif_name, state, m);
     osw_plat_bcm_fix_vif_ap_acl_policy(phy_name, vif_name, state);
     osw_plat_bcm_fix_vif_ap_mode(phy_name, vif_name, state);
     osw_plat_bcm_fix_vif_ap_neigh(phy_name, vif_name, state);
@@ -4023,6 +5014,13 @@ osw_plat_bcm_fix_vif_ap_state(const char *phy_name,
     osw_plat_bcm_fix_vif_ap_mgmt_rate(phy_name, vif_name, state);
     osw_plat_bcm_fix_vif_ap_passpoint(phy_name, vif_name, state);
     osw_plat_bcm_fix_vif_ap_supp_basic_rates(phy_name, vif_name, state);
+    osw_plat_bcm_get_vif_state_mld_addr(phy_name, vif_name, state);
+    osw_plat_bcm_fix_vif_ap_mbo(phy_name, vif_name, state);
+    osw_plat_bcm_fix_vif_ap_oce(phy_name, vif_name, state);
+    osw_plat_bcm_fix_vif_ap_oce_retry_delay(phy_name, vif_name, state);
+    osw_plat_bcm_fix_vif_ap_oce_min_rssi_dbm(phy_name, vif_name, state);
+    osw_plat_bcm_fix_vif_ap_max_sta(phy_name, vif_name, state);
+    osw_plat_bcm_fix_vif_ap_airtime_precedence(phy_name, vif_name, state, m);
 
     ap->mode.wnm_bss_trans = strtol(WL(vif_name, "wnm") ?: "0", NULL, 16) & OSW_PLAT_BCM_BTM_BIT;
     ap->mode.rrm_neighbor_report = strtol(WL(vif_name, "rrm") ?: "0", NULL, 16) & OSW_PLAT_BCM_RRM_BIT;
@@ -4053,12 +5051,145 @@ osw_plat_bcm_fix_vif_ap_vlan_state(const char *phy_name,
 }
 
 static void
+osw_plat_bcm_fill_wpaauth_to_osw(int auth, struct osw_wpa *wpa)
+{
+    if (wpa == NULL) return;
+
+    switch (auth) {
+        case WPA_AUTH_PSK:
+            wpa->wpa = true;
+            wpa->akm_psk = true;
+            break;
+        case WPA2_AUTH_PSK:
+            wpa->rsn = true;
+            wpa->akm_psk = true;
+            break;
+        case WPA2_AUTH_PSK_SHA256:
+            wpa->rsn = true;
+            wpa->akm_psk_sha256 = true;
+            break;
+        case WPA3_AUTH_SAE_PSK:
+            wpa->rsn = true;
+            wpa->akm_sae = true;
+            break;
+        case WPA3_AUTH_SAE_FBT:
+            wpa->rsn = true;
+            wpa->akm_ft_sae = true;
+            break;
+        case WPA3_AUTH_SUITEB:
+            wpa->rsn = true;
+            wpa->akm_eap_suite_b = true;
+            break;
+        case WPA3_AUTH_SAE_PSK_EXT:
+            wpa->rsn = true;
+            wpa->akm_sae_ext = true;
+            break;
+        case WPA3_AUTH_SAE_FBT_EXT:
+            wpa->rsn = true;
+            wpa->akm_ft_sae_ext = true;
+            break;
+    }
+}
+
+static void
+osw_plat_bcm_fill_cipher_to_osw(int cipher, struct osw_wpa *wpa)
+{
+    switch (cipher) {
+        case CRYPTO_ALGO_TKIP:
+            wpa->pairwise_tkip = true;
+            break;
+        case CRYPTO_ALGO_AES_CCM:
+            wpa->pairwise_ccmp = true;
+            break;
+        case CRYPTO_ALGO_AES_CCM256:
+            wpa->pairwise_ccmp256 = true;
+            break;
+        case CRYPTO_ALGO_AES_GCM:
+            wpa->pairwise_gcmp = true;
+            break;
+        case CRYPTO_ALGO_AES_GCM256:
+            wpa->pairwise_gcmp256 = true;
+            break;
+    }
+}
+
+static void
+osw_plat_bcm_fix_vif_sta_update_link(const char *phy_name,
+                                     const char *vif_name,
+                                     struct osw_drv_vif_state *state)
+{
+    struct osw_drv_vif_state_sta_link *link = &state->u.sta.link;
+    if (link->status != OSW_DRV_VIF_STATE_STA_LINK_CONNECTED) return;
+
+    /*
+     * BSSID and SSID gets updated only for the Main link.
+     * Below logic updates these params on the Aux links
+     */
+    if (osw_hwaddr_is_zero(&link->bssid)) {
+        os_macaddr_t bssid = {0};
+        os_macaddr_t mac_zero = {0};
+        if (!bcmwl_GIOC(vif_name, WLC_GET_BSSID, NULL, &bssid)) return;
+
+        if (!memcmp(&bssid, &mac_zero, sizeof(os_macaddr_t)))
+            return;
+
+        memcpy(&link->bssid, &bssid, sizeof(os_macaddr_t));
+    }
+
+    if (!strlen(link->ssid.buf)) {
+        wlc_ssid_t ssid;
+        if (bcmwl_GIOC(vif_name, WLC_GET_SSID, NULL, &ssid)) {
+            WARN_ON(!(osw_ssid_from_cbuf(&link->ssid, ssid.SSID, ssid.SSID_len)));
+        }
+    }
+
+    /* Update mld addr, akm and cipher for the link */
+    bcmwl_sta_info_t info = {0};
+    const os_macaddr_t *hwaddr = (const os_macaddr_t *)link->bssid.octet;
+    bool ok = bcmwl_sta_get_sta_info(vif_name, hwaddr, &info);
+    if (!ok) return;
+
+    struct bcmwl_sta_mlo_info mlo_info;
+    ok = bcmwl_sta_get_mlo_info(vif_name, hwaddr, &mlo_info);
+    if (!ok) return;
+
+    osw_plat_bcm_get_vif_state_mld_addr(phy_name, vif_name, state);
+
+    const struct osw_hwaddr *mld_addr = osw_hwaddr_from_cptr_unchecked(&mlo_info.mld_addr);
+    link->mld_addr = *mld_addr;
+    osw_plat_bcm_fill_wpaauth_to_osw(info.auth, &link->wpa);
+    osw_plat_bcm_fill_cipher_to_osw(info.crypto, &link->wpa);
+
+    struct osw_drv_vif_sta_network *net = state->u.sta.network;
+    while (net) {
+        if (!strcmp(link->ssid.buf, net->ssid.buf)) {
+            STRSCPY_WARN(link->psk.str, state->u.sta.network->psk.str);
+        }
+        net = net->next;
+    }
+}
+
+static void
 osw_plat_bcm_fix_vif_sta_state(const char *phy_name,
                                const char *vif_name,
                                struct osw_drv_vif_state *state)
 {
     osw_plat_bcm_fix_vif_channel(phy_name, vif_name, &state->u.sta.link.channel);
     osw_plat_bcm_fix_vif_sta_multi_ap(phy_name, vif_name, state);
+    osw_plat_bcm_fix_vif_sta_update_link(phy_name, vif_name, state);
+}
+
+
+static void
+osw_plat_bcm_fix_vif_state_tx_power(struct osw_plat_bcm *m,
+                                    const char *vif_name,
+                                    struct osw_drv_vif_state *state)
+{
+    struct osw_plat_bcm_vif *bcm_vif = osw_plat_bcm_lookup_vif(m, vif_name);
+    if (bcm_vif == NULL) return;
+    if (!bcm_vif->percent_100_applied) return;
+
+    state->tx_power_percent = 100;
 }
 
 static void
@@ -4068,9 +5199,12 @@ osw_plat_bcm_fix_vif_state_cb(struct osw_drv_nl80211_hook *hook,
                               struct osw_drv_vif_state *state,
                               void *priv)
 {
+    struct osw_plat_bcm *m = priv;
+    osw_plat_bcm_fix_vif_state_tx_power(m, vif_name, state);
+
     switch (state->vif_type) {
         case OSW_VIF_AP:
-            osw_plat_bcm_fix_vif_ap_state(phy_name, vif_name, state);
+            osw_plat_bcm_fix_vif_ap_state(phy_name, vif_name, state, m);
             break;
         case OSW_VIF_AP_VLAN:
             osw_plat_bcm_fix_vif_ap_vlan_state(phy_name, vif_name, state);
@@ -4083,9 +5217,107 @@ osw_plat_bcm_fix_vif_state_cb(struct osw_drv_nl80211_hook *hook,
     }
 }
 
+static enum osw_akm
+osw_plat_bcm_wpaauth_to_osw(int auth)
+{
+    switch (auth)
+    {
+        case WPA_AUTH_NONE: return OSW_AKM_WPA_NONE;
+        case WPA_AUTH_PSK: return OSW_AKM_WPA_PSK;
+        case WPA2_AUTH_PSK: return OSW_AKM_RSN_PSK;
+        case WPA2_AUTH_PSK_SHA256: return OSW_AKM_RSN_PSK_SHA256;
+        case WPA3_AUTH_SAE_PSK: return OSW_AKM_RSN_SAE;
+        case WPA3_AUTH_SAE_FBT: return OSW_AKM_RSN_FT_SAE;
+        case WPA3_AUTH_SUITEB: return OSW_AKM_RSN_EAP_SUITE_B;
+        case WPA3_AUTH_SAE_PSK_EXT: return OSW_AKM_RSN_SAE_EXT;
+        case WPA3_AUTH_SAE_FBT_EXT: return OSW_AKM_RSN_FT_SAE_EXT;
+    }
+
+    return OSW_AKM_UNSPEC;
+}
+
+static enum osw_cipher
+osw_plat_bcm_cipher_to_osw(int cipher)
+{
+    switch (cipher)
+    {
+        case CRYPTO_ALGO_TKIP: return OSW_CIPHER_RSN_TKIP;
+        case CRYPTO_ALGO_AES_CCM: return OSW_CIPHER_RSN_CCMP_128;
+        case CRYPTO_ALGO_AES_CCM256: return OSW_CIPHER_RSN_CCMP_256;
+        case CRYPTO_ALGO_AES_GCM: return OSW_CIPHER_RSN_GCMP_128;
+        case CRYPTO_ALGO_AES_GCM256: return OSW_CIPHER_RSN_GCMP_256;
+    }
+
+    return OSW_CIPHER_UNSPEC;
+}
+
+static void
+osw_plat_bcm_fix_sta_state_cb(struct osw_drv_nl80211_hook *hook,
+                                   const char *phy_name,
+                                   const char *vif_name,
+                                   const struct osw_hwaddr *sta_addr,
+                                   struct osw_drv_sta_state *state,
+                                   void *priv)
+{
+    bcmwl_sta_info_t info = {0};
+    const os_macaddr_t *hwaddr = (const os_macaddr_t *)sta_addr->octet;
+    bool ok = bcmwl_sta_get_sta_info(vif_name, hwaddr, &info);
+    if (!ok) {
+        state->connected = false;
+        return;
+    }
+
+    struct bcmwl_sta_mlo_info mlo_info;
+    ok = bcmwl_sta_get_mlo_info(vif_name, hwaddr, &mlo_info);
+    if (!ok) return;
+
+    const struct osw_hwaddr *link_addr = osw_hwaddr_from_cptr_unchecked(&mlo_info.link_addr);
+    const struct osw_hwaddr *mld_addr = osw_hwaddr_from_cptr_unchecked(&mlo_info.mld_addr);
+
+    const bool is_link_addr = !osw_hwaddr_is_zero(link_addr)
+                              && osw_hwaddr_is_equal(link_addr, sta_addr);
+    const bool is_mld_addr = !osw_hwaddr_is_zero(mld_addr)
+                             && osw_hwaddr_is_equal(mld_addr, sta_addr);
+
+    const bool mld_addr_reuses_link_addr = osw_hwaddr_is_equal(link_addr, mld_addr);
+    const bool mld_addr_is_distinct = (mld_addr_reuses_link_addr == false);
+
+    if (mlo_info.mlo_on_ap_is_active) {
+        /*
+         * The primary radio (MAP) may end up not being used
+         * in the association, but it internally participates
+         * in the driver data structures so it needs extra
+         * care to filter out
+         */
+         if (mlo_info.sta_link_participates_in_mlo == false) {
+             state->connected = false;
+             return;
+         }
+     }
+
+     /* This is needed for both auto-MLDs and explicit MLDs */
+     if (is_mld_addr && mld_addr_is_distinct) {
+         state->connected = false;
+         return;
+     }
+
+    if (is_link_addr) {
+        state->mld_addr = *mld_addr;
+        state->pairwise_cipher = osw_plat_bcm_cipher_to_osw(info.crypto);
+        state->akm = osw_plat_bcm_wpaauth_to_osw(info.auth);
+        /*
+         * MLO/EHT requires non-open, therefore AUTHE must
+         * be true for datapath to work/EAPOL to be inferred
+         * as completed
+         */
+        state->connected = info.is_authenticated && info.is_authorized;
+    }
+}
+
 static void
 osw_plat_bcm_init_wl(void)
 {
+    bcmwl_nvram_init();
     bcmwl_vap_prealloc_all();
 
     bcmwl_event_enable_all(WLC_E_ACTION_FRAME);
@@ -4132,7 +5364,9 @@ osw_plat_bcm_start(struct osw_plat_bcm *m)
     static const struct osw_drv_nl80211_hook_ops nl_hook_ops = {
         .fix_phy_state_fn = osw_plat_bcm_fix_phy_state_cb,
         .fix_vif_state_fn = osw_plat_bcm_fix_vif_state_cb,
+        .fix_sta_state_fn = osw_plat_bcm_fix_sta_state_cb,
         .pre_request_config_fn = osw_plat_bcm_pre_request_config_cb,
+        .post_request_config_fn = osw_plat_bcm_post_request_config_cb,
         .pre_request_stats_fn = osw_plat_bcm_pre_request_stats_cb,
         .get_vif_list_fn = osw_plat_bcm_get_vif_list_cb,
         .get_vif_state_fn = osw_plat_bcm_get_vif_state_cb,
@@ -4154,6 +5388,7 @@ osw_plat_bcm_start(struct osw_plat_bcm *m)
     static const struct osw_hostap_hook_ops hapd_hook_ops = {
         .ap_conf_mutate_fn = osw_plat_bcm_ap_hostap_conf_mutate_cb,
         .sta_conf_mutate_fn = osw_plat_bcm_sta_conf_mutate_cb,
+        .event_fn = osw_plat_bcm_hostap_event_cb,
     };
 
    static const struct osw_conf_mutator conf_mut = {
@@ -4164,9 +5399,23 @@ osw_plat_bcm_start(struct osw_plat_bcm *m)
     m->loop = OSW_MODULE_LOAD(osw_ev);
     if (m->loop == NULL) return;
 
+    m->mlo_started = false;
     osw_plat_bcm_init_wl();
 
+    /* RSNO (RSN Overriding / WPA3-compat) capability detection for BCM.
+     * The generic core probe greps wpa_supplicant for the 'rsn_overriding'
+     * config token, which this fork does not expose even though the RSNO engine
+     * is present and always-on. Detect the engine via a string it does carry,
+     * and separately whether the config token is parseable (used later to decide
+     * if the STA 'rsn_overriding' line must be stripped).
+     */
+    m->rsno_supported = osw_plat_bcm_binary_has_keyword("wpa_supplicant", "RSNE Override");
+    m->wpas_has_rsn_overriding = osw_plat_bcm_binary_has_keyword("wpa_supplicant", "rsn_overriding");
+    LOGI(LOG_PREFIX("rsno: detection: rsno_supported=%d wpas_has_rsn_overriding=%d",
+                    m->rsno_supported, m->wpas_has_rsn_overriding));
+
     m->dfs_sta_war = osw_plat_bcm_dfs_sta_war_new();
+    m->atf = osw_plat_bcm_atf_new();
 
     m->nl_ops = OSW_MODULE_LOAD(osw_drv_nl80211);
     if (m->nl_ops == NULL) return;
@@ -4247,3 +5496,52 @@ OSW_UT(osw_plat_bcm_chanspec)
     assert(osw_plat_bcm_into_chanspec(&c36ht40) == cs36ht40);
     assert(osw_plat_bcm_into_chanspec(&c52ht160) == cs52ht160);
 }
+
+#ifdef WL_CHANSPEC_BW_320
+OSW_UT(osw_plat_bcm_chanspec_320)
+{
+     const struct osw_channel c1eht320 = {
+         .control_freq_mhz = 5955,
+         .center_freq0_mhz = 6105,
+         .width = OSW_CHANNEL_320MHZ,
+     };
+     const uint16_t cs1eht320 = 0x7000;
+     const struct osw_channel c221eht320 = {
+         .control_freq_mhz = 7055,
+         .center_freq0_mhz = 6905,
+         .width = OSW_CHANNEL_320MHZ,
+     };
+     const uint16_t cs221eht320 = 0x73c5;
+     const struct osw_channel c33cen31eht320 = {
+         .control_freq_mhz = 6115,
+         .center_freq0_mhz = 6105,
+         .width = OSW_CHANNEL_320MHZ,
+     };
+     const uint16_t cs33cen31eht320 = 0x7200;
+     const struct osw_channel c33cen63eht320 = {
+         .control_freq_mhz = 6115,
+         .center_freq0_mhz = 6265,
+         .width = OSW_CHANNEL_320MHZ,
+     };
+     const uint16_t cs33cen63eht320 = 0x7001;
+     const struct osw_channel c65cen95eht320 = {
+         .control_freq_mhz = 6275,
+         .center_freq0_mhz = 6425,
+         .width = OSW_CHANNEL_320MHZ,
+     };
+     const uint16_t cs65cen95eht320 = 0x7002;
+     const struct osw_channel c65cen63eht320 = {
+         .control_freq_mhz = 6275,
+         .center_freq0_mhz = 6265,
+         .width = OSW_CHANNEL_320MHZ,
+     };
+     const uint16_t cs65cen63eht320 = 0x7201;
+
+     assert(osw_plat_bcm_into_chanspec(&c1eht320) == cs1eht320);
+     assert(osw_plat_bcm_into_chanspec(&c221eht320) == cs221eht320);
+     assert(osw_plat_bcm_into_chanspec(&c33cen31eht320) == cs33cen31eht320);
+     assert(osw_plat_bcm_into_chanspec(&c33cen63eht320) == cs33cen63eht320);
+     assert(osw_plat_bcm_into_chanspec(&c65cen95eht320) == cs65cen95eht320);
+     assert(osw_plat_bcm_into_chanspec(&c65cen63eht320) == cs65cen63eht320);
+}
+#endif

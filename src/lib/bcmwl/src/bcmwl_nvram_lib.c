@@ -29,7 +29,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 /* internal */
 #include <log.h>
-#include "memutil.h"
+#include "util.h"
+#include "bcmwl_nvram.h"
 
 /* bcm */
 #include <wlcsm_lib_api.h>
@@ -49,8 +50,21 @@ char *bcmwl_nvram_getall(void)
         if (line != buf)
             line[-1] = '\n';
 
-    LOGT("%s: (len=%d) '%s'", __func__, strlen(buf), buf);
+    LOGT("%s: (len=%zu) '%s'", __func__, strlen(buf), buf);
     return strdup(buf);
+}
+
+char *bcmwl_nvram_get_key(const char *name)
+{
+    char *name_copy = strdupa(name);
+    char *value;
+
+    value = wlcsm_nvram_get(name_copy);
+    LOGT("%s: '%s' = '%s'", __func__, name, value ?: "(none)");
+    if (!value)
+        return NULL;
+
+    return strdup(value);
 }
 
 char *bcmwl_nvram_get(const char *ifname,
@@ -101,4 +115,13 @@ bool bcmwl_nvram_set_flag(const char *ifname,
         return false;
 
     return true;
+}
+
+char *bcmwl_nvram_kget_key(const char *name)
+{
+    return bcmwl_nvram_get_key(name);
+}
+
+void bcmwl_nvram_init(void)
+{
 }

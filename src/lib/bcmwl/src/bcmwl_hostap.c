@@ -396,7 +396,7 @@ bcmwl_hostap_nl_io(EV_P_ ev_io *io, int events)
     int len;
 
     n = recv(io->fd, buf, sizeof(buf), MSG_DONTWAIT);
-    LOGD("netlink buffer recvfrom() = %d", n);
+    LOGD("netlink buffer recvfrom() = %zd", n);
     if (n < 0) {
         if (errno == EAGAIN)
             return;

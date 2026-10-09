@@ -39,6 +39,7 @@ UNIT_SRC  += src/bcmwl_acl.c
 UNIT_SRC  += src/bcmwl_nvram.c
 UNIT_SRC  += $(if $(CONFIG_BCM_NVRAM_EXEC),src/bcmwl_nvram_exec.c,)
 UNIT_SRC  += $(if $(CONFIG_BCM_NVRAM_LIB),src/bcmwl_nvram_lib.c,)
+UNIT_SRC  += $(if $(CONFIG_BCM_NVRAM_UNIFIED),src/bcmwl_nvram_unf.c,)
 UNIT_SRC  += src/bcmwl_lan.c
 UNIT_SRC  += src/bcmwl_chanspec.c
 UNIT_SRC  += src/bcmwl_misc.c
@@ -56,6 +57,7 @@ UNIT_SRC  += $(if $(CONFIG_BCM_USE_TOAD),src/bcmwl_toad.c,)
 UNIT_CFLAGS := -I$(UNIT_PATH)/inc
 UNIT_CFLAGS += $(if $(CONFIG_BCM_NVRAM_LIB),-I$(BCM_BUILD_ROOT)/userspace/private/libs/wlcsm/include,)
 UNIT_LDFLAGS += $(if $(CONFIG_BCM_NVRAM_LIB),-L$(INSTALL_DIR)/lib -lwlcsm,)
+UNIT_LDFLAGS += $(if $(CONFIG_BCM_NVRAM_UNIFIED),-ldl,)
 
 UNIT_EXPORT_CFLAGS := $(UNIT_CFLAGS)
 UNIT_EXPORT_LDFLAGS := $(UNIT_LDFLAGS)

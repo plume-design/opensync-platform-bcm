@@ -361,6 +361,8 @@ static void bcmwl_sta_get_sta_info_v4(
             sta_info->max_chwidth = 3; // 160 MHz
         }
     }
+    sta_info->is_authorized = v4->flags & WL_STA_AUTHO;
+    sta_info->is_authenticated = v4->flags & WL_STA_AUTHE;
 #endif
 }
 
@@ -444,12 +446,16 @@ static void bcmwl_sta_get_sta_info_v8(
     const sta_info_t *v8 = buf;
     const uint32 flags = conv->dtoh32(v8->flags);
     const bool map = flags & WL_STA_MAP;
+    const uint32 wpauth = conv->dtoh32(v8->wpauth);
 
     if (conv->dtoh16(v8->ver) < 8)
         return;
 
     sta_info->multi_ap = map;
     memcpy(sta_info->rrm_caps, v8->rrm_capabilities, DOT11_RRM_CAP_LEN);
+    sta_info->crypto = v8->algo;
+    sta_info->auth = wpauth;
+    sta_info->rssi = v8->srssi;
 #endif
 }
 
@@ -595,9 +601,98 @@ bcmwl_sta_pktq_version(void)
  * and a new define is introduced to check the version:
  * PKTQ_STATS_DATA_STRUCT_VERSION
  */
-#if defined(PKTQ_STATS_DATA_STRUCT_VERSION) && (PKTQ_STATS_DATA_STRUCT_VERSION > 7)
-#warning PKTQ_STATS_DATA_STRUCT_VERSION > 7 not yet implemented
+#if defined(PKTQ_STATS_DATA_STRUCT_VERSION) && (PKTQ_STATS_DATA_STRUCT_VERSION > 9)
+#warning PKTQ_STATS_DATA_STRUCT_VERSION > 9 not yet implemented
 #endif
+
+/* pktq stats data-structure versions 8 (impl107) and 9 (impl109) share the layout for
+ * every field used here:
+ * - v7 counted MU frames per PHY generation in `su_count[]` (VHT/HE/EHT x MIMO/OFDMA)
+ * - v8/v9 replace that with a PHY-agnostic `ft_count[]` (SU/MMU/OFDMA/MMU_OFDMA)
+ * The only v8->v9 difference is an appended `MAC_LOG_MU_MRU` enum that grows
+ * `ru_count[]` after the last index read here, so used offsets are identical. */
+int bcmwl_sta_get_tx_avg_rate_v8v9_mu(const wl_iov_pktq_log_t *resp,
+                                      int i,
+                                      const struct bcmwl_ioctl_num_conv *conv,
+                                      struct bcmwl_sta_pktq_stats *stats)
+{
+#if defined(PKTQ_STATS_DATA_STRUCT_VERSION) && \
+    (PKTQ_STATS_DATA_STRUCT_VERSION == 8 || PKTQ_STATS_DATA_STRUCT_VERSION == 9)
+    const mac_log_mu_counters_t *c;
+    int n;
+
+    if (resp->version != 8 && resp->version != 9)
+        return -1;
+    if ((resp->req.addr_type[i] & 0x7F) != 'M')
+        return -1;
+
+    n = NUMPRIO;
+    c = resp->pktq_log.v07.counters[i].mu;
+
+    for (; n; n--, c++) {
+        stats->mumimo += conv->dtoh32(c->ft_count[MAC_LOG_MU_FT_MMU]);
+        stats->mumimo += conv->dtoh32(c->ft_count[MAC_LOG_MU_FT_MMU_OFDMA]);
+        stats->muofdma += conv->dtoh32(c->ft_count[MAC_LOG_MU_FT_OFDMA]);
+        stats->muofdma += conv->dtoh32(c->ft_count[MAC_LOG_MU_FT_MMU_OFDMA]);
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_26]) * 26ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_52]) * 52ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_106]) * 106ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_242]) * 242ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_484]) * 484ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_996]) * 996ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_2x996]) * 996ull * 2;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_4x996]) * 996ull * 4;
+    }
+
+    LOGT("%s: %llu/%llu/%llu", __func__, stats->mumimo, stats->muofdma, stats->tones);
+    return 0;
+#else
+    /* if it reports v8/v9 but headers didn't say it is supported then something is
+     * clearly wrong with the headers at build time and it needs to be checked. */
+    WARN_ON(resp->version == 8 || resp->version == 9);
+    return -1;
+#endif
+}
+
+int bcmwl_sta_get_tx_avg_rate_v8v9(const wl_iov_pktq_log_t *resp,
+                                   int i,
+                                   const struct bcmwl_ioctl_num_conv *conv,
+                                   struct bcmwl_sta_pktq_stats *stats)
+{
+#if defined(PKTQ_STATS_DATA_STRUCT_VERSION) && \
+    (PKTQ_STATS_DATA_STRUCT_VERSION == 8 || PKTQ_STATS_DATA_STRUCT_VERSION == 9)
+    const pktq_log_counters_t *c;
+    int n;
+
+    if (resp->version != 8 && resp->version != 9)
+        return -1;
+    if ((resp->req.addr_type[i] & 0x7F) != 'A' &&
+        (resp->req.addr_type[i] & 0x7F) != 'N')
+        return -1;
+
+    n = NUMPRIO;
+    c = resp->pktq_log.v07.counters[i].pktq;
+
+    for (; n; n--, c++) {
+        stats->phyrate += conv->dtoh64(c->txrate_succ) / 10;
+        stats->acked += conv->dtoh32(c->acked);
+        stats->retry += conv->dtoh32(c->retry);
+        stats->bw += conv->dtoh64(c->bandwidth);
+        stats->nss[0] += conv->dtoh32(c->nss[0]);
+        stats->nss[1] += conv->dtoh32(c->nss[1]);
+        stats->nss[2] += conv->dtoh32(c->nss[2]);
+        stats->nss[3] += conv->dtoh32(c->nss[3]);
+    }
+
+    LOGT("%s: %llu/%llu/%llu/%llu/%llu.%llu.%llu.%llu", __func__, stats->phyrate, stats->acked, stats->retry, stats->bw, stats->nss[0], stats->nss[1], stats->nss[2], stats->nss[3]);
+    return 0;
+#else
+    /* if it reports v8/v9 but headers didn't say it is supported then something is
+     * clearly wrong with the headers at build time and it needs to be checked. */
+    WARN_ON(resp->version == 8 || resp->version == 9);
+    return -1;
+#endif
+}
 
 int bcmwl_sta_get_tx_avg_rate_v7_mu(const wl_iov_pktq_log_t *resp,
                                     int i,
@@ -626,14 +721,14 @@ int bcmwl_sta_get_tx_avg_rate_v7_mu(const wl_iov_pktq_log_t *resp,
         stats->muofdma += conv->dtoh32(c->su_count[MAC_LOG_MU_HEOMU]);
         stats->muofdma += conv->dtoh32(c->su_count[MAC_LOG_MU_EHTMOM]);
         stats->muofdma += conv->dtoh32(c->su_count[MAC_LOG_MU_EHTOMU]);
-        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_26]) * 26;
-        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_52]) * 52;
-        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_106]) * 106;
-        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_242]) * 242;
-        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_484]) * 484;
-        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_996]) * 996;
-        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_2x996]) * 996 * 2;
-        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_4x996]) * 996 * 4;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_26]) * 26ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_52]) * 52ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_106]) * 106ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_242]) * 242ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_484]) * 484ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_996]) * 996ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_2x996]) * 996ull * 2;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_4x996]) * 996ull * 4;
     }
 
     LOGT("%s: %llu/%llu/%llu", __func__, stats->mumimo, stats->muofdma, stats->tones);
@@ -677,7 +772,7 @@ int bcmwl_sta_get_tx_avg_rate_v7(const wl_iov_pktq_log_t *resp,
         stats->nss[3] += conv->dtoh32(c->nss[3]);
     }
 
-    LOGT("%s: %llu/%llu/%llu/%llu/%llu.%llu.%llu.%.llu", __func__, stats->phyrate, stats->acked, stats->retry, stats->bw, stats->nss[0], stats->nss[1], stats->nss[2], stats->nss[3]);
+    LOGT("%s: %llu/%llu/%llu/%llu/%llu.%llu.%llu.%llu", __func__, stats->phyrate, stats->acked, stats->retry, stats->bw, stats->nss[0], stats->nss[1], stats->nss[2], stats->nss[3]);
     return 0;
 #else
     /* if it reports v7 but headers didn't say it is
@@ -712,13 +807,13 @@ int bcmwl_sta_get_tx_avg_rate_v6_mu(const wl_iov_pktq_log_t *resp,
         stats->mumimo += conv->dtoh32(c->count[MAC_LOG_MU_HEMOM]);
         stats->muofdma += conv->dtoh32(c->count[MAC_LOG_MU_HEMOM]);
         stats->muofdma += conv->dtoh32(c->count[MAC_LOG_MU_HEOMU]);
-        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_26]) * 26;
-        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_52]) * 52;
-        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_106]) * 106;
-        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_242]) * 242;
-        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_484]) * 484;
-        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_996]) * 996;
-        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_2x996]) * 996 * 2;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_26]) * 26ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_52]) * 52ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_106]) * 106ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_242]) * 242ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_484]) * 484ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_996]) * 996ull;
+        stats->tones += conv->dtoh32(c->ru_count[MAC_LOG_MU_RU_2x996]) * 996ull * 2;
     }
 
     LOGT("%s: %llu/%llu/%llu", __func__, stats->mumimo, stats->muofdma, stats->tones);
@@ -762,7 +857,7 @@ int bcmwl_sta_get_tx_avg_rate_v6(const wl_iov_pktq_log_t *resp,
         stats->nss[3] += conv->dtoh32(c->nss[3]);
     }
 
-    LOGT("%s: %llu/%llu/%llu/%llu/%llu.%llu.%llu.%.llu", __func__, stats->phyrate, stats->acked, stats->retry, stats->bw, stats->nss[0], stats->nss[1], stats->nss[2], stats->nss[3]);
+    LOGT("%s: %llu/%llu/%llu/%llu/%llu.%llu.%llu.%llu", __func__, stats->phyrate, stats->acked, stats->retry, stats->bw, stats->nss[0], stats->nss[1], stats->nss[2], stats->nss[3]);
     return 0;
 #else
     /* if it reports v6 but headers didn't say it is
@@ -919,6 +1014,10 @@ int bcmwl_sta_get_tx_avg_rate(const char *ifname,
     resp_params->num_addrs = conv->dtoh32(resp_params->num_addrs);
 
     for (i = 0; i < resp_params->num_addrs; i++) {
+        if (bcmwl_sta_get_tx_avg_rate_v8v9_mu(&resp, i, conv, &stats) == 0)
+            continue;
+        if (bcmwl_sta_get_tx_avg_rate_v8v9(&resp, i, conv, &stats) == 0)
+            continue;
         if (bcmwl_sta_get_tx_avg_rate_v7_mu(&resp, i, conv, &stats) == 0)
             continue;
         if (bcmwl_sta_get_tx_avg_rate_v7(&resp, i, conv, &stats) == 0)
@@ -1207,4 +1306,150 @@ int bcmwl_sta_get_rx_avg_rate(const char *ifname,
 #else
     return -1;
 #endif
+}
+
+#ifdef WL_MLO_MAX_TID_MAP_SIZE
+
+static int
+bcmwl_sta_get_link_id(const char *vif_name,
+                      const wl_mlo_info_v1_t *mlo_info)
+{
+    int radio_idx;
+    int vif_idx;
+    bool ok = bcmwl_parse_vap(vif_name, &radio_idx, &vif_idx);
+    if (!ok) return -1;
+
+    uint8_t i;
+    for (i = 0; i < mlo_info->num_links; i++) {
+        if ((int)mlo_info->mli[i].wlc_unit == radio_idx) {
+                return mlo_info->mli[i].link_id;
+        }
+    }
+    return -1;
+}
+
+static void
+bcmwl_sta_conv_client_assoc_linkid_bmp(const wl_mlo_scb_info_v1_t *mlo_scb,
+                                       const uint8_t link_id,
+                                       struct bcmwl_sta_mlo_info *bcmwl_sta_mlo_info)
+{
+    const uint8_t assoc_link_id = 1UL << (unsigned long)link_id;
+    bcmwl_sta_mlo_info->sta_link_participates_in_mlo = !!(mlo_scb->assoc_linkid_bmp & assoc_link_id);
+}
+
+static const wl_mlo_scb_info_v1_t *
+bcmwl_sta_find_client_scb_by_mac(const wl_mlo_info_v1_t *mlo_info,
+                                 const os_macaddr_t *hwaddr)
+{
+    int iter;
+    const uint16_t number_of_mlo_scb = mlo_info->no_of_mlo_scb;
+    const wl_mlo_scb_info_v1_t *mlo_scb = mlo_info->msi;
+
+    for (iter = 0; iter < number_of_mlo_scb; iter++) {
+        const os_macaddr_t *link_addr_it = (os_macaddr_t *)&mlo_scb[iter].ea;
+        const os_macaddr_t *mld_addr_it = (os_macaddr_t *)&mlo_scb[iter].peer_mld_addr;
+        if (memcmp(link_addr_it, hwaddr, sizeof(os_macaddr_t)) == 0
+               || memcmp(mld_addr_it, hwaddr, sizeof(os_macaddr_t)) == 0) {
+            return &mlo_scb[iter];
+        }
+    }
+    return NULL;
+}
+
+static bool
+bcmwl_sta_validate_mlo_info(const char *vif_name,
+                            const wl_mlo_info_v1_t *mlo_info,
+                            const size_t mlo_info_max_size)
+{
+    if (mlo_info->ver > WL_MLO_INFO_VER) {
+        LOGE("%s: unsupported mlo_info version: %d but received version: %d",
+                vif_name, WL_MLO_INFO_VER, mlo_info->ver);
+        return false;
+    }
+    if(!mlo_info->mlo_active) {
+        LOGD("%s: MLO is disabled", vif_name);
+    }
+    const size_t mli_size = ARRAY_SIZE(mlo_info->mli);
+    if (mlo_info->num_links > mli_size) {
+        LOGE("%s: buffer too short for links", vif_name);
+        return false;
+    }
+
+    const uint16_t number_of_mlo_scb = mlo_info->no_of_mlo_scb;
+    const wl_mlo_scb_info_v1_t *mlo_scb = mlo_info->msi;
+    const size_t max_scb_size = number_of_mlo_scb * sizeof(*mlo_scb);
+    if (mlo_info->len > mlo_info_max_size
+        || max_scb_size > mlo_info_max_size
+        || mlo_info->len < sizeof(*mlo_info) + max_scb_size)
+    {
+        LOGE("%s: buffer too short for scb", vif_name);
+        return false;
+    }
+
+    return true;
+}
+
+struct bcmwl_sta_tlv {
+    uint16_t tag;
+    uint16_t len;
+    uint8_t *data;
+};
+
+static bool
+bcmwl_sta_pack_mlo_tlv(const char *vif_name,
+                       const uint16_t type,
+                       const uint16_t len,
+                       const uint8_t *data,
+                       struct bcmwl_sta_tlv *buf)
+{
+    const struct bcmwl_ioctl_num_conv *conv;
+    conv = bcmwl_ioctl_lookup_num_conv(vif_name);
+    if(conv == NULL) return false;
+
+    buf->tag = conv->dtoh16(type);
+    buf->len = conv->dtoh16(len);
+    memcpy(buf->data, data, len);
+    return true;
+}
+
+#endif /* WL_MLO_MAX_TID_MAP_SIZE */
+
+bool
+bcmwl_sta_get_mlo_info(const char *vif_name,
+                       const os_macaddr_t *hwaddr,
+                       struct bcmwl_sta_mlo_info *bcmwl_sta_mlo_info)
+{
+#ifdef WL_MLO_MAX_TID_MAP_SIZE
+    uint8_t in[WLC_IOCTL_MEDLEN];
+    char buf[WLC_IOCTL_MAXLEN];
+    memset(bcmwl_sta_mlo_info, 0, sizeof(*bcmwl_sta_mlo_info));
+
+    bool ok = bcmwl_sta_pack_mlo_tlv(vif_name, WL_MLO_CMD_INFO, 0, NULL, (struct bcmwl_sta_tlv *)in);
+    if(!ok) return false;
+
+    ok = bcmwl_GIOV(vif_name, "mlo", in, &buf);
+    if(!ok) return false;
+
+    const wl_mlo_info_v1_t *mlo_info = (const wl_mlo_info_v1_t *)buf;
+
+    ok = bcmwl_sta_validate_mlo_info(vif_name, mlo_info, sizeof(buf));
+    if (!ok) return false;
+    bcmwl_sta_mlo_info->mlo_on_ap_is_active = !!(mlo_info->mlo_active);
+
+    const wl_mlo_scb_info_v1_t *mlo_scb = bcmwl_sta_find_client_scb_by_mac(mlo_info, hwaddr);
+    if(mlo_scb == NULL) return false;
+
+    const os_macaddr_t *link_addr = (const os_macaddr_t *)&mlo_scb->ea;
+    const os_macaddr_t *mld_addr = (const os_macaddr_t *)&mlo_scb->peer_mld_addr;
+    bcmwl_sta_mlo_info->link_addr = *link_addr;
+    bcmwl_sta_mlo_info->mld_addr = *mld_addr;
+
+    const int link_id = bcmwl_sta_get_link_id(vif_name, mlo_info);
+    if(link_id < 0) return false;
+
+    bcmwl_sta_conv_client_assoc_linkid_bmp(mlo_scb, link_id, bcmwl_sta_mlo_info);
+    return true;
+#else
+    return false;
+#endif /* WL_MLO_MAX_TID_MAP_SIZE */
 }

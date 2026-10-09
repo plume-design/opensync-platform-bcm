@@ -119,6 +119,15 @@ config BCM_NVRAM_LIB
         more prone to breakage on some systems where nvram access
         was customized.
 
+config BCM_NVRAM_UNIFIED
+    bool "unified NVRAM (libnvram.so)"
+    help
+        Uses the unified NVRAM API from libnvram.so (unfnvram).
+        Available on SDK 5.04.04p3 and newer. This provides a single
+        consistent NVRAM store accessible to all components, avoiding
+        store visibility issues with wlcsm on platforms where
+        BUILD_BRCM_UNFWLCFG is enabled.
+
 config BCM_NVRAM_NONE
     bool "none"
     help
@@ -372,9 +381,4 @@ config BCM_EEE_DISABLE_ETH_LIST
         List example:
         eth0 eth1 eth2
 
-config BCM_SPEEDTEST_RT_RUNTIME
-    int "RT_RUNTIME value"
-    default 95000
-    help
-        Sets the RT_RUNTIME for speedtest priority.
 endif # PLATFORM_IS_BCM

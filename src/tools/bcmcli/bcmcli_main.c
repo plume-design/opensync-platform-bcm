@@ -79,114 +79,312 @@ static const char *event2str(int e)
 {
 #define CASE2STR(x) case x: return #x
     switch (e) {
+#ifdef WLC_E_SET_SSID
         CASE2STR(WLC_E_SET_SSID);
+#endif
+#ifdef WLC_E_JOIN
         CASE2STR(WLC_E_JOIN);
+#endif
+#ifdef WLC_E_START
         CASE2STR(WLC_E_START);
+#endif
+#ifdef WLC_E_AUTH
         CASE2STR(WLC_E_AUTH);
+#endif
+#ifdef WLC_E_AUTH_IND
         CASE2STR(WLC_E_AUTH_IND);
+#endif
+#ifdef WLC_E_DEAUTH
         CASE2STR(WLC_E_DEAUTH);
+#endif
+#ifdef WLC_E_DEAUTH_IND
         CASE2STR(WLC_E_DEAUTH_IND);
+#endif
+#ifdef WLC_E_ASSOC
         CASE2STR(WLC_E_ASSOC);
+#endif
+#ifdef WLC_E_ASSOC_IND
         CASE2STR(WLC_E_ASSOC_IND);
+#endif
+#ifdef WLC_E_REASSOC
         CASE2STR(WLC_E_REASSOC);
+#endif
+#ifdef WLC_E_REASSOC_IND
         CASE2STR(WLC_E_REASSOC_IND);
+#endif
+#ifdef WLC_E_DISASSOC
         CASE2STR(WLC_E_DISASSOC);
+#endif
+#ifdef WLC_E_DISASSOC_IND
         CASE2STR(WLC_E_DISASSOC_IND);
+#endif
+#ifdef WLC_E_QUIET_START
         CASE2STR(WLC_E_QUIET_START);
+#endif
+#ifdef WLC_E_QUIET_END
         CASE2STR(WLC_E_QUIET_END);
+#endif
+#ifdef WLC_E_BEACON_RX
         CASE2STR(WLC_E_BEACON_RX);
+#endif
+#ifdef WLC_E_LINK
         CASE2STR(WLC_E_LINK);
+#endif
+#ifdef WLC_E_MIC_ERROR
         CASE2STR(WLC_E_MIC_ERROR);
+#endif
+#ifdef WLC_E_NDIS_LINK
         CASE2STR(WLC_E_NDIS_LINK);
+#endif
+#ifdef WLC_E_ROAM
         CASE2STR(WLC_E_ROAM);
+#endif
+#ifdef WLC_E_TXFAIL
         CASE2STR(WLC_E_TXFAIL);
+#endif
+#ifdef WLC_E_PMKID_CACHE
         CASE2STR(WLC_E_PMKID_CACHE);
+#endif
+#ifdef WLC_E_RETROGRADE_TSF
         CASE2STR(WLC_E_RETROGRADE_TSF);
+#endif
+#ifdef WLC_E_PRUNE
         CASE2STR(WLC_E_PRUNE);
+#endif
+#ifdef WLC_E_AUTOAUTH
         CASE2STR(WLC_E_AUTOAUTH);
+#endif
+#ifdef WLC_E_EAPOL_MSG
         CASE2STR(WLC_E_EAPOL_MSG);
+#endif
+#ifdef WLC_E_SCAN_COMPLETE
         CASE2STR(WLC_E_SCAN_COMPLETE);
+#endif
+#ifdef WLC_E_ADDTS_IND
         CASE2STR(WLC_E_ADDTS_IND);
+#endif
+#ifdef WLC_E_DELTS_IND
         CASE2STR(WLC_E_DELTS_IND);
+#endif
+#ifdef WLC_E_BCNSENT_IND
         CASE2STR(WLC_E_BCNSENT_IND);
+#endif
+#ifdef WLC_E_BCNRX_MSG
         CASE2STR(WLC_E_BCNRX_MSG);
+#endif
+#ifdef WLC_E_BCNLOST_MSG
         CASE2STR(WLC_E_BCNLOST_MSG);
+#endif
+#ifdef WLC_E_ROAM_PREP
         CASE2STR(WLC_E_ROAM_PREP);
+#endif
+#ifdef WLC_E_PFN_NET_FOUND
         CASE2STR(WLC_E_PFN_NET_FOUND);
+#endif
+#ifdef WLC_E_PFN_NET_LOST
         CASE2STR(WLC_E_PFN_NET_LOST);
+#endif
+#ifdef WLC_E_RESET_COMPLETE
         CASE2STR(WLC_E_RESET_COMPLETE);
+#endif
+#ifdef WLC_E_JOIN_START
         CASE2STR(WLC_E_JOIN_START);
+#endif
+#ifdef WLC_E_ROAM_START
         CASE2STR(WLC_E_ROAM_START);
+#endif
+#ifdef WLC_E_ASSOC_START
         CASE2STR(WLC_E_ASSOC_START);
+#endif
+#ifdef WLC_E_IBSS_ASSOC
         CASE2STR(WLC_E_IBSS_ASSOC);
+#endif
+#ifdef WLC_E_RADIO
         CASE2STR(WLC_E_RADIO);
+#endif
+#ifdef WLC_E_PSM_WATCHDOG
         CASE2STR(WLC_E_PSM_WATCHDOG);
+#endif
+#ifdef WLC_E_PROBREQ_MSG
         CASE2STR(WLC_E_PROBREQ_MSG);
+#endif
+#ifdef WLC_E_SCAN_CONFIRM_IND
         CASE2STR(WLC_E_SCAN_CONFIRM_IND);
+#endif
+#ifdef WLC_E_PSK_SUP
         CASE2STR(WLC_E_PSK_SUP);
+#endif
+#ifdef WLC_E_COUNTRY_CODE_CHANGED
         CASE2STR(WLC_E_COUNTRY_CODE_CHANGED);
+#endif
+#ifdef WLC_E_EXCEEDED_MEDIUM_TIME
         CASE2STR(WLC_E_EXCEEDED_MEDIUM_TIME);
+#endif
+#ifdef WLC_E_ICV_ERROR
         CASE2STR(WLC_E_ICV_ERROR);
+#endif
+#ifdef WLC_E_UNICAST_DECODE_ERROR
         CASE2STR(WLC_E_UNICAST_DECODE_ERROR);
+#endif
+#ifdef WLC_E_MULTICAST_DECODE_ERROR
         CASE2STR(WLC_E_MULTICAST_DECODE_ERROR);
+#endif
+#ifdef WLC_E_TRACE
         CASE2STR(WLC_E_TRACE);
+#endif
+#ifdef WLC_E_IF
         CASE2STR(WLC_E_IF);
+#endif
+#ifdef WLC_E_P2P_DISC_LISTEN_COMPLETE
         CASE2STR(WLC_E_P2P_DISC_LISTEN_COMPLETE);
+#endif
 #ifdef WLC_E_RSSI
         CASE2STR(WLC_E_RSSI);
 #endif
+#ifdef WLC_E_EXTLOG_MSG
         CASE2STR(WLC_E_EXTLOG_MSG);
+#endif
+#ifdef WLC_E_ACTION_FRAME
         CASE2STR(WLC_E_ACTION_FRAME);
+#endif
+#ifdef WLC_E_ACTION_FRAME_COMPLETE
         CASE2STR(WLC_E_ACTION_FRAME_COMPLETE);
+#endif
+#ifdef WLC_E_PRE_ASSOC_IND
         CASE2STR(WLC_E_PRE_ASSOC_IND);
+#endif
+#ifdef WLC_E_PRE_REASSOC_IND
         CASE2STR(WLC_E_PRE_REASSOC_IND);
+#endif
+#ifdef WLC_E_CHANNEL_ADOPTED
         CASE2STR(WLC_E_CHANNEL_ADOPTED);
+#endif
+#ifdef WLC_E_AP_STARTED
         CASE2STR(WLC_E_AP_STARTED);
+#endif
+#ifdef WLC_E_DFS_AP_STOP
         CASE2STR(WLC_E_DFS_AP_STOP);
+#endif
+#ifdef WLC_E_DFS_AP_RESUME
         CASE2STR(WLC_E_DFS_AP_RESUME);
+#endif
+#ifdef WLC_E_WAI_STA_EVENT
         CASE2STR(WLC_E_WAI_STA_EVENT);
+#endif
+#ifdef WLC_E_WAI_MSG
         CASE2STR(WLC_E_WAI_MSG);
+#endif
+#ifdef WLC_E_ESCAN_RESULT
         CASE2STR(WLC_E_ESCAN_RESULT);
+#endif
+#ifdef WLC_E_ACTION_FRAME_OFF_CHAN_COMPLETE
         CASE2STR(WLC_E_ACTION_FRAME_OFF_CHAN_COMPLETE);
+#endif
+#ifdef WLC_E_PROBRESP_MSG
         CASE2STR(WLC_E_PROBRESP_MSG);
+#endif
+#ifdef WLC_E_P2P_PROBREQ_MSG
         CASE2STR(WLC_E_P2P_PROBREQ_MSG);
+#endif
 #ifdef WLC_E_DCS_REQUEST
         CASE2STR(WLC_E_DCS_REQUEST);
 #endif
+#ifdef WLC_E_FIFO_CREDIT_MAP
         CASE2STR(WLC_E_FIFO_CREDIT_MAP);
+#endif
+#ifdef WLC_E_ACTION_FRAME_RX
         CASE2STR(WLC_E_ACTION_FRAME_RX);
+#endif
+#ifdef WLC_E_WAKE_EVENT
         CASE2STR(WLC_E_WAKE_EVENT);
+#endif
+#ifdef WLC_E_RM_COMPLETE
         CASE2STR(WLC_E_RM_COMPLETE);
+#endif
+#ifdef WLC_E_HTSFSYNC
         CASE2STR(WLC_E_HTSFSYNC);
+#endif
+#ifdef WLC_E_OVERLAY_REQ
         CASE2STR(WLC_E_OVERLAY_REQ);
+#endif
+#ifdef WLC_E_CSA_COMPLETE_IND
         CASE2STR(WLC_E_CSA_COMPLETE_IND);
+#endif
+#ifdef WLC_E_EXCESS_PM_WAKE_EVENT
         CASE2STR(WLC_E_EXCESS_PM_WAKE_EVENT);
+#endif
+#ifdef WLC_E_GTK_PLUMBED
         CASE2STR(WLC_E_GTK_PLUMBED);
+#endif
+#ifdef WLC_E_ASSOC_IND_NDIS
         CASE2STR(WLC_E_ASSOC_IND_NDIS);
+#endif
+#ifdef WLC_E_REASSOC_IND_NDIS
         CASE2STR(WLC_E_REASSOC_IND_NDIS);
+#endif
+#ifdef WLC_E_ASSOC_REQ_IE
         CASE2STR(WLC_E_ASSOC_REQ_IE);
+#endif
+#ifdef WLC_E_ASSOC_RESP_IE
         CASE2STR(WLC_E_ASSOC_RESP_IE);
+#endif
+#ifdef WLC_E_ASSOC_RECREATED
         CASE2STR(WLC_E_ASSOC_RECREATED);
+#endif
+#ifdef WLC_E_ACTION_FRAME_RX_NDIS
         CASE2STR(WLC_E_ACTION_FRAME_RX_NDIS);
+#endif
+#ifdef WLC_E_AUTH_REQ
         CASE2STR(WLC_E_AUTH_REQ);
+#endif
+#ifdef WLC_E_TDLS_PEER_EVENT
         CASE2STR(WLC_E_TDLS_PEER_EVENT);
+#endif
+#ifdef WLC_E_SPEEDY_RECREATE_FAIL
         CASE2STR(WLC_E_SPEEDY_RECREATE_FAIL);
+#endif
+#ifdef WLC_E_NATIVE
         CASE2STR(WLC_E_NATIVE);
+#endif
+#ifdef WLC_E_PKTDELAY_IND
         CASE2STR(WLC_E_PKTDELAY_IND);
+#endif
+#ifdef WLC_E_PSTA_PRIMARY_INTF_IND
         CASE2STR(WLC_E_PSTA_PRIMARY_INTF_IND);
+#endif
 #ifdef WLC_E_NAN
         CASE2STR(WLC_E_NAN);
 #endif
+#ifdef WLC_E_BEACON_FRAME_RX
         CASE2STR(WLC_E_BEACON_FRAME_RX);
+#endif
+#ifdef WLC_E_SERVICE_FOUND
         CASE2STR(WLC_E_SERVICE_FOUND);
+#endif
+#ifdef WLC_E_GAS_FRAGMENT_RX
         CASE2STR(WLC_E_GAS_FRAGMENT_RX);
+#endif
+#ifdef WLC_E_GAS_COMPLETE
         CASE2STR(WLC_E_GAS_COMPLETE);
+#endif
+#ifdef WLC_E_P2PO_ADD_DEVICE
         CASE2STR(WLC_E_P2PO_ADD_DEVICE);
+#endif
+#ifdef WLC_E_P2PO_DEL_DEVICE
         CASE2STR(WLC_E_P2PO_DEL_DEVICE);
+#endif
+#ifdef WLC_E_WNM_STA_SLEEP
         CASE2STR(WLC_E_WNM_STA_SLEEP);
+#endif
+#ifdef WLC_E_TXFAIL_THRESH
         CASE2STR(WLC_E_TXFAIL_THRESH);
+#endif
+#ifdef WLC_E_PROXD
         CASE2STR(WLC_E_PROXD);
+#endif
+#ifdef WLC_E_BSS_LOAD
         CASE2STR(WLC_E_BSS_LOAD);
+#endif
 #ifdef WLC_E_MIMO_PWR_SAVE
         CASE2STR(WLC_E_MIMO_PWR_SAVE);
 #endif
@@ -199,15 +397,33 @@ static const char *event2str(int e)
 #ifdef WLC_E_MSCH
         CASE2STR(WLC_E_MSCH);
 #endif
+#ifdef WLC_E_CSA_START_IND
         CASE2STR(WLC_E_CSA_START_IND);
+#endif
+#ifdef WLC_E_CSA_RECV_IND
         CASE2STR(WLC_E_CSA_RECV_IND);
+#endif
+#ifdef WLC_E_CSA_DONE_IND
         CASE2STR(WLC_E_CSA_DONE_IND);
+#endif
+#ifdef WLC_E_CSA_FAILURE_IND
         CASE2STR(WLC_E_CSA_FAILURE_IND);
+#endif
+#ifdef WLC_E_CCA_CHAN_QUAL
         CASE2STR(WLC_E_CCA_CHAN_QUAL);
+#endif
+#ifdef WLC_E_BSSID
         CASE2STR(WLC_E_BSSID);
+#endif
+#ifdef WLC_E_TX_STAT_ERROR
         CASE2STR(WLC_E_TX_STAT_ERROR);
+#endif
+#ifdef WLC_E_BCMC_CREDIT_SUPPORT
         CASE2STR(WLC_E_BCMC_CREDIT_SUPPORT);
+#endif
+#ifdef WLC_E_PEER_TIMEOUT
         CASE2STR(WLC_E_PEER_TIMEOUT);
+#endif
 #ifdef WLC_E_BT_WIFI_HANDOVER_REQ
         CASE2STR(WLC_E_BT_WIFI_HANDOVER_REQ);
 #endif
@@ -226,15 +442,21 @@ static const char *event2str(int e)
 #ifdef WLC_E_PFN_SWC
         CASE2STR(WLC_E_PFN_SWC);
 #endif
+#ifdef WLC_E_AUTHORIZED
         CASE2STR(WLC_E_AUTHORIZED);
+#endif
+#ifdef WLC_E_PROBREQ_MSG_RX
         CASE2STR(WLC_E_PROBREQ_MSG_RX);
+#endif
 #ifdef WLC_E_RMC_EVENT
         CASE2STR(WLC_E_RMC_EVENT);
 #endif
 #ifdef WLC_E_DPSTA_INTF_IND
         CASE2STR(WLC_E_DPSTA_INTF_IND);
 #endif
+#ifdef WLC_E_RRM
         CASE2STR(WLC_E_RRM);
+#endif
 #ifdef WLC_E_PFN_SSID_EXT
         CASE2STR(WLC_E_PFN_SSID_EXT);
 #endif
@@ -250,7 +472,9 @@ static const char *event2str(int e)
 #ifdef WLC_E_RESERVED
         CASE2STR(WLC_E_RESERVED);
 #endif
+#ifdef WLC_E_PRE_ASSOC_RSEP_IND
         CASE2STR(WLC_E_PRE_ASSOC_RSEP_IND);
+#endif
 #ifdef WLC_E_PSK_AUTH
         CASE2STR(WLC_E_PSK_AUTH);
 #endif
@@ -269,7 +493,9 @@ static const char *event2str(int e)
 #ifdef WLC_E_LINK_QUALITY
         CASE2STR(WLC_E_LINK_QUALITY);
 #endif
+#ifdef WLC_E_BSSTRANS_RESP
         CASE2STR(WLC_E_BSSTRANS_RESP);
+#endif
 #ifdef WLC_E_HE_TWT_SETUP
         CASE2STR(WLC_E_HE_TWT_SETUP);
 #endif
@@ -279,10 +505,18 @@ static const char *event2str(int e)
 #ifdef WLC_E_NAN_NON_CRITICAL
         CASE2STR(WLC_E_NAN_NON_CRITICAL);
 #endif
+#ifdef WLC_E_RADAR_DETECTED
         CASE2STR(WLC_E_RADAR_DETECTED);
+#endif
+#ifdef WLC_E_RANGING_EVENT
         CASE2STR(WLC_E_RANGING_EVENT);
+#endif
+#ifdef WLC_E_INVALID_IE
         CASE2STR(WLC_E_INVALID_IE);
+#endif
+#ifdef WLC_E_MODE_SWITCH
         CASE2STR(WLC_E_MODE_SWITCH);
+#endif
 #ifdef WLC_E_PKT_FILTER
         CASE2STR(WLC_E_PKT_FILTER);
 #endif
@@ -313,27 +547,38 @@ static const char *event2str(int e)
 #ifdef WLC_E_LTE_U_EVENT
         CASE2STR(WLC_E_LTE_U_EVENT);
 #endif
+#ifdef WLC_E_LAST
         CASE2STR(WLC_E_LAST);
+#endif
 
         /* The following have duplicate numbers and compiler will complain.
          * Also it'd be ambiguous what print it should spit out, therefore
          * handle these cases explicitly.
          */
+#ifdef WLC_E_PFN_SCAN_NONE
         case WLC_E_PFN_SCAN_NONE:
         // case WLC_E_PFN_BSSID_NET_FOUND;
             return "WLC_E_PFN_SCAN_NONE_OR_WLC_E_PFN_BSSID_NET_FOUND";
+#endif
+#ifdef WLC_E_PFN_SCAN_ALLGONE
         case WLC_E_PFN_SCAN_ALLGONE:
         // case WLC_E_PFN_BSSID_NET_LOST;
             return "WLC_E_PFN_SCAN_ALLGONE_OR_WLC_E_PFN_BSSID_NET_LOST";
+#endif
+#ifdef WLC_E_PFN_BEST_BATCHING
         case WLC_E_PFN_BEST_BATCHING:
         // case WLC_E_PFN_SCAN_COMPLETE
             return "WLC_E_PFN_BEST_BATCHING_OR_WLC_E_PFN_SCAN_COMPLETE";
+#endif
+#ifdef WLC_E_IBSS_COALESCE
         case WLC_E_IBSS_COALESCE:
         // case WLC_E_AIBSS_TXFAIL;
             return "WLC_E_IBSS_COALESCE_OR_WLC_E_AIBSS_TXFAIL";
+#endif
+        default:
+            return "unknown";
     }
 #undef CASE2STR
-    return "unknown";
 }
 
 static void print_stats(void)
@@ -587,7 +832,7 @@ int main(int argc, char *argv[])
         goto end;
     }
 
-    target_log_open("BCMCLI", 0);
+    target_log_open("BCMCLI", LOG_OPEN_DEFAULT | LOG_OPEN_STDOUT);
 
     log_severity_set(g_opt_severity);
 

@@ -88,8 +88,7 @@ bcmwl_cim_parse_v3_v4_us_v2(struct bcmwl_cim *arr,
         cim->usec.rx = conv->dtoh64(sample->ccastats_us[CCASTATS_OBSS])
                      + conv->dtoh64(sample->ccastats_us[CCASTATS_INBSS]);
         cim->usec.rx_self = conv->dtoh64(sample->ccastats_us[CCASTATS_INBSS]);
-        cim->usec.busy = conv->dtoh64(sample->busy_tm)
-                       + conv->dtoh64(sample->ccastats_us[CCASTATS_TXDUR]);
+        cim->usec.busy = cim->usec.total - conv->dtoh64(sample->ccastats_us[CCASTATS_TXOP]);
 
         LOGT("%s: %d: usec 64bit: total=%lu tx=%lu rx=%lu self=%lu busy=%lu",
              __func__,
@@ -146,8 +145,7 @@ bcmwl_cim_parse_v3_us_v1(struct bcmwl_cim *arr,
         cim->usec.rx = conv->dtoh32(sample->ccastats_us[CCASTATS_OBSS])
                      + conv->dtoh32(sample->ccastats_us[CCASTATS_INBSS]);
         cim->usec.rx_self = conv->dtoh32(sample->ccastats_us[CCASTATS_INBSS]);
-        cim->usec.busy = conv->dtoh32(sample->busy_tm)
-                       + conv->dtoh32(sample->ccastats_us[CCASTATS_TXDUR]);
+        cim->usec.busy = cim->usec.total - conv->dtoh32(sample->ccastats_us[CCASTATS_TXOP]);
 
         LOGT("%s: %d: usec 32bit cca: total=%lu tx=%lu rx=%lu self=%lu busy=%lu",
              __func__,
@@ -201,8 +199,7 @@ bcmwl_cim_parse_v3_us_v1(struct bcmwl_cim *arr,
         cim->usec.rx = conv->dtoh32(sample->ccastats_us[CCASTATS_OBSS])
                      + conv->dtoh32(sample->ccastats_us[CCASTATS_INBSS]);
         cim->usec.rx_self = conv->dtoh32(sample->ccastats_us[CCASTATS_INBSS]);
-        cim->usec.busy = conv->dtoh32(sample->busy_tm)
-                       + conv->dtoh32(sample->ccastats_us[CCASTATS_TXDUR]);
+        cim->usec.busy = cim->usec.total - conv->dtoh32(sample->ccastats_us[CCASTATS_TXOP]);
 
         LOGT("%s: %d: usec 32bit cca old: total=%lu tx=%lu rx=%lu self=%lu busy=%lu",
              __func__,
@@ -381,6 +378,20 @@ bool bcmwl_cim_get(const char *phy,
 
     memset(&arg, 0, sizeof(arg));
     arg.count = conv->dtoh32(WL_CHANIM_COUNT_US_ALL);
+    arg.buflen = sizeof(buf);
+    arg.buflen -= WL_CHANIM_STATS_US_FIXED_LEN;
+    arg.buflen = conv->dtoh32(arg.buflen);
+
+    if (WARN_ON(!bcmwl_GIOV(phy, "chanim_stats", &arg, &buf)))
+        return false;
+
+    if (WARN_ON(!(bcmwl_cim_parse_v3_v4_us_v2(arr, len, buf, ver, conv) ||
+                  bcmwl_cim_parse_v3_us_v1(arr, len, buf, ver, conv) ||
+                  bcmwl_cim_parse_v2_us(arr, len, buf, ver, conv))))
+        return false;
+
+    memset(&arg, 0, sizeof(arg));
+    arg.count = conv->dtoh32(WL_CHANIM_COUNT_US_ONE);
     arg.buflen = sizeof(buf);
     arg.buflen -= WL_CHANIM_STATS_US_FIXED_LEN;
     arg.buflen = conv->dtoh32(arg.buflen);

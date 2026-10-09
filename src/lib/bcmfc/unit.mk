@@ -38,7 +38,7 @@ UNIT_CFLAGS += -I$(USERSPACE_DIR)/private/apps/fcctl
 UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/shared/opensource/include/bcm963xx
 UNIT_CFLAGS += -I$(BCM_FSBUILD_DIR)/bcmdrivers/include
 
-UNIT_LDFLAGS += -lfcctl
+UNIT_LDFLAGS += -L$(INSTALL_DIR)/lib -lfcctl
 
 UNIT_EXPORT_CFLAGS := -I$(UNIT_PATH)/inc
 UNIT_EXPORT_LDFLAGS := $(UNIT_LDFLAGS)

@@ -51,6 +51,11 @@ UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/kernel/bcmkernel/include/uapi/linux
 UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/shared/opensource/include/bcm963xx
 # The final binary must be linked with -ltmctl
 UNIT_EXPORT_LDFLAGS += -ltmctl -ljson-c
+# SDK 6.x moved bcmtypes.h and added libbcm_util
+ifeq ($(BRCM_VERSION),6)
+UNIT_CFLAGS += -I$(BCM_BUILD_ROOT)/bcmdrivers/opensource/include/bcm963xx
+UNIT_EXPORT_LDFLAGS += -lbcm_util
+endif
 endif
 
 # Multicast OSN backend

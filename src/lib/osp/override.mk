@@ -30,6 +30,11 @@
 
 UNIT_SRC_TOP += $(OVERRIDE_DIR)/src/osp_temp_platform.c
 
+# Provide the BCM-specific reboot reason hook, replacing the generic
+# osp_reboot_platform_null.c default from the core osp unit.
+UNIT_SRC     := $(filter-out src/osp_reboot_platform_null.c,$(UNIT_SRC))
+UNIT_SRC_TOP += $(OVERRIDE_DIR)/src/osp_reboot_platform_bcm.c
+
 UNIT_CFLAGS += -I$(OVERRIDE_DIR)/inc
 
 UNIT_DEPS   += $(LAYER_DIR)/src/lib/wl80211

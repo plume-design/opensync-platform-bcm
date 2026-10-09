@@ -33,6 +33,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <wlioctl.h>
 #include <dhdioctl.h>
 
+/* Copy of WPA authentication mode in wlioctl_defs.h */
+#define WPA_AUTH_NONE       0x0001
+#define WPA_AUTH_PSK        0x0004  /* Pre-shared key */
+#define WPA2_AUTH_PSK       0x0080  /* Pre-shared key */
+#define WPA2_AUTH_PSK_SHA256    0x8000  /* PSK with SHA256 key derivation */
+#define WPA3_AUTH_SAE_PSK       0x40000 /* SAE with 4-way handshake */
+#define WPA3_AUTH_SAE_FBT       0x80000 /* SAE with FT */
+#define WPA3_AUTH_SUITEB    0X400000
+#define WPA3_AUTH_SAE_PSK_EXT   0X800000 /* SAE-EXT */
+#define WPA3_AUTH_SAE_FBT_EXT   0x1000000 /* SAE-EXT with FT */
 
 struct bcmwl_ioctl_num_conv
 {

@@ -27,6 +27,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef BCMWL_NVRAM_H_INCLUDED
 #define BCMWL_NVRAM_H_INCLUDED
 
+void bcmwl_nvram_init(void);
 int bcmwl_nvram_append(const char *ifname, const char *prop, const char *needle,
                        int (*strcmp_fun) (const char*, const char*));
 
@@ -35,6 +36,12 @@ int bcmwl_nvram_remove(const char *ifname, const char *prop, const char *needle,
 
 /* returns heap allocated memory, needs to be free() */
 char *bcmwl_nvram_getall(void);
+
+/* returns heap allocated memory, needs to be free() */
+char *bcmwl_nvram_get_key(const char *name);
+
+/* returns heap allocated memory, needs to be free() */
+char *bcmwl_nvram_kget_key(const char *name);
 
 /* returns heap allocated memory, needs to be free() */
 char *bcmwl_nvram_get(const char *ifname,
@@ -62,5 +69,6 @@ bool bcmwl_nvram_set_flag(const char *ifname,
 #define NVS(ifname, prop, value) bcmwl_nvram_set(ifname, prop, value)
 #define NVU(ifname, prop) bcmwl_nvram_unset(ifname, prop)
 #define NVSF(ifname, prop, bit, value) bcmwl_nvram_set_flag(ifname, prop, bit, value)
+#define NVKG(name) strdupafree(bcmwl_nvram_kget_key(name))
 
 #endif /* BCMWL_NVRAM_H_INCLUDED */
