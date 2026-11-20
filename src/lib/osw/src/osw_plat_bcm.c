@@ -163,11 +163,20 @@ struct osw_plat_bcm {
     ev_io nl_io;
 };
 
+/* When on-channel bss scans keep getting rejected (e.g. a CSA
+ * or background DFS stuck in progress) stop retrying them on
+ * every stats poll. After this many seconds of continuous
+ * failures each new request gets one attempt and is dropped.
+ */
+#define OSW_PLAT_BCM_BSS_SCAN_GIVE_UP_SEC 60
+
 struct osw_plat_bcm_phy {
     struct osw_plat_bcm *m;
     const struct nl_80211_phy *info;
     unsigned int stats_mask_pending;
     bool scan_failed;
+    bool scan_given_up;
+    uint64_t scan_failing_since_nsec;
 };
 
 struct osw_plat_bcm_vif {
@@ -175,7 +184,9 @@ struct osw_plat_bcm_vif {
     const struct nl_80211_vif *info;
     unsigned int stats_mask_pending;
     struct nl_cmd_task task_nl_tx_power_reset;
-    bool percent_100_applied;
+    bool tx_power_apply_pending;
+    bool tx_power_apply_auto;
+    int  tx_power_apply_qdbm;
 };
 
 struct osw_plat_bcm_sta {
@@ -1632,6 +1643,99 @@ osw_plat_bcm_conf_vif_ap_passpoint(struct osw_drv_phy_config *phy,
     HSPOTAP_RUN();
 }
 
+static int
+osw_plat_bcm_chains_gain_qdbm(int n_chains)
+{
+    /* Chain-aggregation gain 10*log10(n_chains), pre-computed in quarter-dBm.
+     * BCM radios have <= 4 chains, so this table is exact and complete.
+     */
+    switch (n_chains) {
+        case 2:  return 12;  /* +3.01 dB */
+        case 3:  return 19;  /* +4.77 dB */
+        case 4:  return 24;  /* +6.02 dB */
+        default: return 0;   /* 1 chain / unknown */
+    }
+}
+
+static int
+osw_plat_bcm_total_txpwr_dbm(int per_antenna_qdbm, int n_chains)
+{
+    /* To calculate total tx_power in dbm, we combine per-antenna (one chain's
+     * output) power with number of chains on the radio (precomputed) and divide
+     * the result by 4. In order not to lose value by integer division truncation,
+     * we need to add "2" before (adding half the divisor first makes it round-to-nearest).
+     */
+    return (per_antenna_qdbm + osw_plat_bcm_chains_gain_qdbm(n_chains) + 2) / 4;
+}
+
+static bool
+osw_plat_bcm_tx_power_total_enabled(void)
+{
+    return ff_is_flag_enabled("tx_power_total");
+}
+
+static struct osw_plat_bcm_vif *
+osw_plat_bcm_lookup_vif(struct osw_plat_bcm *m,
+                        const char *vif_name)
+{
+    struct osw_drv_nl80211_ops *nl_ops = m->nl_ops;
+    if (nl_ops == NULL) return NULL;
+
+    struct nl_80211 *nl = nl_ops->get_nl_80211_fn(nl_ops);
+    if (nl == NULL) return NULL;
+
+    struct nl_80211_sub *sub = m->nl_sub;
+    if (sub == NULL) return NULL;
+
+    const struct nl_80211_vif *info = nl_80211_vif_by_name(nl, vif_name);
+    if (info == NULL) return NULL;
+
+    struct osw_plat_bcm_vif *vif = nl_80211_sub_vif_get_priv(sub, info);
+    return vif;
+}
+
+static void
+osw_plat_bcm_conf_vif_tx_power(struct osw_plat_bcm *m,
+                               struct osw_drv_phy_config *phy,
+                               struct osw_drv_vif_config *vif)
+{
+    if (!osw_plat_bcm_tx_power_total_enabled()) return;
+    if (!vif->tx_power_changed && !phy->tx_chainmask_changed) return;
+    if (vif->tx_power_percent == 100) return;
+    if (vif->tx_power_dbm <= 0) return;
+
+    int n_chains = __builtin_popcount((unsigned)phy->tx_chainmask);
+    if (n_chains <= 0) {
+        const char *txchain = WL(phy->phy_name, "txchain");
+        if (txchain != NULL) n_chains = __builtin_popcount((unsigned)atoi(txchain));
+    }
+    if (n_chains <= 0) return;
+
+    const int total_dbm = vif->tx_power_dbm;
+    const int per_antenna_qdbm = (total_dbm * 4) - osw_plat_bcm_chains_gain_qdbm(n_chains);
+
+    if (per_antenna_qdbm > 127 || per_antenna_qdbm < -128) {
+        LOGW(LOG_PREFIX_VIF(phy->phy_name, vif->vif_name,
+                            "tx_power: per-antenna %d qdbm out of int8 range for"
+                            " total %d dBm (chains %d), leaving to generic",
+                            per_antenna_qdbm, total_dbm, n_chains));
+        return;
+    }
+
+    struct osw_plat_bcm_vif *bcm_vif = osw_plat_bcm_lookup_vif(m, vif->vif_name);
+    if (bcm_vif == NULL) return;
+
+    bcm_vif->tx_power_apply_qdbm = per_antenna_qdbm;
+    bcm_vif->tx_power_apply_pending = true;
+
+    vif->tx_power_changed = false;
+
+    LOGT(LOG_PREFIX_VIF(phy->phy_name, vif->vif_name,
+                        "tx_power: total %d dBm -> per-antenna %d qdbm (chains %d),"
+                        " programming qtxpower directly",
+                        total_dbm, per_antenna_qdbm, n_chains));
+}
+
 static void
 osw_plat_bcm_conf_each_vif(struct osw_drv_phy_config *phy,
                            struct osw_drv_vif_config *vif,
@@ -1642,6 +1746,7 @@ osw_plat_bcm_conf_each_vif(struct osw_drv_phy_config *phy,
 
     switch (vif->vif_type) {
         case OSW_VIF_AP:
+            osw_plat_bcm_conf_vif_tx_power(m, phy, vif);
             osw_plat_bcm_conf_vif_ap_mcast2ucast(phy, vif);
             osw_plat_bcm_conf_vif_ap_acl(phy, vif, m);
             osw_plat_bcm_conf_vif_ap_acl_policy(phy, vif);
@@ -1662,6 +1767,7 @@ osw_plat_bcm_conf_each_vif(struct osw_drv_phy_config *phy,
         case OSW_VIF_AP_VLAN:
             break;
         case OSW_VIF_STA:
+            osw_plat_bcm_conf_vif_tx_power(m, phy, vif);
             osw_plat_bcm_conf_vif_sta_multi_ap(phy, vif);
             break;
         case OSW_VIF_UNDEFINED:
@@ -1832,6 +1938,93 @@ osw_plat_bcm_vif_mld_unit(const char *vif_name)
 
     return mld_unit;
 }
+
+static bool
+osw_plat_bcm_conf_need_vif_ap_hostap_restart(const struct osw_drv_phy_config *phy,
+                                             const struct osw_drv_vif_config *vif)
+{
+    const struct osw_drv_vif_config_ap *ap = &vif->u.ap;
+
+    return vif->enabled_changed
+        || (ap->psk_list_changed && ap->wpa.akm_sae)
+        || (ap->channel_changed && ap->csa_required == false)
+        || ap->bridge_if_name_changed
+        || ap->nas_identifier_changed
+        || ap->beacon_interval_tu_changed
+        || ap->ssid_hidden_changed
+        || ap->isolated_changed
+        || ap->mode_changed
+        || ap->ssid_changed
+        || ap->wpa_changed
+        || ap->radius_list_changed
+        || ap->acct_list_changed
+        || ap->passpoint_changed
+        || ap->multi_ap_changed
+        || ap->ft_encr_key_changed
+        || ap->ft_over_ds_changed
+        || ap->ft_pmk_r0_key_lifetime_sec_changed
+        || ap->ft_pmk_r1_max_key_lifetime_sec_changed
+        || ap->ft_pmk_r1_push_changed
+        || ap->ft_psk_generate_local_changed
+        || ap->ft_mobility_domain_changed
+        || ap->proxy_arp_changed
+        || ap->dgaf_disable_changed
+        || phy->reg_domain_changed;
+}
+
+static void
+osw_plat_bcm_conf_bring_down_mld_ap_siblings(struct osw_drv_conf *drv_conf,
+                                             int mld_unit,
+                                             const char *trigger_vif_name)
+{
+    size_t i;
+    for (i = 0; i < drv_conf->n_phy_list; i++) {
+        struct osw_drv_phy_config *phy = &drv_conf->phy_list[i];
+        const char *phy_name = phy->phy_name;
+        size_t j;
+        for (j = 0; j < phy->vif_list.count; j++) {
+            struct osw_drv_vif_config *vif = &phy->vif_list.list[j];
+            const char *vif_name = vif->vif_name;
+
+            if (vif->vif_type != OSW_VIF_AP) continue;
+            if (osw_plat_bcm_vif_mld_unit(vif_name) != mld_unit) continue;
+
+            if (vif->enabled_changed == false) {
+                vif->changed = true;
+                vif->enabled_changed = true;
+                LOGI(LOG_PREFIX_VIF(phy_name, vif_name,
+                     "mld: ap: forcing tandem rebuild (mld_unit=%d, triggered by %s)",
+                     mld_unit, trigger_vif_name));
+            }
+
+            WARN_ON(!WL(vif_name, "bss", "down"));
+        }
+    }
+}
+
+static void
+osw_plat_bcm_conf_mld_ap_tandem(struct osw_drv_conf *drv_conf)
+{
+    if (osw_plat_bcm_is_mlo() == false) return;
+
+    size_t i;
+    for (i = 0; i < drv_conf->n_phy_list; i++) {
+        struct osw_drv_phy_config *phy = &drv_conf->phy_list[i];
+        size_t j;
+        for (j = 0; j < phy->vif_list.count; j++) {
+            struct osw_drv_vif_config *vif = &phy->vif_list.list[j];
+
+            if (vif->vif_type != OSW_VIF_AP) continue;
+            if (osw_plat_bcm_conf_need_vif_ap_hostap_restart(phy, vif) == false) continue;
+
+            const int mld_unit = osw_plat_bcm_vif_mld_unit(vif->vif_name);
+            if (mldunit_is_valid(mld_unit) == false) continue;
+
+            osw_plat_bcm_conf_bring_down_mld_ap_siblings(drv_conf, mld_unit, vif->vif_name);
+        }
+    }
+}
+
 static void
 osw_plat_bcm_pre_request_config_cb(struct osw_drv_nl80211_hook *hook,
                                    struct osw_drv_conf *drv_conf,
@@ -1844,49 +2037,42 @@ osw_plat_bcm_pre_request_config_cb(struct osw_drv_nl80211_hook *hook,
     osw_plat_bcm_conf_each_phy(drv_conf, m);
     osw_plat_bcm_conf_enable_phys(drv_conf, m, phy_disabled_bitmap);
     osw_plat_bcm_conf_each_phy_enabled(drv_conf);
-}
 
-static struct osw_plat_bcm_vif *
-osw_plat_bcm_lookup_vif(struct osw_plat_bcm *m,
-                        const char *vif_name)
-{
-    struct osw_drv_nl80211_ops *nl_ops = m->nl_ops;
-    if (nl_ops == NULL) return NULL;
-
-    struct nl_80211 *nl = nl_ops->get_nl_80211_fn(nl_ops);
-    if (nl == NULL) return NULL;
-
-    struct nl_80211_sub *sub = m->nl_sub;
-    if (sub == NULL) return NULL;
-
-    const struct nl_80211_vif *info = nl_80211_vif_by_name(nl, vif_name);
-    if (info == NULL) return NULL;
-
-    struct osw_plat_bcm_vif *vif = nl_80211_sub_vif_get_priv(sub, info);
-    return vif;
+    osw_plat_bcm_conf_mld_ap_tandem(drv_conf);
 }
 
 static void
-osw_plat_bcm_tx_power_reset_done_cb(struct rq_task *task, void *priv)
+osw_plat_bcm_tx_power_apply_done_cb(struct rq_task *task, void *priv)
 {
     (void)task;
     struct osw_plat_bcm_vif *bcm_vif = priv;
     const char *vif_name = bcm_vif->info ? bcm_vif->info->name : NULL;
     if (vif_name == NULL) return;
 
-    LOGI(LOG_PREFIX("%s: setting txpwr1 -1 (percent 100)", vif_name));
-    const bool ok = (WL(vif_name, "txpwr1", "-1") != NULL);
-    WARN_ON(ok == false);
-    bcm_vif->percent_100_applied = ok;
+    if (bcm_vif->tx_power_apply_auto) {
+        LOGI(LOG_PREFIX("%s: setting txpwr1 -1 (percent 100)", vif_name));
+        const bool ok = (WL(vif_name, "txpwr1", "-1") != NULL);
+        WARN_ON(ok == false);
+    }
+    else {
+        char qdbm_str[16];
+        snprintf(qdbm_str, sizeof(qdbm_str), "%d", bcm_vif->tx_power_apply_qdbm);
+        LOGI(LOG_PREFIX("%s: setting txpwr1 -o -q %s", vif_name, qdbm_str));
+        const bool ok = (WL(vif_name, "txpwr1", "-o", "-q", qdbm_str) != NULL);
+        WARN_ON(ok == false);
+    }
 }
 
 static void
-osw_plat_bcm_tx_power_reset_schedule(struct osw_plat_bcm *m,
+osw_plat_bcm_tx_power_apply_schedule(struct osw_plat_bcm *m,
                                      struct osw_plat_bcm_vif *bcm_vif,
                                      const char *phy_name,
                                      const char *vif_name,
-                                     struct rq *q)
+                                     struct rq *q,
+                                     bool auto_mode)
 {
+    bcm_vif->tx_power_apply_auto = auto_mode;
+
     struct nl_80211 *nl = m->nl_ops ? m->nl_ops->get_nl_80211_fn(m->nl_ops) : NULL;
     if (nl == NULL) return;
 
@@ -1898,9 +2084,9 @@ osw_plat_bcm_tx_power_reset_schedule(struct osw_plat_bcm *m,
     struct nl_cmd *cmd = nl_conn_alloc_cmd(m->nl_conn);
     struct nl_msg *msg = nl_80211_alloc_get_interface(nl, info->ifindex);
     nl_cmd_task_init(&bcm_vif->task_nl_tx_power_reset, cmd, msg);
-    nl_cmd_set_name(cmd, strfmta(LOG_PREFIX_VIF(phy_name, vif_name, "tx_power reset (txpwr1 -1)")));
+    nl_cmd_set_name(cmd, strfmta(LOG_PREFIX_VIF(phy_name, vif_name, "tx_power apply (txpwr1)")));
 
-    bcm_vif->task_nl_tx_power_reset.task.completed_fn = osw_plat_bcm_tx_power_reset_done_cb;
+    bcm_vif->task_nl_tx_power_reset.task.completed_fn = osw_plat_bcm_tx_power_apply_done_cb;
     bcm_vif->task_nl_tx_power_reset.task.priv = bcm_vif;
     rq_add_task(q, &bcm_vif->task_nl_tx_power_reset.task);
 }
@@ -1914,13 +2100,18 @@ osw_plat_bcm_post_request_config_vif(struct osw_plat_bcm *m,
     struct osw_plat_bcm_vif *bcm_vif = osw_plat_bcm_lookup_vif(m, vif->vif_name);
     if (bcm_vif == NULL) return;
 
+    if (bcm_vif->tx_power_apply_pending) {
+        bcm_vif->tx_power_apply_pending = false;
+        osw_plat_bcm_tx_power_apply_schedule(m, bcm_vif, phy->phy_name, vif->vif_name, q, false);
+        return;
+    }
+
     if (vif->tx_power_changed) {
         if (vif->tx_power_percent == 100) {
-            osw_plat_bcm_tx_power_reset_schedule(m, bcm_vif, phy->phy_name, vif->vif_name, q);
+            osw_plat_bcm_tx_power_apply_schedule(m, bcm_vif, phy->phy_name, vif->vif_name, q, true);
         }
         else {
             rq_task_kill(&bcm_vif->task_nl_tx_power_reset.task);
-            bcm_vif->percent_100_applied = false;
         }
     }
 }
@@ -2255,6 +2446,20 @@ osw_plat_bcm_phy_stats_set_cb(struct osw_plat_bcm *m,
     phy->stats_mask_pending = new_mask;
 }
 
+/* Runs after every vif had its chance to scan in this poll.
+ * Scan rejection can be specific to the vif it is issued on, so
+ * a given up request is dropped only once all vifs failed it.
+ */
+static void
+osw_plat_bcm_phy_stats_poll_end_cb(struct osw_plat_bcm *m,
+                                   struct osw_plat_bcm_phy *phy,
+                                   void *priv)
+{
+    const unsigned int bit_bss_scan = (1 << OSW_STATS_BSS_SCAN);
+    if (phy->scan_given_up == false) return;
+    phy->stats_mask_pending &= ~bit_bss_scan;
+}
+
 static void
 osw_plat_bcm_vif_stats_set_cb(struct osw_plat_bcm *m,
                               struct osw_plat_bcm_vif *vif,
@@ -2486,6 +2691,36 @@ osw_plat_bcm_vif_stats_run_bss_scan(struct osw_plat_bcm_phy *phy,
 }
 
 static void
+osw_plat_bcm_phy_bss_scan_done(struct osw_plat_bcm_phy *phy,
+                               const bool ok)
+{
+    const char *phy_name = phy->info->name;
+    const unsigned int bit_bss_scan = (1 << OSW_STATS_BSS_SCAN);
+
+    if (ok) {
+        phy->stats_mask_pending &= ~bit_bss_scan;
+        phy->scan_failing_since_nsec = 0;
+        phy->scan_given_up = false;
+        return;
+    }
+
+    const uint64_t now = osw_time_mono_clk();
+    if (phy->scan_failing_since_nsec == 0) {
+        phy->scan_failing_since_nsec = now;
+    }
+
+    const uint64_t failing_nsec = now - phy->scan_failing_since_nsec;
+    const bool give_up = (failing_nsec >= OSW_TIME_SEC(OSW_PLAT_BCM_BSS_SCAN_GIVE_UP_SEC));
+    if (give_up == false) return;
+    if (phy->scan_given_up) return;
+
+    const uint64_t failing_sec = failing_nsec / 1000000000;
+    LOGN(LOG_PREFIX_PHY(phy_name, "on-scan failing for %"PRIu64" seconds, dropping bss scan requests until a scan succeeds",
+                        failing_sec));
+    phy->scan_given_up = true;
+}
+
+static void
 osw_plat_bcm_cim_to_tlv(const char *phy_name,
                         const struct bcmwl_cim *cim,
                         struct osw_tlv *t)
@@ -2606,9 +2841,7 @@ osw_plat_bcm_vif_stats_run_cb(struct osw_plat_bcm *m,
 
     if ((phy->stats_mask_pending & bit_bss_scan) && capable_bss_scan) {
         const bool ok = osw_plat_bcm_vif_stats_run_bss_scan(phy, vif);
-        if (ok) {
-            phy->stats_mask_pending &= ~bit_bss_scan;
-        }
+        osw_plat_bcm_phy_bss_scan_done(phy, ok);
     }
 
     if ((phy->stats_mask_pending & bit_chan) && capable_chan) {
@@ -2641,6 +2874,11 @@ osw_plat_bcm_pre_request_stats_cb(struct osw_drv_nl80211_hook *hook,
     osw_plat_bcm_phy_each(m, osw_plat_bcm_phy_stats_set_cb, &phy_stats_mask);
     osw_plat_bcm_vif_each(m, osw_plat_bcm_vif_stats_set_cb, &vif_stats_mask);
     osw_plat_bcm_vif_each(m, osw_plat_bcm_vif_stats_run_cb, NULL);
+    /* Must run after the vif loop: a given up bss scan request
+     * still needs one attempt on each vif, otherwise no scan can
+     * succeed and the give-up would never be lifted.
+     */
+    osw_plat_bcm_phy_each(m, osw_plat_bcm_phy_stats_poll_end_cb, NULL);
 }
 
 static void
@@ -3201,6 +3439,56 @@ osw_plat_bcm_vif_event_handle_assoc_reassoc_ind(struct osw_plat_bcm_vif *vif,
     const size_t fcs_len = 0; /* FIXME: Is this still being appended? */
     const size_t ies_len = len_after_ev - fcs_len;
 
+    /* The wl event uses client's MLD address.
+     *
+     * OSW operates per-link and MLO is implied from
+     * underlying data.
+     *
+     * In order to fit into OSW this event needs to be
+     * translated accordingly. This could technically be any
+     * link, but it's relatively easy to pick the assoc link
+     * as target for OSW report.
+     */
+    bcmwl_sta_mlo_links_t links;
+    const bool ok = bcmwl_sta_get_mlo_links(vif_name, (const os_macaddr_t *)sta_addr, &links);
+    if (ok) {
+        if (links.num_links > 0) {
+            if (links.assoc_link_idx < links.num_links) {
+                const bcmwl_sta_mlo_link_t *assoc_link = &links.links[links.assoc_link_idx];
+                LOGD(LOG_PREFIX_VIF(phy_name, vif_name,
+                     "assoc: overriding: %s->%s, %s->%s, "OSW_HWADDR_FMT"->"OSW_HWADDR_FMT,
+                     phy_name,
+                     assoc_link->phy_name,
+                     vif_name,
+                     assoc_link->vif_name,
+                     OSW_HWADDR_ARG(sta_addr),
+                     OSW_HWADDR_ARG(osw_hwaddr_from_cptr_unchecked(&assoc_link->remote_addr))));
+                phy_name = assoc_link->phy_name;
+                vif_name = assoc_link->vif_name;
+                sta_addr = osw_hwaddr_from_cptr_unchecked(&assoc_link->remote_addr);
+            }
+            else {
+                LOGW(LOG_PREFIX_VIF(phy_name, vif_name,
+                     "assoc: assoc_link_idx=%d >= num_links=%d for: "OSW_HWADDR_FMT" on %s -- bug in bcmwl_sta_get_mlo_links()?",
+                     links.assoc_link_idx, links.num_links, OSW_HWADDR_ARG(sta_addr), vif_name));
+            }
+        }
+        else {
+            LOGW(LOG_PREFIX_VIF(phy_name, vif_name,
+                 "assoc: no mlo links found for: "OSW_HWADDR_FMT" on %s -- bug in bcmwl_sta_get_mlo_links()?",
+                 OSW_HWADDR_ARG(sta_addr), vif_name));
+        }
+    }
+    else {
+        /* fallback: either this is non-MLO system, non-MLO AP, or the client
+         * is not MLO -- in which case it's fine to keep arguments unchanged
+         * from the raw event.
+         *
+         * If it's something else (something went wrong), we'll keep fingers
+         * crossed it's good enough of a delivery.
+         */
+    }
+
     osw_drv_report_sta_assoc_ies(drv, phy_name, vif_name, sta_addr, ies, ies_len);
     return true;
 }
@@ -3218,6 +3506,11 @@ osw_plat_bcm_report_bss(struct osw_plat_bcm_vif *vif,
 
     const char *phy_name = osw_plat_bcm_vif_into_phy_name(vif);
     if (WARN_ON(phy_name == NULL)) return false;
+
+    struct osw_plat_bcm *m = vif->m;
+    struct osw_drv *drv = m->drv_nl80211;
+    if (drv == NULL) return false;
+
     struct osw_tlv t = {0};
 
     const int snr_raw = rssi_dbm - noise_dbm;
@@ -3243,10 +3536,6 @@ osw_plat_bcm_report_bss(struct osw_plat_bcm_vif *vif,
                         noise_dbm,
                         snr_db,
                         ies_len));
-
-    struct osw_plat_bcm *m = vif->m;
-    struct osw_drv *drv = m->drv_nl80211;
-    if (drv == NULL) return false;
 
     osw_drv_report_stats(drv, &t);
     osw_tlv_fini(&t);
@@ -3840,7 +4129,9 @@ osw_plat_bcm_vif_removed_cb(const struct nl_80211_vif *info,
     if (vif == NULL) return;
 
     nl_cmd_task_fini(&vif->task_nl_tx_power_reset);
-    vif->percent_100_applied = false;
+    vif->tx_power_apply_pending = false;
+    vif->tx_power_apply_auto = false;
+    vif->tx_power_apply_qdbm = 0;
 
     /* Clean up ACL storage for this VIF */
     osw_plat_bcm_acl_storage_remove(m, info->name);
@@ -4301,36 +4592,6 @@ osw_plat_bcm_fix_phy_reported_channels(const char *phy_name,
     }
 
     state->n_channel_states = count;
-}
-
-static int
-osw_plat_bcm_total_txpwr_dbm(int per_antenna_qdbm, int n_chains)
-{
-    /* Pre-computed in quarter-dBm (10*log10(n_chains))
-     * BCM radios have <= 4 chains
-     */
-    int chains_gain_qdbm;
-    switch (n_chains) {
-        case 2:
-            chains_gain_qdbm = 12;  /* +3 dB */
-            break;
-        case 3:
-            chains_gain_qdbm = 19;  /* +4.77 dB */
-            break;
-        case 4:
-            chains_gain_qdbm = 24;  /* +6 dB */
-            break;
-        default:
-            chains_gain_qdbm = 0;   /* +0 dB */
-            break;
-    }
-
-    /* To calculate total tx_power in dbm, we combine per-antenna (one chain's
-    * output) power with number of chains on the radio (precomputed) and divide
-    * the result by 4. In order not to lose value by integer division truncation,
-    * we need to add "2" before (adding half the divisor first makes it round-to-nearest).
-    */
-    return (per_antenna_qdbm + chains_gain_qdbm + 2) / 4;
 }
 
 static void
@@ -5180,16 +5441,105 @@ osw_plat_bcm_fix_vif_sta_state(const char *phy_name,
 }
 
 
+static bool
+osw_plat_bcm_qtxpower_read(const char *vif_name, int *out_qdbm)
+{
+    const struct bcmwl_ioctl_num_conv *conv = bcmwl_ioctl_lookup_num_conv(vif_name);
+    if (conv == NULL) return false;
+
+    uint32_t val = 0;
+    if (bcmwl_GIOV(vif_name, "qtxpower", NULL, &val) == false) return false;
+    val = conv->dtoh32(val);
+
+    *out_qdbm = (int8_t)(val & 0xff);
+    return true;
+}
+
+static const struct osw_channel *
+osw_plat_bcm_vif_state_channel(const struct osw_drv_vif_state *state)
+{
+    switch (state->vif_type) {
+        case OSW_VIF_AP:  return &state->u.ap.channel;
+        case OSW_VIF_STA:
+            if (state->u.sta.link.status != OSW_DRV_VIF_STATE_STA_LINK_CONNECTED)
+                return NULL;
+            return &state->u.sta.link.channel;
+        case OSW_VIF_AP_VLAN:
+        case OSW_VIF_UNDEFINED:
+            break;
+    }
+    return NULL;
+}
+
+static bool
+osw_plat_bcm_chan_max_from_state(const char *phy_name, const struct osw_channel *chan, int *out_dbm)
+{
+    const struct osw_state_phy_info *phy = osw_state_phy_lookup(phy_name);
+    if (phy == NULL || phy->drv_state == NULL) return false;
+
+    const struct osw_drv_phy_state *ps = phy->drv_state;
+    return osw_cs_chan_get_max_tx_power_dbm(ps->channel_states, ps->n_channel_states,
+                                            chan, out_dbm);
+}
+
 static void
 osw_plat_bcm_fix_vif_state_tx_power(struct osw_plat_bcm *m,
+                                    const char *phy_name,
                                     const char *vif_name,
                                     struct osw_drv_vif_state *state)
 {
     struct osw_plat_bcm_vif *bcm_vif = osw_plat_bcm_lookup_vif(m, vif_name);
     if (bcm_vif == NULL) return;
-    if (!bcm_vif->percent_100_applied) return;
 
-    state->tx_power_percent = 100;
+    if (!osw_plat_bcm_tx_power_total_enabled()) return;
+
+    int per_antenna_qdbm;
+    if (osw_plat_bcm_qtxpower_read(vif_name, &per_antenna_qdbm) == false) return;
+
+    const char *txchain = WL(phy_name, "txchain");
+    if (txchain == NULL) return;
+    const int n_chains = __builtin_popcount((unsigned)atoi(txchain));
+    if (n_chains <= 0) return;
+
+    int max_dbm = 0;
+    bool have_max = false;
+    const struct osw_channel *chan = osw_plat_bcm_vif_state_channel(state);
+    if (chan != NULL && chan->control_freq_mhz != 0 && chan->center_freq0_mhz != 0) {
+        have_max = osw_plat_bcm_chan_max_from_state(phy_name, chan, &max_dbm);
+    }
+
+    const bool no_limit = (per_antenna_qdbm == 127 || per_antenna_qdbm == -1);
+    if (no_limit) {
+        state->tx_power_percent = 100;
+        if (have_max) state->tx_power_dbm = max_dbm;
+        LOGT(LOG_PREFIX_VIF(phy_name, vif_name,
+                            "tx_power: no limit (auto) -> percent 100, dBm %d",
+                            have_max ? max_dbm : 0));
+        return;
+    }
+
+    const int total_dbm = osw_plat_bcm_total_txpwr_dbm(per_antenna_qdbm, n_chains);
+    state->tx_power_dbm = total_dbm;
+
+    if (have_max) {
+        /* Reserve percent == 100 for the genuine no-limit/auto case handled
+         * above. Configs in the 90-99% range all resolve to the channel max
+         * (percent->dB rounds to 0 dB there), so a fixed power at max would
+         * otherwise read back as 100 and make confsync treat the vif as "auto"
+         * and reconfigure forever. Cap the computed percent at 99. */
+        int percent = osw_tx_power_dbm_to_percent(total_dbm, max_dbm);
+        if (percent >= 100) percent = 99;
+        state->tx_power_percent = percent;
+    }
+    else {
+        state->tx_power_percent = 0;
+    }
+
+    LOGT(LOG_PREFIX_VIF(phy_name, vif_name,
+                        "tx_power: per-antenna %d qdbm -> total %d dBm "
+                        "(chains %d, max %d, percent %d)",
+                        per_antenna_qdbm, total_dbm, n_chains,
+                        have_max ? max_dbm : -1, state->tx_power_percent));
 }
 
 static void
@@ -5200,7 +5550,7 @@ osw_plat_bcm_fix_vif_state_cb(struct osw_drv_nl80211_hook *hook,
                               void *priv)
 {
     struct osw_plat_bcm *m = priv;
-    osw_plat_bcm_fix_vif_state_tx_power(m, vif_name, state);
+    osw_plat_bcm_fix_vif_state_tx_power(m, phy_name, vif_name, state);
 
     switch (state->vif_type) {
         case OSW_VIF_AP:

@@ -28,6 +28,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define BCMWL_STA_H_INCLUDED
 
 #include <stdint.h>
+#include <linux/if.h>   /* IFNAMSIZ */
 
 #include "bcmwl_priv.h"
 #include "bcmwl_ioctl.h"
@@ -72,5 +73,28 @@ bool bcmwl_sta_get_sta_info(const char *ifname,
 bool bcmwl_sta_get_mlo_info(const char *phy_name,
                             const os_macaddr_t *hwaddr,
                             struct bcmwl_sta_mlo_info *bcmwl_sta_mlo_info);
+
+#define BCMWL_STA_MLO_MAX_LINKS 16 /* 802.11 max */
+
+struct bcmwl_sta_mlo_link {
+    char phy_name[IFNAMSIZ];
+    char vif_name[IFNAMSIZ];
+    os_macaddr_t local_addr;
+    os_macaddr_t remote_addr;
+};
+typedef struct bcmwl_sta_mlo_link bcmwl_sta_mlo_link_t;
+
+struct bcmwl_sta_mlo_links {
+    os_macaddr_t remote_addr;
+    os_macaddr_t local_addr;
+    uint8_t assoc_link_idx;
+    uint8_t num_links;
+    bcmwl_sta_mlo_link_t links[BCMWL_STA_MLO_MAX_LINKS];
+};
+typedef struct bcmwl_sta_mlo_links bcmwl_sta_mlo_links_t;
+
+bool bcmwl_sta_get_mlo_links(const char *vif_name,
+                             const os_macaddr_t *sta_addr,
+                             bcmwl_sta_mlo_links_t *links);
 
 #endif /* BCMWL_STA_H_INCLUDED */

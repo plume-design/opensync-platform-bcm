@@ -1361,14 +1361,22 @@ bcmwl_sta_validate_mlo_info(const char *vif_name,
                             const wl_mlo_info_v1_t *mlo_info,
                             const size_t mlo_info_max_size)
 {
+    const struct bcmwl_ioctl_num_conv *conv = bcmwl_ioctl_lookup_num_conv(vif_name);
+    if(conv == NULL) {
+        LOGE("%s: failed to lookup num conv", vif_name);
+        return false;
+    }
+
     if (mlo_info->ver > WL_MLO_INFO_VER) {
         LOGE("%s: unsupported mlo_info version: %d but received version: %d",
                 vif_name, WL_MLO_INFO_VER, mlo_info->ver);
         return false;
     }
-    if(!mlo_info->mlo_active) {
+
+    if (!mlo_info->mlo_active) {
         LOGD("%s: MLO is disabled", vif_name);
     }
+
     const size_t mli_size = ARRAY_SIZE(mlo_info->mli);
     if (mlo_info->num_links > mli_size) {
         LOGE("%s: buffer too short for links", vif_name);
@@ -1378,11 +1386,32 @@ bcmwl_sta_validate_mlo_info(const char *vif_name,
     const uint16_t number_of_mlo_scb = mlo_info->no_of_mlo_scb;
     const wl_mlo_scb_info_v1_t *mlo_scb = mlo_info->msi;
     const size_t max_scb_size = number_of_mlo_scb * sizeof(*mlo_scb);
-    if (mlo_info->len > mlo_info_max_size
-        || max_scb_size > mlo_info_max_size
-        || mlo_info->len < sizeof(*mlo_info) + max_scb_size)
+    const size_t mlo_info_len = conv->dtoh16(mlo_info->len);
+
+    if (mlo_info_len > mlo_info_max_size)
     {
-        LOGE("%s: buffer too short for scb", vif_name);
+        LOGE("%s: buffer too short for mlo_info: %zu > %zu",
+             vif_name,
+             mlo_info_len,
+             mlo_info_max_size);
+        return false;
+    }
+
+    if (max_scb_size > mlo_info_max_size)
+    {
+        LOGE("%s: buffer too short for scb: %zu > %zu",
+             vif_name,
+             max_scb_size,
+             mlo_info_max_size);
+        return false;
+    }
+
+    if (mlo_info_len < (sizeof(*mlo_info) + max_scb_size))
+    {
+        LOGE("%s: buffer too short for scb: %zu < %zu",
+             vif_name,
+             mlo_info_len,
+             sizeof(*mlo_info) + max_scb_size);
         return false;
     }
 
@@ -1412,6 +1441,44 @@ bcmwl_sta_pack_mlo_tlv(const char *vif_name,
     return true;
 }
 
+#endif /* WL_MLO_MAX_TID_MAP_SIZE */
+
+#ifdef WL_MLO_MAX_TID_MAP_SIZE
+static bool
+bcmwl_sta_mlo_fetch(const char *vif_name,
+                    char *buf,
+                    const wl_mlo_info_v1_t **out)
+{
+    uint8_t in[WLC_IOCTL_MEDLEN];
+    uint8_t resp[WLC_IOCTL_MAXLEN];
+
+    memset(in, 0, sizeof(in));
+    memset(buf, 0, WLC_IOCTL_MAXLEN);
+
+    bool ok = bcmwl_sta_pack_mlo_tlv(vif_name, WL_MLO_CMD_INFO, 0, NULL, (struct bcmwl_sta_tlv *)in);
+    if (!ok) {
+        LOGT("%s: failed to pack MLO info iovar", vif_name);
+        return false;
+    }
+
+    ok = bcmwl_GIOV(vif_name, "mlo", in, &resp);
+    if (!ok) {
+        LOGT("%s: failed to fetch MLO info iovar", vif_name);
+        return false;
+    }
+
+    memcpy(buf, resp, WLC_IOCTL_MAXLEN);
+
+    const wl_mlo_info_v1_t *mlo_info = (const wl_mlo_info_v1_t *)buf;
+    ok = bcmwl_sta_validate_mlo_info(vif_name, mlo_info, WLC_IOCTL_MAXLEN);
+    if (!ok) {
+        LOGT("%s: failed to validate MLO info iovar", vif_name);
+        return false;
+    }
+
+    *out = mlo_info;
+    return true;
+}
 #endif /* WL_MLO_MAX_TID_MAP_SIZE */
 
 bool
@@ -1448,6 +1515,126 @@ bcmwl_sta_get_mlo_info(const char *vif_name,
     if(link_id < 0) return false;
 
     bcmwl_sta_conv_client_assoc_linkid_bmp(mlo_scb, link_id, bcmwl_sta_mlo_info);
+    return true;
+#else
+    return false;
+#endif /* WL_MLO_MAX_TID_MAP_SIZE */
+}
+
+bool
+bcmwl_sta_get_mlo_links(const char *vif_name,
+                        const os_macaddr_t *sta_addr,
+                        bcmwl_sta_mlo_links_t *links)
+{
+#ifdef WL_MLO_MAX_TID_MAP_SIZE
+    char buf[WLC_IOCTL_MAXLEN];
+    const wl_mlo_info_v1_t *mlo_info = NULL;
+    memset(links, 0, sizeof(*links));
+
+    /* To build the list of MLO links for a given STA multiple calls to the
+     * "mlo info" iovar are necessary.
+     *
+     * The first call is a bootstrap to actually figure out how many local AP
+     * links to iterate over. The subsequent iovar calls are per-vif (per-link,
+     * per-AP, per-BSS) because the msi[] array in wl_mlo_info_v1_t holds SCBs
+     * of a given BSS only.
+     */
+
+    if (!bcmwl_sta_mlo_fetch(vif_name, buf, &mlo_info)) {
+        LOGT("%s: failed to fetch MLO info for " PRI(os_macaddr_t),
+             vif_name,
+             FMT(os_macaddr_t, *sta_addr));
+        return false;
+    }
+
+    const wl_mlo_scb_info_v1_t *scb = bcmwl_sta_find_client_scb_by_mac(mlo_info, sta_addr);
+    const bool scb_not_found = (scb == NULL);
+    if (scb_not_found) {
+        LOGT("%s: no MLO SCB found for " PRI(os_macaddr_t),
+             vif_name,
+             FMT(os_macaddr_t, *sta_addr));
+        return false;
+    }
+
+    const size_t eth_len = 6;
+    memcpy(links->local_addr.addr, mlo_info->self_mld_addr.octet, eth_len);
+    memcpy(links->remote_addr.addr, scb->peer_mld_addr.octet, eth_len);
+
+    /* The outer loop iterates over AP links.
+     * The inner loop iterates over Affiliated STA links on each AP.
+     * The inner loop visits different MLO associations' links.
+     */
+    for (size_t i = 0; i < mlo_info->num_links; i++) {
+        if (WARN_ON(links->num_links >= BCMWL_STA_MLO_MAX_LINKS)) break;
+
+        const wl_mlo_link_info_v1_t *bcm_ap_link = &mlo_info->mli[i];
+
+        struct bcmwl_sta_mlo_link *assoc_link = &links->links[links->num_links];
+        memset(assoc_link, 0, sizeof(*assoc_link));
+
+        const char *link_phy_name = strfmta("wl%d", bcm_ap_link->wlc_unit);
+        const char *link_vif_name = bcm_ap_link->bsscfg_unit == 0
+                                  ? link_phy_name
+                                  : strfmta("%s"CONFIG_BCMWL_VAP_DELIMITER"%d", link_phy_name, bcm_ap_link->bsscfg_unit);
+
+        STRSCPY(assoc_link->phy_name, link_phy_name);
+        STRSCPY(assoc_link->vif_name, link_vif_name);
+
+        memcpy(assoc_link->local_addr.addr, &bcm_ap_link->link_addr.octet, eth_len);
+
+        char buf2[WLC_IOCTL_MAXLEN];
+        const wl_mlo_info_v1_t *mlo_info2 = NULL;
+        const bool same_vif = (strcmp(vif_name, assoc_link->vif_name) == 0);
+
+        /* No need to re-fetch it. Saves resources and latency. */
+        if (same_vif) {
+            mlo_info2 = mlo_info;
+        } else {
+            if (!bcmwl_sta_mlo_fetch(link_vif_name, buf2, &mlo_info2)) {
+                LOGT("%s: failed to fetch MLO info for " PRI(os_macaddr_t),
+                     vif_name,
+                     FMT(os_macaddr_t, *sta_addr));
+                return false;
+            }
+        }
+
+        /* An association may not exist on every link, but we still need to
+         * iterate over all of them.
+         */
+        bool link_exists = false;
+        for (size_t j = 0; j < mlo_info2->num_links; j++) {
+            const wl_mlo_scb_info_v1_t *bcm_sta_link = &mlo_info2->msi[j];
+
+            /* Due to BCM driver design, the Main AP (often 6GHz radio AP
+             * interfaces) presents a dummy SCB entry that isn't really a link.
+             * Weed it out with the following check.
+             */
+            const bool link_id_active = (bcm_sta_link->assoc_linkid_bmp & (1UL << bcm_ap_link->link_id)) != 0;
+            if (link_id_active == false) continue;
+
+            const bool matching_sta_mld_addr = (memcmp(&bcm_sta_link->peer_mld_addr,
+                                                       &scb->peer_mld_addr,
+                                                       sizeof(os_macaddr_t)) == 0);
+            if (matching_sta_mld_addr) {
+                memcpy(assoc_link->remote_addr.addr, bcm_sta_link->ea.octet, eth_len);
+                link_exists = true;
+
+                const bool matching_link_id = (bcm_sta_link->scb_link_id == bcm_ap_link->link_id);
+                if (matching_link_id) {
+                    links->assoc_link_idx = links->num_links;
+                }
+                break;
+            }
+        }
+
+        if (link_exists) {
+            links->num_links++;
+        } else {
+            /* Subsequent loop iterations shall re-use the current entry that
+             * we're giving up.
+             */
+        }
+    }
     return true;
 #else
     return false;
